@@ -1,28 +1,22 @@
-/* Import Material Design themes */
 @import './themes/light.css';
 @import './themes/dark.css';
 
 :root {
-  /* Material Design Light Theme Mapping */
+  color-scheme: light;
+
+  /* Shared pastel stationery palette. The aliases keep the existing UI logic theme-safe. */
   --primary: var(--md-sys-color-primary);
   --on-primary: var(--md-sys-color-on-primary);
   --primary-dark: var(--md-sys-color-on-primary-fixed-variant);
   --primary-light: var(--md-sys-color-primary-container);
   --secondary: var(--md-sys-color-secondary);
   --on-secondary: var(--md-sys-color-on-secondary);
-  --success: #4CAF50; /* Material Green */
+  --success: #4f9b7a;
   --danger: var(--md-sys-color-error);
   --text: var(--md-sys-color-on-surface);
   --text-light: var(--md-sys-color-on-surface-variant);
   --text-dark: var(--md-sys-color-on-background);
   --border: var(--md-sys-color-outline-variant);
-  --surface-container-lowest: var(--md-sys-color-surface-container-lowest);
-  --surface-container-low: var(--md-sys-color-surface-container-low);
-  --surface-container: var(--md-sys-color-surface-container);
-  --surface-container-high: var(--md-sys-color-surface-container-high);
-  --surface-container-highest: var(--md-sys-color-surface-container-highest);
-
-  /* Material Design specific colors */
   --surface: var(--md-sys-color-surface);
   --on-surface: var(--md-sys-color-on-surface);
   --surface-variant: var(--md-sys-color-surface-variant);
@@ -35,29 +29,39 @@
   --on-secondary-container: var(--md-sys-color-on-secondary-container);
   --error-container: var(--md-sys-color-error-container);
   --on-error-container: var(--md-sys-color-on-error-container);
-  
-  /* Material Design 3 尺寸和形状 */
-  --border-radius: 12px; /* Material Design 3 rounded corners */
-  --border-radius-sm: 8px;
-  --border-radius-lg: 16px;
-  --border-radius-xl: 24px;
-  
-  /* Material Design 3 阴影 */
-  --shadow-1: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 1px 3px 1px rgba(0, 0, 0, 0.15);
-  --shadow-2: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 2px 6px 2px rgba(0, 0, 0, 0.15);
-  --shadow-3: 0px 4px 8px 3px rgba(0, 0, 0, 0.15), 0px 1px 3px 0px rgba(0, 0, 0, 0.3);
-  --shadow-4: 0px 6px 10px 4px rgba(0, 0, 0, 0.15), 0px 2px 3px 0px rgba(0, 0, 0, 0.3);
-  --shadow-5: 0px 8px 12px 6px rgba(0, 0, 0, 0.15), 0px 4px 4px 0px rgba(0, 0, 0, 0.3);
-  
-  /* 使用 Material Design 阴影 */
+  --surface-container-lowest: var(--md-sys-color-surface-container-lowest);
+  --surface-container-low: var(--md-sys-color-surface-container-low);
+  --surface-container: var(--md-sys-color-surface-container);
+  --surface-container-high: var(--md-sys-color-surface-container-high);
+  --surface-container-highest: var(--md-sys-color-surface-container-highest);
+
+  --ink: #263557;
+  --ink-soft: #64708b;
+  --paper: #fffaf3;
+  --paper-deep: #fbf2e8;
+  --pink: #efb9c7;
+  --pink-soft: #fce7ec;
+  --lavender: #c8b9e8;
+  --lavender-soft: #eee8fa;
+  --blue: #a9cee9;
+  --blue-soft: #e5f2fa;
+  --mint: #acd9cd;
+  --mint-soft: #e5f4ef;
+  --yellow: #f4dda0;
+  --yellow-soft: #fbf2d4;
+
+  --border-radius: 14px;
+  --border-radius-sm: 10px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-1: 0 3px 0 rgba(73, 67, 101, .04), 0 8px 24px rgba(73, 67, 101, .06);
+  --shadow-2: 0 5px 0 rgba(73, 67, 101, .045), 0 14px 36px rgba(73, 67, 101, .08);
+  --shadow-3: 0 7px 0 rgba(73, 67, 101, .05), 0 20px 50px rgba(73, 67, 101, .1);
   --shadow: var(--shadow-2);
   --box-shadow-sm: var(--shadow-1);
-  
-  /* Material Design 3 字体 */
-  --font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-family-display: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  
-  /* Material Design 3 间距系统 (4px base unit) */
+
+  --font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+  --font-family-display: "Segoe Print", "Bradley Hand", "Comic Sans MS", cursive;
   --spacing-1: 4px;
   --spacing-2: 8px;
   --spacing-3: 12px;
@@ -67,8 +71,6 @@
   --spacing-8: 32px;
   --spacing-10: 40px;
   --spacing-12: 48px;
-  
-  /* 向后兼容的间距变量 */
   --padding-sm: var(--spacing-2);
   --padding-md: var(--spacing-3);
   --padding-lg: var(--spacing-4);
@@ -77,178 +79,79 @@
   --margin-lg: var(--spacing-4);
 }
 
-/* Apply light theme by default */
-:root {
-  color-scheme: light;
+:root.light { color-scheme: light; }
+:root.dark {
+  color-scheme: dark;
+  --ink: #f7ede5;
+  --ink-soft: #cec7cf;
+  --paper: #20263a;
+  --paper-deep: #2a3045;
+  --pink: #efb9c7;
+  --pink-soft: #65434e;
+  --lavender: #d6c7f1;
+  --lavender-soft: #55466f;
+  --blue: #acd2ec;
+  --blue-soft: #354b61;
+  --mint: #acd9cd;
+  --mint-soft: #345d5e;
+  --yellow: #f2d99b;
+  --yellow-soft: #5a5039;
+  --shadow-1: 0 3px 0 rgba(9, 12, 23, .12), 0 8px 24px rgba(9, 12, 23, .18);
+  --shadow-2: 0 5px 0 rgba(9, 12, 23, .14), 0 14px 36px rgba(9, 12, 23, .22);
+  --shadow-3: 0 7px 0 rgba(9, 12, 23, .15), 0 20px 50px rgba(9, 12, 23, .28);
 }
 
-:root.light {
-  color-scheme: light;
-}
-
-/* Dark theme support */
-@media (prefers-color-scheme: dark) {
-  :root:not(.light) {
-    color-scheme: dark;
-    
-    /* Override with dark theme colors */
-    --primary: var(--md-sys-color-primary);
-    --primary-dark: var(--md-sys-color-on-primary-fixed-variant);
-    --primary-light: var(--md-sys-color-primary-container);
-    --secondary: var(--md-sys-color-secondary);
-    --danger: var(--md-sys-color-error);
-    --text: var(--md-sys-color-on-surface);
-    --text-light: var(--md-sys-color-on-surface-variant);
-    --text-dark: var(--md-sys-color-on-background);
-    --border: var(--md-sys-color-outline-variant);
-    --card-bg: var(--md-sys-color-surface-container);
-    --bg-light: var(--md-sys-color-surface-container-low);
-    --bg-dark: var(--md-sys-color-surface-container-high);
-    
-    /* Dark theme specific shadows */
-    --shadow-1: 0px 1px 3px 1px rgba(0, 0, 0, 0.15), 0px 1px 2px 0px rgba(0, 0, 0, 0.3);
-    --shadow-2: 0px 2px 6px 2px rgba(0, 0, 0, 0.15), 0px 1px 2px 0px rgba(0, 0, 0, 0.3);
-    --shadow-3: 0px 4px 8px 3px rgba(0, 0, 0, 0.15), 0px 1px 3px 0px rgba(0, 0, 0, 0.3);
-    --shadow-4: 0px 6px 10px 4px rgba(0, 0, 0, 0.15), 0px 2px 3px 0px rgba(0, 0, 0, 0.3);
-    --shadow-5: 0px 8px 12px 6px rgba(0, 0, 0, 0.15), 0px 4px 4px 0px rgba(0, 0, 0, 0.3);
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 
-:root.dark {
-  color-scheme: dark;
-  
-  /* Force dark theme colors */
-  --primary: var(--md-sys-color-primary);
-  --primary-dark: var(--md-sys-color-on-primary-fixed-variant);
-  --primary-light: var(--md-sys-color-primary-container);
-  --secondary: var(--md-sys-color-secondary);
-  --danger: var(--md-sys-color-error);
-  --text: var(--md-sys-color-on-surface);
-  --text-light: var(--md-sys-color-on-surface-variant);
-  --text-dark: var(--md-sys-color-on-background);
-  --border: var(--md-sys-color-outline-variant);
-  --card-bg: var(--md-sys-color-surface-container);
-  --bg-light: var(--md-sys-color-surface-container-low);
-  --bg-dark: var(--md-sys-color-surface-container-high);
+.mode-select-field {
+  display: block;
+  grid-column: 1 / -1;
 }
 
-/* Material Design 3 Typography Scale */
-.md-typescale-display-large {
-  font-family: var(--font-family-display);
-  font-size: 57px;
-  font-weight: 400;
-  line-height: 64px;
-  letter-spacing: -0.25px;
+.mode-summary {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  margin: 9px 0 0;
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in srgb, var(--blue) 70%, var(--outline-variant));
+  border-radius: 11px;
+  background: var(--blue-soft);
 }
 
-.md-typescale-display-medium {
-  font-family: var(--font-family-display);
-  font-size: 45px;
-  font-weight: 400;
-  line-height: 52px;
-  letter-spacing: 0px;
+.mode-summary p {
+  min-width: 0;
+  margin: 0;
+  color: var(--on-surface-variant);
+  font-size: 10px;
+  line-height: 1.4;
 }
 
-.md-typescale-display-small {
-  font-family: var(--font-family-display);
-  font-size: 36px;
-  font-weight: 400;
-  line-height: 44px;
-  letter-spacing: 0px;
+.mode-profile {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 999px;
+  background: var(--surface-container-lowest);
+  color: var(--ink-soft);
+  font-size: 8.5px;
+  font-weight: 900;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.md-typescale-headline-large {
-  font-family: var(--font-family-display);
-  font-size: 32px;
-  font-weight: 400;
-  line-height: 40px;
-  letter-spacing: 0px;
-}
-
-.md-typescale-headline-medium {
-  font-family: var(--font-family-display);
-  font-size: 28px;
-  font-weight: 400;
-  line-height: 36px;
-  letter-spacing: 0px;
-}
-
-.md-typescale-headline-small {
-  font-family: var(--font-family-display);
-  font-size: 24px;
-  font-weight: 400;
-  line-height: 32px;
-  letter-spacing: 0px;
-}
-
-.md-typescale-title-large {
-  font-family: var(--font-family);
-  font-size: 22px;
-  font-weight: 400;
-  line-height: 28px;
-  letter-spacing: 0px;
-}
-
-.md-typescale-title-medium {
-  font-family: var(--font-family);
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 24px;
-  letter-spacing: 0.15px;
-}
-
-.md-typescale-title-small {
-  font-family: var(--font-family);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 20px;
-  letter-spacing: 0.1px;
-}
-
-.md-typescale-body-large {
-  font-family: var(--font-family);
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 24px;
-  letter-spacing: 0.5px;
-}
-
-.md-typescale-body-medium {
-  font-family: var(--font-family);
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 20px;
-  letter-spacing: 0.25px;
-}
-
-.md-typescale-body-small {
-  font-family: var(--font-family);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 16px;
-  letter-spacing: 0.4px;
-}
-
-.md-typescale-label-large {
-  font-family: var(--font-family);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 20px;
-  letter-spacing: 0.1px;
-}
-
-.md-typescale-label-medium {
-  font-family: var(--font-family);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
-  letter-spacing: 0.5px;
-}
-
-.md-typescale-label-small {
-  font-family: var(--font-family);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 16px;
-  letter-spacing: 0.5px;
-}
+.mode-profile[data-tone="recommended"] { border-color: var(--mint); background: var(--mint-soft); color: #2b6e58; }
+.mode-profile[data-tone="strong"] { border-color: var(--yellow); background: var(--yellow-soft); color: #725a1f; }
+.mode-profile[data-tone="heavy"] { border-color: var(--pink); background: var(--pink-soft); color: #8b4351; }
+.mode-profile[data-tone="experimental"] { border-color: var(--lavender); background: var(--lavender-soft); color: var(--primary); }

@@ -2,61 +2,69 @@ import { VideoEnhancer } from './video-enhancer';
 
 interface StashedEnhancer {
   enhancer: VideoEnhancer;
-  videoSrc: string;
-  timestamp: number;
+  mediaKey: string;
   cleanupTimer: number;
 }
 
-// 使用数组代替Map
 const stash: StashedEnhancer[] = [];
 const STASH_TTL = 2000;
 
-export function stashEnhancer(enhancer: VideoEnhancer): void {
-  const video = enhancer.getVideoElement();
-  // 必须有 src 才能暂存，这是最可靠的标识符
-  if (!video.src) return;
+function getMediaKey(video: HTMLVideoElement): string | null {
+  const source = video.currentSrc || video.src;
+  return source ? `url:${source}` : null;
+}
 
-  console.log(`[Anime4KWebExt] Stashing enhancer for video src: ${video.src}`);
+export function stashEnhancer(enhancer: VideoEnhancer): boolean {
+  const video = enhancer.getVideoElement();
+  const mediaKey = getMediaKey(video);
+  if (!mediaKey) return false;
+
+  console.log(`[Anime4KWebExt] Stashing active enhancer for ${mediaKey}.`);
   enhancer.detach();
 
   const cleanupTimer = window.setTimeout(() => {
-    console.log(`[Anime4KWebExt] Stash for ${video.src} expired. Cleaning up.`);
-    clearStashEntry(video.src);
+    console.log(`[Anime4KWebExt] Stash for ${mediaKey} expired. Cleaning up.`);
+    clearStashEntry(mediaKey);
   }, STASH_TTL);
 
   stash.push({
     enhancer,
-    videoSrc: video.src,
-    timestamp: Date.now(),
+    mediaKey,
     cleanupTimer,
   });
+  return true;
 }
 
-export function findAndunstashEnhancer(video: HTMLVideoElement): VideoEnhancer | null {
-  if (!video.src) return null;
+export function findAndUnstashEnhancer(video: HTMLVideoElement): VideoEnhancer | null {
+  const mediaKey = getMediaKey(video);
+  if (!mediaKey) return null;
 
-  // 遍历查找匹配的条目
-  const index = stash.findIndex(item => item.videoSrc === video.src);
+  const index = stash.findIndex(item => item.mediaKey === mediaKey);
   if (index === -1) {
     return null;
   }
 
   const stashedItem = stash[index];
-  console.log(`[Anime4KWebExt] Found stashed enhancer for video src: ${video.src}. Re-attaching.`);
-  
-  // 清理计时器并从数组中移除
+  console.log(`[Anime4KWebExt] Found stashed enhancer for ${mediaKey}. Re-attaching.`);
   clearTimeout(stashedItem.cleanupTimer);
   stash.splice(index, 1);
 
   return stashedItem.enhancer;
 }
 
-function clearStashEntry(videoSrc: string): void {
-  const index = stash.findIndex(item => item.videoSrc === videoSrc);
+function clearStashEntry(mediaKey: string): void {
+  const index = stash.findIndex(item => item.mediaKey === mediaKey);
   if (index !== -1) {
     const stashedItem = stash[index];
     clearTimeout(stashedItem.cleanupTimer);
-    stashedItem.enhancer.destroy(); // 真正销毁
+    stashedItem.enhancer.destroy();
     stash.splice(index, 1);
+  }
+}
+
+export function clearEnhancerStash(): void {
+  for (const item of stash.splice(0)) {
+    clearTimeout(item.cleanupTimer);
+    item.enhancer.destroy();
   }
 }

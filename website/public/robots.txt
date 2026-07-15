@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /success
+Disallow: /cancel
+Disallow: /api/

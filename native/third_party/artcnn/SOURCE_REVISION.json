@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/Artoriuz/ArtCNN",
+  "tag": "v1.1.0",
+  "commit": "dfa456ffb242a07de8bd15296ffa18f018d62b93",
+  "model": "GLSL/ArtCNN_C4F16.glsl",
+  "sha256": "f7739b68834a8989ebe219a480cf0a7ec34b413062d3a02cf72fa70e1015784f",
+  "reason": "Last official fragment-shader release; suitable for deterministic WGSL and D3D11 translation."
+}

@@ -1,0 +1,6 @@
+{
+  "allowedCallers": [
+    "chrome-extension://dlomjcbmgkfaebhplgoihbjfclaagike/",
+    "anime4k-webextension@chenmozhijin"
+  ]
+}

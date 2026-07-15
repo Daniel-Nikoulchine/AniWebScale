@@ -1,115 +1,203 @@
-# Anime4K WebExtension
+# AniWebScale
 
-中文 | [English](./README.en.md) | [日本語](./README.ja.md) | [Русский](./README.ru.md)
+AniWebScale applies Anime4K and other anime-focused upscalers to HTML video
+in real time. It ships as a Chrome/Firefox Manifest V3 extension and has an
+optional Windows x64 renderer for frames that WebGPU cannot import.
 
-[![Edge Store Users](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fmicrosoftedge.microsoft.com%2Faddons%2Fgetproductdetailsbycrxid%2Fffopffngebibpmeodlhhkdlaejnmdlam&query=%24.activeInstallCount&style=flat-square&label=edge%E7%94%A8%E6%88%B7)](https://microsoftedge.microsoft.com/addons/detail/anime4k-webextension/ffopffngebibpmeodlhhkdlaejnmdlam) [![Chrome Web Store Users](https://img.shields.io/chrome-web-store/users/hpmbccepehpoanjpjkamfdpdkbmfmhek?style=flat-square&label=chrome%E7%94%A8%E6%88%B7)](https://chromewebstore.google.com/detail/anime4k-webextension/hpmbccepehpoanjpjkamfdpdkbmfmhek) [![Mozilla Add-on Users](https://img.shields.io/amo/users/anime4k-webextension?style=flat-square&label=Firefox%E7%94%A8%E6%88%B7)](https://addons.mozilla.org/firefox/addon/anime4k-webextension/) [![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/chenmozhijin/Anime4K-WebExtension/total?style=flat-square&label=GitHub%E4%B8%8B%E8%BD%BD)](https://github.com/chenmozhijin/Anime4K-WebExtension/releases/latest)
+The extension never rewrites `video.src`, reloads a stream, changes CORS
+headers, or re-encodes media. Audio and playback stay with the website.
 
-利用Anime4K实时超分辨率算法显著提升动漫视频画质，逐帧呈现更清晰锐利的视觉体验！
+## Presets
 
-## 功能特性
+All six official mode graphs can be combined with the `M`, `VL`, and `UL`
+quality levels, for 18 selectable presets:
 
-- 🚀 WebGPU 实时超分: 依托先进的 WebGPU 技术，在浏览器端实现低延迟、高性能的视频实时超分辨率增强。
-- ⚡ 多档性能预设: 提供 快速/均衡/质量/极致 四种预设模式，并支持自定义模式，灵活平衡画质提升与硬件负载。
-- 📊 硬件性能评估: 内置 GPU 基准测试，为您推荐最适合您的硬件的超分档位。
-- 📏 灵活分辨率控制: 支持 2x/4x/8x 倍率放大，亦可锁定 2K/4K 等目标分辨率，满足多样化观影需求。
-- ✨ 一键增强: 视频播放器自动浮现紫色「✨ 超分」按钮，一键开启画质飞跃。
-- 🛡️ 广泛兼容: 适配 Shadow DOM、iframe 及跨域视频源，突破技术限制，覆盖绝大多数视频网站。
-- 📋 按需启用机制: 支持精准白名单策略，仅在指定站点生效，避免资源浪费与页面干扰。
-- 🌈 现代化 UI 设计: 遵循 Material Design 规范，自适应 浅色/深色/跟随系统 主题，视觉体验舒适流畅。
-- 🌐 国际化支持: 支持中、英、日、俄等多国语言，服务全球用户。
+| Mode | Pipeline |
+| --- | --- |
+| A | Clamp → Restore → Upscale |
+| B | Clamp → RestoreSoft → Upscale |
+| C | Clamp → DenoiseUpscale |
+| A+A | Clamp → Restore → Upscale → Restore → Upscale |
+| B+B | Clamp → RestoreSoft → Upscale → RestoreSoft → Upscale |
+| C+A | Clamp → DenoiseUpscale → Restore → Upscale |
 
-> [!WARNING]
-> 此拓展无法作用于有Encrypted Media Extensions (EME) 或 DRM 保护的视频网站，如Netflix。
+`Output: Auto` targets the physical player size, including display scaling.
+The double-stage modes remain selectable below 2× and show an oversharpening
+warning. Quality is never silently reduced when rendering is too slow.
 
-## 使用指南
+## AI upscale and frame generation
 
-### 安装扩展
+The Mode selector also exposes dedicated neural upscalers:
 
-#### 从应用商店安装（推荐）
+| Mode | Model and output |
+| --- | --- |
+| CNN Upscale x2 | Anime4K convolutional neural network, selectable M/VL/UL weights, fixed 2x internal output |
+| ArtCNN C4F16 x2 | Official ArtCNN C4F16 fragment model, fixed 2x output |
+| ACNet F8B4 x2 | Official neutral ACNet F8B4 fragment model, fixed 2x output |
+| ARNet F8B8 x2 | Official neutral ARNet F8B8 fragment model, fixed 2x output |
+| AnimeJaNai HD x2 | AnimeJaNai HD V3.1 Performance (`SPANF3 b5f48`), fixed 2x output; GPU-resident DirectML reaches about 39 fps for 1080p→4K on the tested RX 6750 XT |
 
-- [![GitHub Release](https://img.shields.io/github/v/release/chenmozhijin/Anime4K-WebExtension?style=flat-square&label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC)](https://github.com/chenmozhijin/Anime4K-WebExtension/releases/latest)
-- [![Edge Store Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fmicrosoftedge.microsoft.com%2Faddons%2Fgetproductdetailsbycrxid%2Fffopffngebibpmeodlhhkdlaejnmdlam&query=%24.version&style=flat-square&label=Edge%E6%89%A9%E5%B1%95%E5%95%86%E5%BA%97)](https://microsoftedge.microsoft.com/addons/detail/anime4k-webextension/ffopffngebibpmeodlhhkdlaejnmdlam)
-- [![Chrome Web Store Version](https://img.shields.io/chrome-web-store/v/hpmbccepehpoanjpjkamfdpdkbmfmhek?style=flat-square&label=Chrome%E5%BA%94%E7%94%A8%E5%95%86%E5%BA%97)](https://chromewebstore.google.com/detail/anime4k-webextension/hpmbccepehpoanjpjkamfdpdkbmfmhek)
-- [![Mozilla Add-on Version](https://img.shields.io/amo/v/anime4k-webextension?style=flat-square&label=Firefox%E9%99%84%E5%8A%A0%E7%BB%84%E4%BB%B6)](https://addons.mozilla.org/firefox/addon/anime4k-webextension/)
+Frame generation is an independent option. It retains two enhanced frames on
+the GPU, estimates short-range motion, and inserts one motion-adaptive midpoint
+for 2x presentation cadence. It adds one decoded-frame of visual latency and is
+reset automatically after a source resize or renderer change.
 
-> [!NOTE]
->
-> 1. 点击上面的徽章跳转到商店页面
-> 2. 由于审核流程，商店中的版本可能不是最新版。如需最新版，请使用预构建包或从源码构建。
+Every upscale mode and frame generation can run through WebGPU or the native
+Windows renderer. Auto uses Native for protected capture, unavailable WebGPU,
+ONNX-model modes on Firefox, and the faster native DirectML path for AnimeJaNai;
+forcing WebGPU keeps those failures explicit instead
+of silently changing backends. ONNX models compile on first use.
 
-#### 使用预构建包
+## How it works
 
-1. 前往[GitHub Releases](https://github.com/chenmozhijin/Anime4K-WebExtension/releases/latest)页面
-2. 在"Assets"部分下载最新构建的 `anime4k-webextension.zip`
-3. 解压zip文件
-4. 在浏览器中加载解压后的目录：
-   - Chrome: 打开拓展页面(`chrome://extensions`) → 启用"开发者模式" → "加载已解压的扩展程序" → 选择解压后的目录
-   - Edge: 打开拓展页面(`edge://extensions`) → 启用"开发人员模式" → "加载解压缩的扩展" → 选择解压后的目录
+- AniWebScale stays idle during ordinary playback. It starts automatically only
+  after the user enters a video player's Fullscreen API mode and stops when
+  that fullscreen mode ends. There is no per-video AniWebScale button.
+- On readable video, a WebGPU canvas follows `requestVideoFrameCallback` and
+  keeps at most one current frame plus the newest replacement frame. DOM
+  controls and subtitles remain owned by the website.
+- The dedicated CNN mode uses the trained Anime4K weights on either backend.
+  ArtCNN, ACNet, and ARNet use the pinned official GLSL weights translated at
+  build time to WGSL and D3D11 compute shaders, with BT.709 luma/chroma
+  reconstruction after the fixed 2x model.
+  AnimeJaNai uses ONNX Runtime WebGPU in Chromium or the upstream GPU-resident
+  `aji` DirectML backend in Native mode. All inference is local; no video frame
+  is sent to a server.
+- On EME/DRM, a `SecurityError`, or explicit `Backend: Native`, the extension
+  can ask once per site for permission to use the local Windows renderer.
+- The tab remains in its existing browser window. A random 128-bit title nonce
+  identifies that existing fullscreen browser window for native capture; no
+  browser popup is created and no tab is moved.
+- `Anime4K.NativeHost.exe` uses the browser Native Messaging protocol and a
+  current-user-only named pipe. `Anime4K.Renderer.exe` uses Windows Graphics
+  Capture, Direct3D 11, and the bundled DirectML/ONNX Runtime. No
+  shader, weight, compiler, or executable is downloaded at runtime.
 
-#### 从源码安装
+The native path does not bypass DRM. Crunchyroll, Widevine, Windows, the
+browser, or the graphics driver can still return black protected frames. In
+that case the renderer reports that protected content cannot be captured,
+instructs the user to disable browser hardware acceleration and restart the
+browser, and then restores the original tab and page state.
 
-1. 克隆本仓库
-2. 运行 `npm install` 安装依赖
-3. 运行 `npm run build` 构建项目
-4. 在浏览器中加载构建好的扩展：
-   - Chrome: 打开拓展页面(`chrome://extensions`) → 启用"开发者模式" → "加载已解压的扩展程序" → 选择项目中的 `dist` 目录
-   - Edge: 打开拓展页面(`edge://extensions`) → 启用"开发人员模式" → "加载解压缩的扩展" → 选择项目中的 `dist` 目录
+## Local installation
 
-### 一、初次设置 (Onboarding)
+Install Node.js 20 or newer, then build both browsers:
 
-安装扩展后，会自动打开引导页面。为了获得最佳体验，请跟随指引完成设置：
+```powershell
+npm ci
+npm run build:all
+```
 
-1.  **GPU 性能基准测试**：扩展会运行一段简短的基准测试 (目标: 1080p -> 4K 24fps)，评估您的显卡性能。
-2.  **推荐档位**：根据测试结果，扩展会自动为您推荐合适的性能档位 (Performance Tier)：
-    *   🚀 **流畅**: 适合集成显卡或老旧设备，优先保证流畅度。
-    *   ⚖️ **均衡**: 平衡画质与性能，适合大多数中端设备。
-    *   🎨 **画质**: 提供更好的画面细节，适合独立显卡用户。
-    *   🔬 **极致**: 最高画质，需要较强的显卡性能支持。
-3.  **确认应用**：您可以接受推荐，也可以手动选择其他档位。
+Chrome:
 
-### 二、日常使用
+1. Open `chrome://extensions`.
+2. Enable Developer mode.
+3. Choose **Load unpacked** and select `dist-chrome`.
 
-1.  **启用增强**：在支持的视频网站（如 Bilibili, YouTube 等）播放视频。
-2.  **点击开关**：将鼠标悬停在视频播放器上，左侧会浮现一个 **「✨ 超分」** 按钮。
-    *   点击按钮启用增强，按钮状态会依次显示为 “⏳ 启动中...” → “❌ 取消”。
-    *   按钮在鼠标移开后会自动半透明或隐藏，以免遮挡画面。
+Firefox:
 
-### 三、快捷设置面板
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Choose **Load Temporary Add-on**.
+3. Select `dist-firefox/manifest.json`.
 
-点击浏览器工具栏中的 Anime4K 扩展图标，打开弹出面板：
+The unpacked Chrome ID is fixed to
+`dlomjcbmgkfaebhplgoihbjfclaagike`. The Firefox ID is
+`anime4k-webextension@chenmozhijin`.
 
-*   **性能档位 (Performance Tier)**: 快速切换四个预设档位。
-    *   *注意：当选择了“自定义模式”时，性能档位将不可用，因为自定义模式由具体的着色器组合决定。*
-*   **增强模式 (Enhancement Mode)**:
-    *   **内置模式**: 如 Mode A, Mode B, Mode C 等经典 Anime4K 预设。
-    *   **自定义模式**: 您自己创建或导入的高级模式。
-*   **分辨率 (Resolution)**: 设置输出分辨率目标（x2 倍率或固定 1080p/4K 等）。
-*   **白名单 (Whitelist)**:
-    *   快速将当前页面、域名或父路径加入白名单。
-    *   启用/禁用全局白名单功能。
+## Optional Windows renderer
 
-### 四、高级选项
+Requirements:
 
-点击面板底部的 **“设置”** 按钮进入详细设置页面：
+- Windows 10/11 x64
+- Visual Studio 2022 C++ Build Tools
+- Windows 10/11 SDK with `fxc.exe`
+- CMake 3.25 or newer
+- Python 3.10 or newer (build-time shader packaging only)
 
-#### 1. 常规设置 (General)
-*   **外观**: 切换 浅色/深色 主题。
-*   **兼容性**: 开启 **"跨域兼容模式"** (Cross-Origin Mode)，用于修复因浏览器安全策略导致无法增强的视频（常见于嵌套的第三方播放器）。
+Build and test it with:
 
-#### 2. 性能设置 (Performance)
-*   **GPU 测试**: 随时重新运行基准测试，更新您的性能评分。
-*   **当前档位**: 查看当前生效的性能配置。
+```powershell
+.\native\scripts\build.ps1 -Configuration Release
+```
 
-#### 3. 增强模式 (Enhancement Modes)
-*   **可视化编辑器**: 创建全新的自定义模式。
-*   **拖拽排序**: 调整着色器 (Shader) 的应用顺序，或调整模式列表顺序。
-*   **分享配置**: 导入/导出您的自定义模式配置 (JSON 格式)。
+Install for the current user (no administrator rights) by double-clicking:
 
-#### 4. 白名单管理 (Whitelist)
-*   **规则管理**: 查看、编辑或删除已添加的网址规则。
-*   **支持通配符**: 使用 `*` 匹配多个页面（如 `*.bilibili.com/*`）。
+```text
+native\Install Anime4K Native.cmd
+```
 
-## 致谢
+The one-click installer copies the complete renderer, models, and runtimes to
+LocalAppData and registers Chrome and Firefox. For a build-and-install command
+from the repository, use:
 
-- [bloc97/Anime4K](https://github.com/bloc97/Anime4K)
-- [Anime4K-WebGPU](https://github.com/Anime4KWebBoost/Anime4K-WebGPU)
+```powershell
+npm run install:native
+```
+
+Restart the browser after installing. Remove it by double-clicking
+`native\Uninstall Anime4K Native.cmd` or with:
+
+```powershell
+npm run uninstall:native
+```
+
+Browser extensions cannot bootstrap a Native Messaging executable themselves:
+Windows requires an external application installer to create the per-user host
+registration. The included one-click installer is therefore the automatic
+installation boundary.
+
+## Tests and packages
+
+```powershell
+npm run typecheck
+npm test
+npm run build:all
+npm run test:e2e
+npm run build:native
+npm run package:local
+```
+
+Public store bundles must be built with the final HTTPS account and Neon Auth URLs. The release build refuses localhost and placeholder domains; see [`docs/RELEASE.md`](docs/RELEASE.md).
+
+After deployment, `npm run check:live -- https://your-domain.example` runs the non-mutating final gate for HTTPS security, all three paid plans, Stripe/Neon readiness, signed-license verification, CORS and store links.
+
+`npm run package:local` creates:
+
+- `artifacts/chrome-unpacked/`
+- `artifacts/aniwebscale-chrome-1.0.0.zip`
+- `artifacts/aniwebscale-firefox-1.0.0.xpi`
+- `artifacts/aniwebscale-native-windows-x64-1.0.0.zip`
+
+The native ZIP contains `Install Anime4K Native.cmd`; extract the ZIP and
+double-click that file to install the complete backend.
+
+Before the first browser E2E run, use `npm run test:e2e:install`; details are
+in [`tests/e2e/README.md`](tests/e2e/README.md).
+
+Automated protocol, settings, graph, and native unit tests are included. GPU
+golden-image testing, the RX 6750 XT performance target, and ten-minute
+Crunchyroll smoke tests require the target hardware, installed browsers, and a
+Crunchyroll account; they are not implied by a successful source build.
+The reproducible checklist is in [`docs/TESTING.md`](docs/TESTING.md).
+
+## Security and privacy
+
+- No telemetry.
+- No administrator installation.
+- The native host accepts a fixed command schema and fixed extension IDs. It
+  accepts no arbitrary HWND, filesystem path, URL, program, or command line.
+- Native site permissions can be revoked in the extension settings.
+- Session cleanup is shared across stop, navigation, tab close, renderer loss,
+  and browser restart recovery.
+
+## License
+
+This project is MIT licensed. It derives from the MIT-licensed Anime4K,
+Anime4K-WebGPU, Anime4K-WebExtension, ArtCNN, and ACNetGLSL projects. See
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for attribution. Magpie is
+not used or bundled.
+
+The separately bundled AnimeJaNai model is licensed under
+[CC BY-NC-SA 4.0](public/models/AnimeJaNai.LICENSE.txt), including its
+non-commercial and share-alike restrictions. Those restrictions apply to the
+model and derivatives, not to otherwise independent MIT-licensed project code.

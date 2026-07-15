@@ -1,0 +1,21 @@
+Anime4K upstream visual assets
+================================
+
+Source repository: https://github.com/bloc97/Anime4K
+Repository owner: bloc97
+
+Files used by this website:
+- main-comparison.png
+  https://github.com/bloc97/Anime4K/blob/master/results/Main.png
+- magia-comparison.png
+  https://github.com/bloc97/Anime4K/blob/master/results/Comparisons/Cropped_Screenshots/Magia_360p_4K.png
+
+The upstream repository is distributed under the MIT License for its software.
+Its README separately states:
+
+"All art assets used are for demonstration and educational purposes. All rights
+are reserved to their original owners."
+
+These images are therefore included here as attributed development placeholders,
+not as an assertion of commercial reuse rights. Replace them with owned or
+licensed frames before publishing a monetized website.

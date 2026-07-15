@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "aniwebscale",
+  "pages_build_output_dir": "./public",
+  "compatibility_date": "2026-07-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "e9e1cffc5d164db5990f7ff1ba66bf32"
+    }
+  ],
+  "send_metrics": false,
+  "upload_source_maps": true
+}

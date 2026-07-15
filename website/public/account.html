@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#fffaf3">
+  <title>Account · AniWebScale</title>
+  <link rel="icon" href="/assets/logo-v2.png">
+  <link rel="stylesheet" href="/vendor/lucide/lucide.css">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/account.css">
+  <script src="/account.js" defer></script>
+</head>
+<body class="account-page">
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="AniWebScale home"><img src="/assets/logo-v2.png" alt="" width="40" height="40"><span>AniWebScale</span></a>
+    <div class="header-actions"><a class="button button-ghost account-home" href="/">Back to home</a></div>
+  </header>
+  <main class="account-main">
+    <section class="account-hero">
+      <p class="section-kicker">YOUR ACCOUNT</p>
+      <h1>One account.<br><em>Your Pro license.</em></h1>
+    </section>
+
+    <section id="signed-out" class="account-card">
+      <h2 id="auth-title">Sign in</h2>
+      <p>Sign in before buying Pro so the payment can be linked to your extension.</p>
+      <form id="auth-form" class="auth-form">
+        <label><span>Email</span><input id="email" type="email" autocomplete="email" required></label>
+        <label><span>Password</span><input id="password" type="password" autocomplete="current-password" minlength="8" required></label>
+        <button id="auth-submit" class="button button-primary" type="submit">Sign in</button>
+      </form>
+      <button id="auth-switch" class="text-button" type="button">New here? Create an account</button>
+    </section>
+
+    <section id="signed-in" class="account-card" hidden>
+      <div class="account-summary">
+        <div><p class="eyebrow">SIGNED IN AS</p><strong id="account-email"></strong></div>
+        <button id="sign-out" class="text-button" type="button">Sign out</button>
+      </div>
+      <div class="license-status">
+        <div><p class="eyebrow">CURRENT PLAN</p><h2 id="plan-name">Checking…</h2><p id="plan-status"></p></div>
+        <button id="refresh-license" class="button button-ghost" type="button">Refresh license</button>
+      </div>
+      <div class="account-actions">
+        <button id="manage-billing" class="button button-ghost" type="button">Manage billing</button>
+      </div>
+      <div class="account-plans">
+        <article><p>PRO MONTHLY</p><strong>$4.99</strong><span>per month</span><button class="button button-primary" type="button" data-account-plan="pro_monthly">Choose monthly</button></article>
+        <article><p>PRO YEARLY</p><strong>$41.99</strong><span>per year</span><button class="button button-primary" type="button" data-account-plan="pro_yearly">Choose yearly</button></article>
+        <article><p>LIFETIME PRO</p><strong>$59.99</strong><span>one time</span><button class="button button-primary" type="button" data-account-plan="lifetime">Choose lifetime</button></article>
+      </div>
+      <p id="checkout-message" class="account-message" role="status"></p>
+    </section>
+    <p id="account-message" class="account-message" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>

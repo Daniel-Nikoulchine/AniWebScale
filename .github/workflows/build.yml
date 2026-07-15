@@ -1,4 +1,4 @@
-name: Build and Package
+name: Verify and Build
 
 on:
   push:
@@ -6,57 +6,73 @@ on:
   pull_request:
     branches: [main]
 
-jobs:
-  build-chrome:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          
-      - name: Install dependencies
-        run: npm ci
-        
-      - name: Build project
-        run: npm run build:chrome
-        
-      - name: Rename dist folder
-        run: |
-          mv dist-chrome anime4k-webextension
-          
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: anime4k-webextension-chrome
-          path: anime4k-webextension
+permissions:
+  contents: read
 
-  build-firefox:
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extension:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          
+          cache: npm
+
       - name: Install dependencies
         run: npm ci
-        
-      - name: Build project
-        run: npm run build:firefox
-        
-      - name: Rename dist folder
-        run: |
-          mv dist-firefox anime4k-webextension
-          
-      - name: Upload artifact
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build Chrome and Firefox
+        run: npm run build:all
+
+      - name: Upload browser bundles
         uses: actions/upload-artifact@v4
         with:
-          name: anime4k-webextension-firefox
-          path: anime4k-webextension
+          name: aniwebscale-browser-development-bundles
+          path: |
+            dist-chrome
+            dist-firefox
+
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      - name: Local production-readiness gate
+        run: npm run test:live:local
+
+      - name: Rebuild browser account client
+        run: npm run build:client
+
+      - name: Build production container
+        run: docker build -t aniwebscale-website:ci .

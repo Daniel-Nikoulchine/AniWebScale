@@ -1,107 +1,1221 @@
-import { getSettings, getLocalSettings } from './utils/settings';
 import { ensureLatestConfig } from './utils/migration';
+import { NativeHostUnavailableError, NativeMessagingClient, createRequestId } from './native/client';
+import {
+  isNativeConfiguration,
+  isNativeEnhancementMode,
+  isNativeQuality,
+  NativeCapabilitiesEvent,
+  NativeConfiguration,
+  NativeEvent,
+  NativeMediaCommandName,
+  NativeMetricsEvent,
+  NativeStatusEvent,
+  NATIVE_PROTOCOL_VERSION,
+} from './native/protocol';
+import {
+  calculateVideoCaptureRegion,
+} from './shared/popup-geometry';
+import {
+  NATIVE_SESSION_VERSION,
+  matchesExpectedNativeSession,
+  migrateNativeSessionMetadata,
+  requiresLegacyPopupRestore,
+  selectRecoveredSessionTab,
+} from './shared/session-recovery';
+import {
+  isHttpOrigin,
+  isNativePlaybackStateAuthorized,
+  isNativeSessionControlAuthorized,
+  parseHttpOrigin,
+  parseNativeConsentResponse,
+  resolveNativeMessageOrigin,
+} from './shared/native-session-messages';
+import {
+  isNativeFallbackRequest,
+} from './shared/native-fallback-request';
+import type { NativeFallbackRequest } from './shared/native-fallback-request';
+import {
+  resolveFullscreenExitState,
+} from './shared/fullscreen-exit';
+import type { FullscreenExitFrameResponse } from './shared/fullscreen-exit';
+import { requiresProConfiguration } from './account/entitlement';
+import {
+  ensureProAccess,
+  getAccountStatus,
+  refreshAccountStatus,
+  signIn,
+  signOut,
+  signUp,
+} from './account/service';
 
-const RULESET_ID = 'ruleset_1';
+const SESSION_STORAGE_KEY = 'anime4kNativeSessionV1';
+const CONSENT_STORAGE_KEY = 'anime4kNativeConsentByOrigin';
+const ACTIVE_ENHANCEMENT_KEY = 'anime4kActiveEnhancementV1';
+const SESSION_VERSION = NATIVE_SESSION_VERSION;
 
-/**
- * 根据当前设置更新 declarativeNetRequest 规则集。
- */
-async function updateDNRuleset() {
-  const { enableCrossOriginFix } = await getSettings();
-  if (enableCrossOriginFix) {
-    await chrome.declarativeNetRequest.updateEnabledRulesets({
-      enableRulesetIds: [RULESET_ID]
-    });
-    console.log('[Background] Cross-origin DNR ruleset enabled.');
+interface PreparedVideo {
+  ok: boolean;
+  originalTitle?: string;
+  intrinsicWidth?: number;
+  intrinsicHeight?: number;
+  screenAvailWidth?: number;
+  screenAvailHeight?: number;
+  screenAvailLeft?: number;
+  screenAvailTop?: number;
+  devicePixelRatio?: number;
+  targetWidth?: number;
+  targetHeight?: number;
+  message?: string;
+}
+
+interface PreparedTopFrame {
+  ok: boolean;
+  isolatedFrame?: boolean;
+  message?: string;
+}
+
+interface PopupMeasurement {
+  ok: boolean;
+  innerWidth?: number;
+  innerHeight?: number;
+  outerWidth?: number;
+  outerHeight?: number;
+  devicePixelRatio?: number;
+  screenAvailWidth?: number;
+  screenAvailHeight?: number;
+  screenAvailLeft?: number;
+  screenAvailTop?: number;
+  videoRect?: { left: number; top: number; width: number; height: number };
+}
+
+interface NativeSessionRecord {
+  version: typeof SESSION_VERSION;
+  captureKind: 'direct-fullscreen' | 'legacy-popup';
+  phase: 'preparing' | 'active' | 'stopping';
+  sessionId: string;
+  nonce: string;
+  tabId: number;
+  frameId: number;
+  videoId: string;
+  origin: string;
+  sourceUrl: string;
+  topLevelUrl: string;
+  sourceWindowId?: number;
+  originalWindowId?: number;
+  originalIndex?: number;
+  originalWindowState?: chrome.windows.windowStateEnum;
+  originalWindowBounds?: { left?: number; top?: number; width?: number; height?: number };
+  popupWindowId?: number;
+  originalTitle?: string;
+  intrinsicWidth?: number;
+  intrinsicHeight?: number;
+  captureWidth?: number;
+  captureHeight?: number;
+  targetWidth?: number;
+  targetHeight?: number;
+  configuration: NativeConfiguration;
+  output: 'auto';
+  createdAt: number;
+}
+
+interface NativeStatusSnapshot {
+  active: boolean;
+  sessionId?: string;
+  state?: string;
+  message?: string;
+  configuration?: NativeConfiguration;
+  metrics?: Pick<NativeMetricsEvent, 'fps' | 'frameTimeMs' | 'droppedFrames'>;
+}
+
+interface ActiveEnhancementRecord {
+  tabId: number;
+  frameId: number;
+  videoId: string;
+}
+
+let activeSession: NativeSessionRecord | null = null;
+let nativeClient: NativeMessagingClient | null = null;
+let nativeCapabilities: NativeCapabilitiesEvent | null = null;
+let latestStatus: NativeStatusSnapshot = { active: false };
+let activeEnhancement: ActiveEnhancementRecord | null = null;
+let operationChain: Promise<unknown> = Promise.resolve();
+let fullscreenExitSessionId: string | null = null;
+
+function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  const result = operationChain.then(operation, operation);
+  operationChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function isExtensionEnabled(): Promise<boolean> {
+  const stored = await chrome.storage.sync.get(['extensionEnabled']);
+  return stored.extensionEnabled !== false;
+}
+
+async function loadActiveEnhancement(): Promise<ActiveEnhancementRecord | null> {
+  if (activeEnhancement) return activeEnhancement;
+  const stored = await chrome.storage.local.get(ACTIVE_ENHANCEMENT_KEY);
+  const candidate = stored[ACTIVE_ENHANCEMENT_KEY] as Partial<ActiveEnhancementRecord> | undefined;
+  if (!candidate || !Number.isInteger(candidate.tabId) || !Number.isInteger(candidate.frameId)
+      || typeof candidate.videoId !== 'string' || candidate.videoId.length === 0) return null;
+  activeEnhancement = {
+    tabId: candidate.tabId as number,
+    frameId: candidate.frameId as number,
+    videoId: candidate.videoId,
+  };
+  return activeEnhancement;
+}
+
+async function persistActiveEnhancement(record: ActiveEnhancementRecord | null): Promise<void> {
+  activeEnhancement = record;
+  if (record) await chrome.storage.local.set({ [ACTIVE_ENHANCEMENT_KEY]: record });
+  else await chrome.storage.local.remove(ACTIVE_ENHANCEMENT_KEY);
+}
+
+async function claimEnhancement(
+  videoId: string,
+  sender: chrome.runtime.MessageSender,
+): Promise<{ ok: boolean; message?: string }> {
+  if (!await isExtensionEnabled()) {
+    return { ok: false, message: 'AniWebScale is disabled.' };
+  }
+  const tabId = sender.tab?.id;
+  const frameId = sender.frameId ?? 0;
+  if (tabId === undefined || videoId.length === 0 || videoId.length > 128) {
+    return { ok: false, message: 'The AniWebScale activation claim was invalid.' };
+  }
+
+  const next = { tabId, frameId, videoId };
+  const previous = await loadActiveEnhancement();
+  if (previous && (previous.tabId !== tabId || previous.frameId !== frameId || previous.videoId !== videoId)) {
+    if (activeSession?.tabId === previous.tabId && activeSession.frameId === previous.frameId
+        && activeSession.videoId === previous.videoId) {
+      await stopNativeSession('Another video was selected.', true);
+    } else {
+      await sendToFrame(previous.tabId, previous.frameId, {
+        type: 'ANIME4K_FORCE_STOP',
+        videoId: previous.videoId,
+      }).catch(() => undefined);
+    }
+  }
+  await persistActiveEnhancement(next);
+  return { ok: true };
+}
+
+async function releaseEnhancement(videoId: string, sender: chrome.runtime.MessageSender): Promise<void> {
+  const current = await loadActiveEnhancement();
+  if (current && current.tabId === sender.tab?.id && current.frameId === (sender.frameId ?? 0)
+      && current.videoId === videoId) {
+    await persistActiveEnhancement(null);
+  }
+}
+
+function generateNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function sourceOrigin(sender: chrome.runtime.MessageSender): string | null {
+  return resolveNativeMessageOrigin({
+    origin: sender.origin,
+    url: sender.url,
+    tabUrl: sender.tab?.url,
+  });
+}
+
+function topLevelOrigin(sender: chrome.runtime.MessageSender): string | null {
+  return parseHttpOrigin(sender.tab?.url);
+}
+
+async function persistSession(session: NativeSessionRecord | null): Promise<void> {
+  activeSession = session;
+  if (session) {
+    await chrome.storage.local.set({ [SESSION_STORAGE_KEY]: session });
   } else {
-    await chrome.declarativeNetRequest.updateEnabledRulesets({
-      disableRulesetIds: [RULESET_ID]
-    });
-    console.log('[Background] Cross-origin DNR ruleset disabled.');
+    await chrome.storage.local.remove(SESSION_STORAGE_KEY);
   }
 }
 
-/**
- * 检查是否需要打开引导页面
- */
-async function checkOnboarding(): Promise<boolean> {
-  const local = await getLocalSettings();
+async function loadPersistedSession(): Promise<NativeSessionRecord | null> {
+  const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+  const candidate = stored[SESSION_STORAGE_KEY] as (
+    Partial<NativeSessionRecord> & { preset?: unknown }
+  ) | undefined;
+  const metadata = candidate ? migrateNativeSessionMetadata(candidate) : null;
+  if (!candidate || !metadata || typeof candidate.tabId !== 'number') {
+    return null;
+  }
+  const rawConfiguration = candidate.configuration ?? candidate.preset;
+  const configuration = isNativeConfiguration(rawConfiguration)
+    ? rawConfiguration
+    : rawConfiguration && typeof rawConfiguration === 'object'
+      && isNativeEnhancementMode((rawConfiguration as Record<string, unknown>).mode)
+      && isNativeQuality((rawConfiguration as Record<string, unknown>).quality)
+      ? {
+          mode: (rawConfiguration as { mode: NativeConfiguration['mode'] }).mode,
+          quality: (rawConfiguration as { quality: NativeConfiguration['quality'] }).quality,
+          frameGenerationEnabled: false,
+        }
+      : null;
+  if (!configuration) return null;
+  const normalized = { ...candidate };
+  delete normalized.preset;
+  return { ...normalized, ...metadata, configuration } as NativeSessionRecord;
+}
 
-  // 如果未完成引导，打开引导页
+async function sendToFrame<T = unknown>(
+  tabId: number,
+  frameId: number,
+  message: unknown,
+): Promise<T> {
+  return chrome.tabs.sendMessage(tabId, message, { frameId }) as Promise<T>;
+}
+
+async function requestOriginConsent(tabId: number, origin: string): Promise<boolean> {
+  const stored = await chrome.storage.local.get(CONSENT_STORAGE_KEY);
+  const consentByOrigin = (stored[CONSENT_STORAGE_KEY] ?? {}) as Record<string, boolean>;
+  if (typeof consentByOrigin[origin] === 'boolean') {
+    return consentByOrigin[origin];
+  }
+
+  let response: { allowed?: unknown } | undefined;
+  try {
+    response = await sendToFrame<{ allowed?: unknown }>(tabId, 0, {
+      type: 'NATIVE_CONSENT_REQUEST',
+      origin,
+    });
+  } catch (error) {
+    console.warn('[NativeBridge] Could not show native fallback consent.', error);
+    return false;
+  }
+
+  const allowed = parseNativeConsentResponse(response);
+  if (allowed === null) return false;
+  consentByOrigin[origin] = allowed;
+  await chrome.storage.local.set({ [CONSENT_STORAGE_KEY]: consentByOrigin });
+  return allowed;
+}
+
+async function checkOnboarding(): Promise<void> {
+  const local = await chrome.storage.local.get('hasCompletedOnboarding');
   if (!local.hasCompletedOnboarding) {
-    console.log('[Background] Opening onboarding page...');
-    chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
-    return true;
+    // Do not steal focus from playback when an update installs in the
+    // background. The user can still open the guide explicitly from the UI.
+    await chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html'), active: false });
   }
-
-  return false;
 }
 
-/**
- * 检查上次测试是否崩溃
- */
-async function checkBenchmarkCrash(): Promise<void> {
-  const local = await chrome.storage.local.get(['_benchmarkInProgress']);
+function nativeRequestBase(): {
+  protocolVersion: typeof NATIVE_PROTOCOL_VERSION;
+  requestId: string;
+} {
+  return { protocolVersion: NATIVE_PROTOCOL_VERSION, requestId: createRequestId() };
+}
 
-  if (local._benchmarkInProgress) {
-    console.warn('[Background] Previous benchmark may have crashed, using safe defaults');
+function installNativeEventRouting(client: NativeMessagingClient): void {
+  client.onEvent(event => {
+    void routeNativeEvent(event, client);
+  });
+}
 
-    await chrome.storage.local.set({
-      performanceTier: 'performance',
-      hasCompletedOnboarding: true,
+async function connectAndHandshake(): Promise<NativeMessagingClient> {
+  if (nativeClient?.connected && nativeCapabilities) return nativeClient;
+
+  nativeClient?.disconnect();
+  nativeClient = null;
+  nativeCapabilities = null;
+  const client = new NativeMessagingClient();
+  installNativeEventRouting(client);
+  try {
+    client.connect();
+
+    const ready = await client.request({
+      ...nativeRequestBase(),
+      type: 'hello',
+    }, 5_000);
+    if (ready.type !== 'ready') {
+      throw new Error('The native host returned an invalid handshake response.');
+    }
+
+    const capabilities = await client.request<NativeCapabilitiesEvent>({
+      ...nativeRequestBase(),
+      type: 'capabilities',
+    }, 5_000);
+    if (capabilities.type !== 'capabilities' || !capabilities.windowsCapture || !capabilities.d3d11) {
+      throw new Error('The native host does not support Windows Graphics Capture and Direct3D 11.');
+    }
+
+    nativeCapabilities = capabilities;
+    nativeClient = client;
+    return client;
+  } catch (error) {
+    client.disconnect();
+    nativeCapabilities = null;
+    throw error;
+  }
+}
+
+function assertNativeSupportsConfiguration(configuration: NativeConfiguration): void {
+  const capabilities = nativeCapabilities;
+  if (!capabilities?.modes.includes(configuration.mode)) {
+    throw new Error(`The installed native renderer does not support ${configuration.mode}.`);
+  }
+  if (!capabilities.qualities.includes(configuration.quality)) {
+    throw new Error(`The installed native renderer does not support quality ${configuration.quality}.`);
+  }
+  if (configuration.frameGenerationEnabled && !capabilities.frameGeneration) {
+    throw new Error('The installed native renderer does not support frame generation.');
+  }
+}
+
+async function routeNativeEvent(event: NativeEvent, sourceClient: NativeMessagingClient): Promise<void> {
+  // A disconnected client can still have a previously queued callback. Never
+  // reinterpret an unscoped transport error from that client as belonging to
+  // the replacement native session.
+  if (sourceClient !== nativeClient) return;
+  const session = activeSession;
+
+  if (event.type === 'pointer' || event.type === 'mediaCommand') {
+    if (session && event.sessionId === session.sessionId) {
+      const message = {
+        ...event,
+        type: event.type === 'pointer' ? 'NATIVE_POINTER_EVENT' : 'NATIVE_MEDIA_COMMAND_EVENT',
+      };
+      if (event.type === 'mediaCommand' && event.command === 'exitFullscreen') {
+        await exitNativeFullscreen(session, message);
+      } else {
+        await sendToFrame(session.tabId, session.frameId, message).catch(() => undefined);
+      }
+    }
+    return;
+  }
+
+  if (event.type === 'metrics' && session && event.sessionId === session.sessionId) {
+    latestStatus = {
+      ...latestStatus,
+      active: true,
+      metrics: {
+        fps: event.fps,
+        frameTimeMs: event.frameTimeMs,
+        droppedFrames: event.droppedFrames,
+      },
+    };
+    await sendSessionEvent(session, event);
+    return;
+  }
+
+  if (event.type === 'status' && session && event.sessionId === session.sessionId) {
+    latestStatus = {
+      ...latestStatus,
+      active: event.state !== 'stopped' && event.state !== 'failed',
+      state: event.state,
+      message: event.message,
+    };
+    if (!event.requestId?.startsWith('playback-')) await sendSessionEvent(session, event);
+    if (event.state === 'failed' || event.state === 'stopped') {
+      void serialized(() => stopNativeSession(event.message ?? event.state, false, true, session.sessionId));
+    }
+    return;
+  }
+
+  if (event.type === 'error') {
+    if (session && (!event.sessionId || event.sessionId === session.sessionId)) {
+      latestStatus = { ...latestStatus, state: 'failed', message: event.message };
+      await sendSessionEvent(session, event);
+      // A renderer error invalidates the capture surface even when the host
+      // classifies it as theoretically recoverable. Use the same idempotent
+      // restore path for device loss, capture loss, and fatal protocol errors.
+      void serialized(() => stopNativeSession(event.message, false, true, session.sessionId));
+    }
+    return;
+  }
+
+  if (event.type === 'stopped' && session && event.sessionId === session.sessionId) {
+    await sendSessionEvent(session, event);
+    void serialized(() => stopNativeSession(event.reason, false, true, session.sessionId));
+  }
+}
+
+async function exitNativeFullscreen(session: NativeSessionRecord, message: unknown): Promise<void> {
+  if (fullscreenExitSessionId === session.sessionId) return;
+  fullscreenExitSessionId = session.sessionId;
+  try {
+    // Crunchyroll can replace player elements during the exit animation. Ask
+    // the top document (authoritative for the fullscreen stack) and the source
+    // frame, then confirm the resulting state. A short retry absorbs those DOM
+    // swaps without requiring the user to press Esc several times.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (activeSession?.sessionId !== session.sessionId) return;
+      const topFrame = await sendToFrame<FullscreenExitFrameResponse>(
+        session.tabId,
+        0,
+        message,
+      ).catch(() => null);
+      const sourceFrame = session.frameId === 0
+        ? topFrame
+        : await sendToFrame<FullscreenExitFrameResponse>(
+          session.tabId,
+          session.frameId,
+          message,
+        ).catch(() => null);
+      const state = resolveFullscreenExitState(topFrame, sourceFrame);
+      if (state === 'exited') {
+        await serialized(() => stopNativeSession('Fullscreen exited.', true, true, session.sessionId));
+        return;
+      }
+      if (attempt < 4) await new Promise<void>(resolve => setTimeout(resolve, 150));
+    }
+    // The renderer keeps displaying the enhanced frame while its own failsafe
+    // timer waits. This avoids dropping back to an unenhanced source window if
+    // a transient browser transition prevented confirmation.
+  } finally {
+    if (fullscreenExitSessionId === session.sessionId) fullscreenExitSessionId = null;
+  }
+}
+
+async function sendSessionEvent(session: NativeSessionRecord, event: NativeEvent): Promise<void> {
+  await sendToFrame(session.tabId, session.frameId, {
+    type: 'NATIVE_SESSION_EVENT',
+    // Some host-level errors do not carry a session ID. Scope every forwarded
+    // event here so a delayed delivery cannot tear down a replacement session.
+    event: { ...event, sessionId: session.sessionId },
+  }).catch(() => undefined);
+}
+
+async function prepareDirectFullscreen(session: NativeSessionRecord): Promise<PreparedVideo> {
+  const prepared = await sendToFrame<PreparedVideo>(session.tabId, session.frameId, {
+    type: 'NATIVE_PREPARE_FULLSCREEN',
+    sessionId: session.sessionId,
+    videoId: session.videoId,
+    nonce: session.nonce,
+  });
+  if (!prepared?.ok) throw new Error(prepared?.message ?? 'The selected video is not in player fullscreen.');
+  if (session.frameId === 0) {
+    session.originalTitle = prepared.originalTitle;
+    return prepared;
+  }
+  const title = await sendToFrame<{ ok?: boolean; originalTitle?: string }>(session.tabId, 0, {
+    type: 'NATIVE_SET_TITLE_NONCE',
+    captureKind: 'direct-fullscreen',
+    sessionId: session.sessionId,
+    nonce: session.nonce,
+  });
+  if (!title?.ok) throw new Error('The fullscreen browser window could not be marked for capture.');
+  session.originalTitle = title.originalTitle;
+  return prepared;
+}
+
+async function startNativeFallback(
+  request: NativeFallbackRequest,
+  sender: chrome.runtime.MessageSender,
+): Promise<{
+  ok: boolean;
+  status: 'started' | 'unavailable' | 'denied';
+  message?: string;
+  sessionId?: string;
+}> {
+  const tabId = sender.tab?.id;
+  const frameId = sender.frameId ?? 0;
+  const senderOrigin = sourceOrigin(sender);
+  if (tabId === undefined || senderOrigin === null) {
+    return { ok: false, status: 'denied', message: 'The native request did not come from a trusted HTTP(S) page origin.' };
+  }
+
+  // Consent is keyed to the user-visible top-level website, not a CDN/player
+  // iframe origin. MessageSender.origin is authoritative here: location.origin
+  // serializes as "null" in inherited about:blank/srcdoc frames even though the
+  // extension sender retains the parent's effective HTTP(S) origin.
+  const consentOrigin = topLevelOrigin(sender) ?? senderOrigin;
+  if (!await requestOriginConsent(tabId, consentOrigin)) {
+    return { ok: false, status: 'denied', message: 'Native capture was not allowed for this website.' };
+  }
+
+  if (activeSession
+      && activeSession.tabId === tabId
+      && activeSession.frameId === frameId
+      && activeSession.videoId === request.videoId) {
+    await updateNativeConfiguration(request.configuration);
+    return { ok: true, status: 'started', sessionId: activeSession.sessionId };
+  }
+
+  await stopNativeSession('A different video was selected.', true);
+
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return { ok: false, status: 'unavailable', message: 'The source tab is no longer available.' };
+  }
+  if (tab.windowId === undefined) {
+    return { ok: false, status: 'unavailable', message: 'The source tab has no browser window.' };
+  }
+
+  const session: NativeSessionRecord = {
+    version: SESSION_VERSION,
+    captureKind: 'direct-fullscreen',
+    phase: 'preparing',
+    sessionId: crypto.randomUUID(),
+    nonce: generateNonce(),
+    tabId,
+    frameId,
+    videoId: request.videoId,
+    origin: consentOrigin,
+    sourceUrl: sender.url ?? tab.url ?? senderOrigin,
+    topLevelUrl: tab.url ?? senderOrigin,
+    sourceWindowId: tab.windowId,
+    configuration: request.configuration,
+    output: request.output,
+    createdAt: Date.now(),
+  };
+
+  await persistSession(session);
+  try {
+    const prepared = await prepareDirectFullscreen(session);
+    await persistSession(session);
+
+    // Let the site's fullscreen transition and controls settle before
+    // measuring the exact visible decoded-video rectangle.
+    await new Promise<void>(resolve => setTimeout(resolve, 250));
+    const captureMeasurement = await sendToFrame<PopupMeasurement>(session.tabId, session.frameId, {
+      type: 'NATIVE_MEASURE_FULLSCREEN',
+      sessionId: session.sessionId,
+      videoId: session.videoId,
+    }).catch(() => null);
+    if (!captureMeasurement?.ok || !captureMeasurement.videoRect) {
+      throw new Error('Player fullscreen ended before native capture could start.');
+    }
+    const captureRegion = captureMeasurement?.videoRect
+      ? calculateVideoCaptureRegion({
+        ...captureMeasurement.videoRect,
+        viewportWidth: captureMeasurement.innerWidth ?? 0,
+        viewportHeight: captureMeasurement.innerHeight ?? 0,
+        devicePixelRatio: captureMeasurement.devicePixelRatio ?? request.videoRect.devicePixelRatio,
+      })
+      : undefined;
+
+    session.intrinsicWidth = prepared.intrinsicWidth;
+    session.intrinsicHeight = prepared.intrinsicHeight;
+    session.captureWidth = captureRegion?.width ?? prepared.intrinsicWidth;
+    session.captureHeight = captureRegion?.height ?? prepared.intrinsicHeight;
+    session.targetWidth = prepared.targetWidth;
+    session.targetHeight = prepared.targetHeight;
+    await persistSession(session);
+
+    const client = await connectAndHandshake();
+    assertNativeSupportsConfiguration(session.configuration);
+    const started = await client.request<NativeStatusEvent>({
+      ...nativeRequestBase(),
+      type: 'start',
+      sessionId: session.sessionId,
+      windowNonce: session.nonce,
+      mode: session.configuration.mode,
+      quality: session.configuration.quality,
+      frameGenerationEnabled: session.configuration.frameGenerationEnabled,
+      ...(prepared.targetWidth && prepared.targetHeight ? {
+        targetWidth: prepared.targetWidth,
+        targetHeight: prepared.targetHeight,
+      } : {}),
+      ...(captureRegion ? {
+        captureX: captureRegion.x,
+        captureY: captureRegion.y,
+        captureWidth: captureRegion.width,
+        captureHeight: captureRegion.height,
+      } : {}),
+    }, 15_000);
+    if (started.type !== 'status' || started.sessionId !== session.sessionId
+        || (started.state !== 'starting' && started.state !== 'capturing')) {
+      throw new Error(started.type === 'status' && started.message
+        ? started.message
+        : 'The native renderer did not start capture.');
+    }
+
+    session.phase = 'active';
+    const scalingSummary = session.captureWidth && session.captureHeight
+      && session.targetWidth && session.targetHeight
+      ? `${session.captureWidth}×${session.captureHeight} → ${session.targetWidth}×${session.targetHeight}`
+      : undefined;
+    latestStatus = {
+      active: true,
+      sessionId: session.sessionId,
+      state: started.state,
+      message: [started.message, scalingSummary].filter(Boolean).join(' · '),
+      configuration: session.configuration,
+    };
+    await persistSession(session);
+    await sendSessionEvent(session, started);
+    return { ok: true, status: 'started', sessionId: session.sessionId };
+  } catch (error) {
+    const unavailable = error instanceof NativeHostUnavailableError;
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[NativeBridge] Failed to start the native renderer.', error);
+    await stopNativeSession(message, true);
+    return {
+      ok: false,
+      status: 'unavailable',
+      message: unavailable
+        ? 'AniWebScale Native Host is not installed. Install the Windows native package, then try again.'
+        : message,
+    };
+  }
+}
+
+async function updateNativeConfiguration(configuration: NativeConfiguration): Promise<void> {
+  const session = activeSession;
+  if (!session) throw new Error('No native session is active.');
+  const client = await connectAndHandshake();
+  assertNativeSupportsConfiguration(configuration);
+  const status = await client.request<NativeStatusEvent>({
+    ...nativeRequestBase(),
+    type: 'updateConfiguration',
+    sessionId: session.sessionId,
+    mode: configuration.mode,
+    quality: configuration.quality,
+    frameGenerationEnabled: configuration.frameGenerationEnabled,
+  });
+  session.configuration = configuration;
+  latestStatus = { ...latestStatus, configuration };
+  await persistSession(session);
+  await sendSessionEvent(session, status);
+}
+
+async function restoreContent(session: NativeSessionRecord): Promise<void> {
+  if (session.captureKind === 'direct-fullscreen') {
+    const restoreSession = {
+      type: 'NATIVE_RESTORE_SESSION',
+      sessionId: session.sessionId,
+      nonce: session.nonce,
+      originalTitle: session.originalTitle,
+    };
+    await sendToFrame(session.tabId, session.frameId, restoreSession).catch(() => undefined);
+    await sendToFrame(session.tabId, 0, {
+      type: 'NATIVE_RESTORE_TITLE',
+      sessionId: session.sessionId,
+      nonce: session.nonce,
+      originalTitle: session.originalTitle,
+    }).catch(() => undefined);
+    return;
+  }
+  const message = {
+    type: 'NATIVE_RESTORE_SESSION',
+    sessionId: session.sessionId,
+    nonce: session.nonce,
+    originalTitle: session.originalTitle,
+  };
+  await sendToFrame(session.tabId, session.frameId, message).catch(() => undefined);
+  if (session.frameId !== 0) {
+    await sendToFrame(session.tabId, 0, message).catch(() => undefined);
+  }
+}
+
+async function restoreTab(session: NativeSessionRecord): Promise<void> {
+  if (session.captureKind !== 'legacy-popup' || session.originalWindowId === undefined
+      || session.originalIndex === undefined) return;
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(session.tabId);
+  } catch {
+    return;
+  }
+
+  try {
+    await chrome.windows.get(session.originalWindowId);
+    const destinationTabs = await chrome.tabs.query({ windowId: session.originalWindowId });
+    await chrome.tabs.move(session.tabId, {
+      windowId: session.originalWindowId,
+      index: Math.min(session.originalIndex, destinationTabs.length),
     });
-    await chrome.storage.local.remove('_benchmarkInProgress');
+    await chrome.tabs.update(session.tabId, { active: true });
+    const state = session.originalWindowState;
+    if (!state || state === 'normal') {
+      await chrome.windows.update(session.originalWindowId, {
+        ...session.originalWindowBounds,
+        state: 'normal',
+        focused: true,
+      });
+    } else {
+      await chrome.windows.update(session.originalWindowId, { state, focused: state !== 'minimized' });
+    }
+  } catch {
+    // If the original window was closed during capture, preserve the tab in a
+    // new normal browser window rather than closing or reloading it.
+    if (tab.windowId !== session.originalWindowId) {
+      const state = session.originalWindowState;
+      const restored = await chrome.windows.create({
+        tabId: session.tabId,
+        type: 'normal',
+        focused: state !== 'minimized',
+        ...(!state || state === 'normal' ? session.originalWindowBounds : {}),
+      });
+      if (restored.id !== undefined && state && state !== 'normal') {
+        await chrome.windows.update(restored.id, { state });
+      }
+    }
   }
 }
 
-// 后台服务脚本
-
-// 在启动时检查 DNR 规则
-chrome.runtime.onStartup.addListener(async () => {
-  console.log('[Background] Browser startup');
-
-  await checkBenchmarkCrash();
-  await updateDNRuleset();
-});
-
-// 安装或更新时初始化
-chrome.runtime.onInstalled.addListener(async (details) => {
-  console.log('[Background] Extension installed/updated:', details.reason);
-
-  // 确保配置是最新版本（处理迁移）
-  await ensureLatestConfig();
-
-  await checkBenchmarkCrash();
-  await updateDNRuleset();
-
-  // 新安装或更新时，如果未完成引导则打开引导页
-  if (details.reason === 'install' || details.reason === 'update') {
-    await checkOnboarding();
+async function stopNativeSession(
+  reason: string,
+  notifyHost: boolean,
+  restoreBrowser = true,
+  expectedSessionId?: string,
+): Promise<void> {
+  const session = activeSession ?? await loadPersistedSession();
+  if (!matchesExpectedNativeSession(session, expectedSessionId)) return;
+  if (!session) {
+    latestStatus = { active: false };
+    nativeClient?.disconnect();
+    nativeClient = null;
+    nativeCapabilities = null;
+    return;
   }
+  session.phase = 'stopping';
+  await persistSession(session);
+  if (notifyHost && nativeClient?.connected) {
+    try {
+      await nativeClient.request({
+        ...nativeRequestBase(),
+        type: 'stop',
+        sessionId: session.sessionId,
+      }, 3_000);
+    } catch (error) {
+      console.warn('[NativeBridge] Native stop acknowledgement was not received.', error);
+    }
+  }
+
+  if (restoreBrowser) {
+    await restoreContent(session);
+    if (requiresLegacyPopupRestore(session)) await restoreTab(session);
+  }
+  nativeClient?.disconnect();
+  nativeClient = null;
+  nativeCapabilities = null;
+  await persistSession(null);
+  const currentEnhancement = await loadActiveEnhancement();
+  if (currentEnhancement?.tabId === session.tabId
+      && currentEnhancement.frameId === session.frameId
+      && currentEnhancement.videoId === session.videoId) {
+    await persistActiveEnhancement(null);
+  }
+  latestStatus = { active: false, state: 'stopped', message: reason };
+}
+
+async function findRecoveredSessionTab(session: NativeSessionRecord): Promise<chrome.tabs.Tab | null> {
+  const tabs = await chrome.tabs.query({});
+  const candidates = await Promise.all(tabs
+    .filter((tab): tab is chrome.tabs.Tab & { id: number; windowId: number } => (
+      tab.id !== undefined && tab.windowId !== undefined
+    ))
+    .map(async tab => ({
+      tab,
+      recovery: {
+        id: tab.id,
+        windowId: tab.windowId,
+        title: tab.title,
+        url: tab.url,
+        windowType: (await chrome.windows.get(tab.windowId).catch(() => null))?.type,
+      },
+    })));
+  const recovered = selectRecoveredSessionTab(
+    candidates.map(candidate => candidate.recovery),
+    session.nonce,
+  );
+  return recovered ? candidates.find(candidate => candidate.tab.id === recovered.id)?.tab ?? null : null;
+}
+
+async function recoverPersistedSession(): Promise<void> {
+  const persisted = await loadPersistedSession();
+  if (!persisted) return;
+  await persistSession(persisted);
+  if (!await isExtensionEnabled()) {
+    await stopNativeSession('AniWebScale was disabled.', true);
+    return;
+  }
+  if (!await ensureProAccess()) {
+    await stopNativeSession('The saved Native session requires an active Pro license.', true);
+    return;
+  }
+
+  const recoveredTab = await findRecoveredSessionTab(persisted);
+  if (!recoveredTab || recoveredTab.id === undefined) {
+    try {
+      await connectAndHandshake();
+    } catch {
+      // Cleanup below is still safe when the host is already gone.
+    }
+    // A recycled tab/window ID or matching URL is not proof that this is our
+    // capture surface. Stop the host session, but never move or restyle an
+    // unverified browser tab.
+    await stopNativeSession('Could not recover the saved native capture window.', true, false);
+    return;
+  }
+  if (persisted.captureKind === 'legacy-popup' && recoveredTab.id !== persisted.tabId) {
+    persisted.tabId = recoveredTab.id;
+    persisted.frameId = 0;
+    persisted.popupWindowId = recoveredTab.windowId;
+    const windows = await chrome.windows.getAll();
+    const normalWindow = windows.find(window => window.type === 'normal' && window.id !== recoveredTab.windowId);
+    if (normalWindow?.id !== undefined) persisted.originalWindowId = normalWindow.id;
+    await persistSession(persisted);
+  } else if (persisted.captureKind === 'direct-fullscreen') {
+    persisted.tabId = recoveredTab.id;
+    persisted.sourceWindowId = recoveredTab.windowId;
+    await persistSession(persisted);
+  }
+
+  if (persisted.phase !== 'active') {
+    try {
+      await connectAndHandshake();
+    } catch {
+      // Browser restoration below is still safe for the nonce-verified tab.
+    }
+    await stopNativeSession('Recovered an interrupted native startup.', true);
+    return;
+  }
+
+  try {
+    const client = await connectAndHandshake();
+    const status = await client.request<NativeStatusEvent>({
+      ...nativeRequestBase(),
+      type: 'status',
+      sessionId: persisted.sessionId,
+    }, 5_000);
+    if (status.type === 'status' && (status.state === 'starting' || status.state === 'capturing')) {
+      latestStatus = {
+        active: true,
+        sessionId: persisted.sessionId,
+        state: status.state,
+        message: status.message,
+        configuration: persisted.configuration,
+      };
+      return;
+    }
+  } catch (error) {
+    console.warn('[NativeBridge] Could not reconnect to the saved native session.', error);
+  }
+  await stopNativeSession('The saved native session is no longer running.', true);
+}
+
+async function forwardMediaCommand(command: NativeMediaCommandName, value?: number): Promise<void> {
+  const session = activeSession;
+  if (!session) throw new Error('No native session is active.');
+  const client = await connectAndHandshake();
+  client.post({
+    ...nativeRequestBase(),
+    type: 'mediaCommand',
+    sessionId: session.sessionId,
+    command,
+    ...(Number.isFinite(value) ? { value } : {}),
+  });
+}
+
+async function forwardPointer(request: Record<string, unknown>): Promise<void> {
+  const session = activeSession;
+  if (!session) throw new Error('No native session is active.');
+  const x = Number(request.x);
+  const y = Number(request.y);
+  const event = request.event;
+  if (!['move', 'down', 'up', 'wheel'].includes(String(event))
+      || !Number.isFinite(x) || x < 0 || x > 1
+      || !Number.isFinite(y) || y < 0 || y > 1) {
+    throw new Error('Invalid native pointer event.');
+  }
+  const client = await connectAndHandshake();
+  client.post({
+    ...nativeRequestBase(),
+    type: 'pointer',
+    sessionId: session.sessionId,
+    event: event as 'move' | 'down' | 'up' | 'wheel',
+    x,
+    y,
+    ...(typeof request.button === 'number' ? { button: request.button } : {}),
+    ...(typeof request.buttons === 'number' ? { buttons: request.buttons } : {}),
+    ...(typeof request.deltaX === 'number' ? { deltaX: request.deltaX } : {}),
+    ...(typeof request.deltaY === 'number' ? { deltaY: request.deltaY } : {}),
+    ...(typeof request.shiftKey === 'boolean' ? { shiftKey: request.shiftKey } : {}),
+    ...(typeof request.ctrlKey === 'boolean' ? { ctrlKey: request.ctrlKey } : {}),
+    ...(typeof request.altKey === 'boolean' ? { altKey: request.altKey } : {}),
+  });
+}
+
+async function handleMessage(request: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
+  if (!request || typeof request !== 'object') return undefined;
+  const message = request as Record<string, unknown>;
+
+  switch (message.type) {
+    case 'ENHANCEMENT_CLAIM':
+      if (typeof message.videoId !== 'string') return { ok: false, message: 'Missing video ID.' };
+      return serialized(() => claimEnhancement(message.videoId as string, sender));
+
+    case 'ENHANCEMENT_RELEASE':
+      if (typeof message.videoId === 'string') {
+        await serialized(() => releaseEnhancement(message.videoId as string, sender));
+      }
+      return { ok: true };
+
+    case 'NATIVE_FALLBACK_REQUEST':
+      if (!isNativeFallbackRequest(request)) {
+        return { ok: false, status: 'denied', message: 'The native fallback request was invalid.' };
+      }
+      if (!await isExtensionEnabled()) {
+        return { ok: false, status: 'denied', message: 'AniWebScale is disabled.' };
+      }
+      if (!await ensureProAccess()) {
+        return { ok: false, status: 'denied', message: 'The Native renderer requires an active Pro license.' };
+      }
+      return serialized(() => startNativeFallback(request, sender));
+
+    case 'NATIVE_UPDATE_CONFIGURATION': {
+      const configuration = message.configuration ?? {
+        mode: message.mode,
+        quality: message.quality,
+        frameGenerationEnabled: message.frameGenerationEnabled,
+      };
+      if (!isNativeConfiguration(configuration)) {
+        return { ok: false, message: 'Invalid native enhancement configuration.' };
+      }
+      if (!await ensureProAccess()) {
+        return { ok: false, message: 'The Native renderer requires an active Pro license.' };
+      }
+      try {
+        await serialized(async () => {
+          const session = activeSession;
+          if (!session || !isNativeSessionControlAuthorized(session, message, {
+            tabId: sender.tab?.id,
+            frameId: sender.frameId,
+          })) {
+            throw new Error('The native configuration update did not come from the active video.');
+          }
+          await updateNativeConfiguration(configuration);
+        });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      }
+    }
+
+    case 'NATIVE_STOP':
+      return serialized(async () => {
+        const session = activeSession;
+        if (!session) return { ok: true };
+        if (!isNativeSessionControlAuthorized(session, message, {
+          tabId: sender.tab?.id,
+          frameId: sender.frameId,
+        })) {
+          return { ok: false, message: 'The native stop request did not belong to the active session.' };
+        }
+        await stopNativeSession('Stopped by the user.', true);
+        return { ok: true };
+      });
+
+    case 'NATIVE_STATUS':
+      return { ok: true, ...latestStatus };
+
+    case 'NATIVE_PLAYBACK_STATE': {
+      const session = activeSession;
+      const playbackActive = message.playbackActive;
+      const mediaTime = message.mediaTime;
+      if (!session || !isNativePlaybackStateAuthorized(session, message, {
+        tabId: sender.tab?.id,
+        frameId: sender.frameId,
+      }) || typeof playbackActive !== 'boolean'
+          || typeof mediaTime !== 'number' || !Number.isFinite(mediaTime) || mediaTime < 0) {
+        return { ok: false, message: 'Invalid native playback state.' };
+      }
+      const client = await connectAndHandshake();
+      client.post({
+        protocolVersion: NATIVE_PROTOCOL_VERSION,
+        requestId: `playback-${createRequestId()}`,
+        type: 'status',
+        sessionId: session.sessionId,
+        playbackActive,
+        mediaTime,
+      });
+      return { ok: true };
+    }
+
+    case 'NATIVE_MEDIA_COMMAND':
+      if (typeof message.command !== 'string'
+          || !['playPause', 'play', 'pause', 'seekBy', 'volumeBy', 'toggleMute', 'toggleFullscreen', 'exitFullscreen'].includes(message.command)) {
+        return { ok: false, message: 'Invalid media command.' };
+      }
+      await forwardMediaCommand(message.command as NativeMediaCommandName,
+        typeof message.value === 'number' ? message.value : undefined);
+      return { ok: true };
+
+    case 'NATIVE_POINTER':
+      await forwardPointer(message);
+      return { ok: true };
+
+    case 'NATIVE_RESET_CONSENT': {
+      if (typeof message.origin === 'string' && isHttpOrigin(message.origin)) {
+        const stored = await chrome.storage.local.get(CONSENT_STORAGE_KEY);
+        const consents = (stored[CONSENT_STORAGE_KEY] ?? {}) as Record<string, boolean>;
+        delete consents[message.origin];
+        await chrome.storage.local.set({ [CONSENT_STORAGE_KEY]: consents });
+      } else {
+        await chrome.storage.local.remove(CONSENT_STORAGE_KEY);
+      }
+      return { ok: true };
+    }
+
+    case 'SETTINGS_UPDATED': {
+      const requestedSettings = message.settings;
+      if (requestedSettings && typeof requestedSettings === 'object'
+        && requiresProConfiguration(requestedSettings as Partial<import('./types').Anime4KWebExtSettings>)
+        && !await ensureProAccess()) {
+        return { ok: false, message: 'Native, AI upscaling and frame generation require Pro.' };
+      }
+      const extensionEnabled = await isExtensionEnabled();
+      const current = await loadActiveEnhancement();
+      let contentUpdatedNativeSession = false;
+      if (current) {
+        const response = await sendToFrame<{ status?: string; message?: string }>(
+          current.tabId,
+          current.frameId,
+          { type: 'SETTINGS_UPDATED' },
+        ).catch(() => null);
+        if (response?.status === 'ERROR') {
+          return { ok: false, message: response.message || 'The active renderer could not apply the new settings.' };
+        }
+        contentUpdatedNativeSession = response?.status === 'SUCCESS'
+          && activeSession?.tabId === current.tabId
+          && activeSession.frameId === current.frameId
+          && activeSession.videoId === current.videoId;
+      }
+      if (!extensionEnabled) {
+        await serialized(() => stopNativeSession('AniWebScale was disabled.', true));
+        await persistActiveEnhancement(null);
+        return { ok: true };
+      }
+      // A live content script owns normal backend updates. Only update the
+      // native host here when recovering an orphaned session; otherwise the
+      // same expensive native pipeline would be rebuilt twice.
+      if (activeSession && !contentUpdatedNativeSession) {
+        const settings = await chrome.storage.sync.get(['mode', 'quality', 'frameGenerationEnabled']);
+        const configuration = {
+          mode: settings.mode,
+          quality: settings.quality,
+          frameGenerationEnabled: settings.frameGenerationEnabled,
+        };
+        if (isNativeConfiguration(configuration)) {
+          await serialized(() => updateNativeConfiguration(configuration));
+        }
+      }
+      return { ok: true };
+    }
+
+    case 'ACCOUNT_STATUS':
+      return { ok: true, account: await getAccountStatus(message.refresh !== false) };
+
+    case 'ACCOUNT_REFRESH':
+      return { ok: true, account: await refreshAccountStatus() };
+
+    case 'ACCOUNT_SIGN_IN':
+      if (typeof message.email !== 'string' || typeof message.password !== 'string') {
+        return { ok: false, message: 'Email and password are required.' };
+      }
+      return { ok: true, account: await signIn(message.email, message.password) };
+
+    case 'ACCOUNT_SIGN_UP':
+      if (typeof message.email !== 'string' || typeof message.password !== 'string') {
+        return { ok: false, message: 'Email and password are required.' };
+      }
+      return { ok: true, account: await signUp(message.email, message.password) };
+
+    case 'ACCOUNT_SIGN_OUT':
+      return { ok: true, account: await signOut() };
+
+    case 'OPEN_OPTIONS_PAGE':
+      await chrome.runtime.openOptionsPage();
+      return undefined;
+
+    case 'OPEN_ACCOUNT_PAGE':
+      await chrome.tabs.create({ url: `${__ANIME4K_ACCOUNT_API_URL__}/account.html` });
+      return undefined;
+
+    case 'OPEN_ONBOARDING':
+      await chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+      return undefined;
+
+    default:
+      return undefined;
+  }
+}
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  void handleMessage(request, sender).then(sendResponse, error => {
+    console.error('[Background] Message handler failed.', error);
+    sendResponse({ ok: false, message: error instanceof Error ? error.message : String(error) });
+  });
+  return true;
 });
 
-// 监听标签页更新
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'loading' || changeInfo.url) {
+    void serialized(async () => {
+      const current = await loadActiveEnhancement();
+      if (current?.tabId === tabId) await persistActiveEnhancement(null);
+    });
+  }
+  if (activeSession?.tabId === tabId && (changeInfo.status === 'loading' || changeInfo.url)) {
+    const sessionId = activeSession.sessionId;
+    void serialized(() => stopNativeSession('The source tab navigated.', true, true, sessionId));
+    return;
+  }
+
   if (changeInfo.status === 'complete' && tab.url) {
-    chrome.tabs.sendMessage(tabId, {
-      type: 'URL_UPDATED',
-      url: tab.url
-    }).catch(error => {
-      if (!error.message.includes('Receiving end does not exist')) {
-        console.error(`[Background] Error sending URL_UPDATED message: ${error.message}`);
+    void chrome.tabs.sendMessage(tabId, { type: 'URL_UPDATED', url: tab.url }).catch(error => {
+      if (!String(error?.message ?? error).includes('Receiving end does not exist')) {
+        console.warn('[Background] Could not notify a tab about navigation.', error);
       }
     });
   }
 });
 
-// 监听来自内容脚本/popup/options 的请求
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.type === 'SETTINGS_UPDATED') {
-    console.log('[Background] Settings updated, checking DNR rules...');
-    updateDNRuleset();
-  } else if (request.type === 'OPEN_OPTIONS_PAGE') {
-    chrome.runtime.openOptionsPage();
-  } else if (request.type === 'OPEN_ONBOARDING') {
-    chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+chrome.tabs.onRemoved.addListener(tabId => {
+  void serialized(async () => {
+    const current = await loadActiveEnhancement();
+    if (current?.tabId === tabId) await persistActiveEnhancement(null);
+  });
+  const session = activeSession;
+  if (session?.tabId === tabId) {
+    const sessionId = session.sessionId;
+    void serialized(() => stopNativeSession(
+      'The source tab was closed.',
+      true,
+      false,
+      sessionId,
+    ));
   }
+});
+
+chrome.windows.onRemoved.addListener(windowId => {
+  const session = activeSession;
+  const captureWindowId = session?.captureKind === 'direct-fullscreen'
+    ? session.sourceWindowId
+    : session?.popupWindowId;
+  if (session && captureWindowId === windowId && session.phase !== 'stopping') {
+    const sessionId = session.sessionId;
+    void serialized(() => stopNativeSession('The capture browser window was closed.', true, true, sessionId));
+  }
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  void serialized(recoverPersistedSession);
+});
+
+chrome.runtime.onInstalled.addListener(details => {
+  void serialized(async () => {
+    await ensureLatestConfig();
+    await recoverPersistedSession();
+    if (details.reason === 'install' || details.reason === 'update') await checkOnboarding();
+  });
+});
+
+// MV3 service workers can restart without onStartup. Reconcile the durable
+// session every time the background module itself is evaluated.
+void serialized(recoverPersistedSession);
+void refreshAccountStatus().catch(error => {
+  console.warn('[Account] Initial license refresh failed; Free mode remains active.', error);
 });

@@ -1,0 +1,42 @@
+{
+  "name": "aniwebscale-website",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Marketing site and Stripe Checkout server for AniWebScale.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:client": "node scripts/build-client.mjs",
+    "build:cloudflare": "npm run build:client && wrangler pages functions build --outdir=.wrangler/functions-build --minify --metafile --compatibility-date=2026-07-15 --compatibility-flags=nodejs_compat",
+    "bootstrap:cloudflare": "node scripts/bootstrap-cloudflare.mjs",
+    "check:config": "node scripts/check-config.mjs",
+    "check:cloudflare": "node scripts/check-cloudflare-build.mjs",
+    "check:live": "node scripts/check-live-deployment.mjs",
+    "configure:stripe-webhook": "node scripts/configure-stripe-cloudflare-webhook.mjs",
+    "deploy:cloudflare": "npm run build:client && wrangler pages deploy",
+    "dev:cloudflare": "npm run build:client && wrangler pages dev",
+    "generate:license-key": "node scripts/generate-license-key.mjs",
+    "predev": "npm run build:client",
+    "dev": "node --watch server.mjs",
+    "prestart": "npm run build:client",
+    "start": "node server.mjs",
+    "start:production": "npm run check:config && node server.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:cloudflare:local": "npm run build:client && node scripts/test-cloudflare-local.mjs",
+    "test:live:local": "node scripts/test-live-check-local.mjs",
+    "test:e2e:sandbox": "node scripts/test-sandbox-e2e.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "jose": "^6.2.3",
+    "lucide-static": "^1.24.0",
+    "pg": "^8.22.0",
+    "stripe": "^20.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "wrangler": "^4.111.0"
+  }
+}

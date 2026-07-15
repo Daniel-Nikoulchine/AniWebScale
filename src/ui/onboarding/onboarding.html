@@ -1,105 +1,75 @@
-<!DOCTYPE html>
-<html lang="__MSG_@@ui_locale__">
-
+<!doctype html>
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title data-i18n="onboardingTitle">Anime4K WebExtension - Setup</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set up AniWebScale</title>
 </head>
-
 <body>
-    <div class="onboarding-container">
-        <div class="onboarding-header">
-            <img src="/icons/icon128.png" alt="Anime4K" class="logo">
-            <h1 data-i18n="welcomeTitle">Welcome to Anime4K WebExtension</h1>
-            <p data-i18n="welcomeDesc">Let's optimize your settings for the best experience.</p>
+  <main>
+    <aside class="welcome-art" aria-hidden="true">
+      <div class="art-label">hello, video lover!</div>
+      <div class="magic-window">
+        <div class="window-sky"><span class="moon"></span><i class="star star-one">&#10022;</i><i class="star star-two">&#10022;</i><i class="star star-three">&#10023;</i></div>
+        <div class="window-screen"><span></span></div>
+        <div class="window-base"></div>
+      </div>
+      <div class="art-cloud cloud-one"></div><div class="art-cloud cloud-two"></div>
+      <p>Sharper lines.<br>Softer colors.<br><strong>More magic~!!</strong></p>
+      <span class="art-doodle">&#12336;</span>
+    </aside>
+
+    <div class="setup-panel">
+      <header>
+        <div class="brand"><img class="mini-mark" src="icons/icon32.png" alt="" width="26" height="26">AniWebScale</div>
+        <p class="step">WELCOME / 01</p>
+        <h1>Let's make your videos <em>sparkle!</em></h1>
+        <p class="lead">Pick a comfortable starting point. You can change every option later.</p>
+      </header>
+
+      <section>
+        <div class="section-heading"><span aria-hidden="true">&#10022;</span><div><h2>Choose your defaults</h2><p>Your everyday enhancement recipe.</p></div></div>
+        <div class="grid">
+          <label class="mode-select-field"><span>Enhancement mode</span>
+            <select id="mode">
+              <option value="OFF">Off</option>
+              <optgroup label="Anime4K presets">
+                <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+                <option value="AA">A+A</option><option value="BB">B+B</option><option value="CA">C+A</option>
+              </optgroup>
+              <optgroup label="AI upscaling">
+                <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option><option value="ANIMEJANAI">AnimeJaNai HD x2 (Performance)</option>
+              </optgroup>
+            </select>
+          </label>
+          <div class="mode-summary">
+            <p id="mode-description"></p>
+            <span id="mode-profile" class="mode-profile"></span>
+          </div>
+          <label><span>Quality</span><select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select></label>
+          <label><span>Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
+          <label class="check"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong>Frame generation</strong><small>Motion-aware 2x, even while enhancement is off.</small></span></label>
         </div>
+      </section>
 
-        <!-- 步骤指示器 -->
-        <div class="step-indicator">
-            <div class="step active" data-step="1">1</div>
-            <div class="step-line"></div>
-            <div class="step" data-step="2">2</div>
-            <div class="step-line"></div>
-            <div class="step" data-step="3">3</div>
-        </div>
+      <div class="tips">
+        <div class="tip"><span aria-hidden="true">&#10003;</span><p><strong>Fullscreen friendly</strong>Starts and stops with your video player.</p></div>
+        <div class="tip"><span aria-hidden="true">&#9825;</span><p><strong>Privacy first</strong>No telemetry, DRM bypass or silent site access.</p></div>
+      </div>
+      <details>
+        <summary>Important native renderer notes</summary>
+        <ul>
+          <li>Protected video may require one-time site permission for the native renderer.</li>
+          <li>If a streaming video stays black, turn off hardware acceleration in your browser settings, then restart the browser.</li>
+          <li>Some protected video can still block capture.</li>
+        </ul>
+      </details>
 
-        <!-- 步骤 1: GPU 测试 -->
-        <div class="step-content active" id="step-1">
-            <h2 data-i18n="gpuTestTitle">GPU Performance Test</h2>
-            <p data-i18n="gpuTestDesc">We'll run a quick test to determine the best settings for your hardware.</p>
-
-            <div class="test-status" id="test-status">
-                <div class="status-icon">🔍</div>
-                <p data-i18n="testReady">Ready to test</p>
-            </div>
-
-            <div class="progress-container" id="progress-container" style="display: none;">
-                <div class="progress-bar">
-                    <div class="progress-fill" id="progress-fill"></div>
-                </div>
-                <p class="progress-text" id="progress-text" data-i18n="testing">Testing...</p>
-            </div>
-
-            <div class="button-group">
-                <button id="start-test" class="btn-primary" data-i18n="startTest">Start Test</button>
-                <button id="skip-test" class="btn-secondary" data-i18n="skipTest">Skip</button>
-            </div>
-        </div>
-
-        <!-- 步骤 2: 结果 -->
-        <div class="step-content" id="step-2">
-            <h2 data-i18n="resultTitle">Test Results</h2>
-
-            <div class="result-card" id="result-card">
-                <div class="result-tier" id="result-tier">⚖️ Balanced</div>
-                <p class="result-desc" id="result-desc" data-i18n="resultDesc">This tier is recommended based on your
-                    hardware.</p>
-            </div>
-
-            <div class="tier-options">
-                <p data-i18n="changeTier">You can also choose a different tier:</p>
-                <div class="tier-buttons">
-                    <button class="tier-btn" data-tier="performance">🚀 <span
-                            data-i18n="tierPerformance">Fast</span></button>
-                    <button class="tier-btn" data-tier="balanced">⚖️ <span
-                            data-i18n="tierBalanced">Balanced</span></button>
-                    <button class="tier-btn" data-tier="quality">🎨 <span
-                            data-i18n="tierQuality">Quality</span></button>
-                    <button class="tier-btn" data-tier="ultra">🔬 <span data-i18n="tierUltra">Ultra</span></button>
-                </div>
-            </div>
-
-            <div class="button-group">
-                <button id="confirm-tier" class="btn-primary" data-i18n="continue">Continue</button>
-            </div>
-        </div>
-
-        <!-- 步骤 3: 完成 -->
-        <div class="step-content" id="step-3">
-            <h2 data-i18n="setupComplete">Setup Complete!</h2>
-
-            <div class="complete-icon">✅</div>
-
-            <p data-i18n="setupCompleteDesc">You're all set! Click the extension icon on any video page to enable
-                super-resolution.</p>
-
-            <div class="quick-tips">
-                <h3 data-i18n="quickTips">Quick Tips</h3>
-                <ul>
-                    <li data-i18n="tip1">Click the Anime4K button on videos to toggle enhancement</li>
-                    <li data-i18n="tip2">Use the popup to change modes and resolution</li>
-                    <li data-i18n="tip3">Visit Settings for advanced options</li>
-                    <li data-i18n="tipPin">📌 Pin the extension icon to your toolbar for quick access</li>
-                </ul>
-            </div>
-
-            <div class="button-group">
-                <button id="finish" class="btn-primary" data-i18n="getStarted">Get Started</button>
-                <button id="open-options" class="btn-secondary" data-i18n="openSettings">Open Settings</button>
-            </div>
-        </div>
+      <div class="finish-row">
+        <button id="finish" type="button">Finish setup <span aria-hidden="true">&#8594;</span></button>
+        <div id="status" role="status" aria-live="polite"></div>
+      </div>
     </div>
+  </main>
 </body>
-
 </html>

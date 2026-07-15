@@ -1,417 +1,140 @@
 @import '../common-vars.css';
 
+* { box-sizing: border-box; }
+
 body {
+  width: 390px;
+  max-height: 600px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 10% 2%, var(--pink-soft) 0 54px, transparent 55px),
+    radial-gradient(circle at 98% 27%, var(--blue-soft) 0 72px, transparent 73px),
+    var(--surface);
+  color: var(--on-surface);
   font-family: var(--font-family);
-  background-color: var(--surface);
-  margin: 0;
-  padding: var(--spacing-2) var(--spacing-3);
-  color: var(--on-surface);
-  min-width: 320px;
-  max-width: 320px;
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.card {
-  background-color: var(--surface-container);
-  border-radius: var(--border-radius-lg);
-  box-shadow: var(--shadow-2);
-  overflow: hidden;
-  width: 100%;
-  border: 1px solid var(--outline-variant);
-}
-
-.card-header {
-  padding: var(--spacing-3) var(--spacing-4);
-  background: var(--primary-container);
-  color: var(--on-primary-container);
-}
-
-.card-body {
-  padding: var(--spacing-2) var(--spacing-3);
-}
-
-h3 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 500;
-  letter-spacing: 0.15px;
-}
-
-.setting-group {
-  margin-bottom: var(--spacing-2);
-}
-
-.setting-group:last-child {
-  margin-bottom: 0;
-}
-
-.setting-group>label {
-  display: block;
-  margin-bottom: 4px;
-  font-weight: 500;
   font-size: 13px;
-  color: var(--on-surface);
-  letter-spacing: 0.1px;
 }
 
-/* 并排布局 */
-.setting-row {
-  display: flex;
-  gap: var(--spacing-2);
+body::before,
+body::after {
+  position: fixed;
+  z-index: 0;
+  color: var(--pink);
+  font-family: var(--font-family-display);
+  pointer-events: none;
+}
+body::before { content: "✦"; top: 55px; right: 7px; font-size: 22px; transform: rotate(12deg); }
+body::after { content: "~"; bottom: 38px; left: 3px; color: var(--lavender); font-size: 28px; }
+
+.panel {
+  position: relative;
+  z-index: 1;
+  padding: 12px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--surface-container-lowest) 94%, transparent);
+  box-shadow: var(--shadow-2);
 }
 
-.setting-item {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+.brand-header { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.brand-mark {
+  position: relative;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border: 1px solid color-mix(in srgb, var(--lavender) 70%, var(--outline-variant));
+  border-radius: 15px 18px 14px 19px;
+  background: var(--lavender-soft);
+  transform: rotate(-2deg);
 }
+.brand-mark::before { content: ""; position: absolute; inset: 9px; border: 2px solid var(--primary); border-radius: 9px; }
+.brand-mark span { position: absolute; top: 16px; left: 19px; width: 0; height: 0; border-top: 7px solid transparent; border-bottom: 7px solid transparent; border-left: 10px solid var(--primary); }
+.brand-mark::after { content: "✦"; position: absolute; top: -7px; right: -6px; color: #d5ad47; font-size: 17px; }
+.brand-mark { border: 0; border-radius: 0; background: transparent; transform: none; }
+.brand-mark::before, .brand-mark::after { display: none; }
+.brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.brand-copy { min-width: 0; flex: 1; }
+h1 { margin: 0; color: var(--ink); font: 700 20px/1.15 var(--font-family-display); letter-spacing: .01em; }
+.brand-copy > p:last-child { margin: 2px 0 0; color: var(--on-surface-variant); font-size: 10.5px; }
 
-.setting-item label {
-  display: block;
-  margin-bottom: 4px;
-  font-weight: 500;
-  font-size: 12px;
+.settings-card,
+.switch-card { border: 1px solid var(--outline-variant); border-radius: 17px; background: var(--surface-container-low); }
+.settings-card { padding: 10px; }
+.section-heading { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.heading-icon { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 9px; font-size: 14px; }
+.heading-icon.lavender { background: var(--lavender-soft); color: var(--primary); }
+h2 { margin: 0; color: var(--ink); font: 700 13px/1.2 var(--font-family-display); }
+.section-heading p { margin: 1px 0 0; color: var(--on-surface-variant); font-size: 9.5px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.compact-fields { margin-top: 7px; }
+.mode-description {
+  min-height: 12px;
+  margin: 4px 1px 0;
   color: var(--on-surface-variant);
+  font-size: 9px;
+  line-height: 1.3;
 }
+label { display: block; }
+label > span:first-child { display: block; margin-bottom: 4px; color: var(--ink-soft); font-size: 10px; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
 
 select,
-button {
-  width: 100%;
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--border-radius);
-  border: 1px solid var(--outline);
-  background: var(--surface-container-low);
-  color: var(--on-surface);
-  font-size: 13px;
-  font-family: var(--font-family);
-  transition: all 0.2s cubic-bezier(0.2, 0.0, 0, 1.0);
-  box-sizing: border-box;
-}
-
+button { font: inherit; }
 select {
-  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
-  background-repeat: no-repeat;
-  background-position: right var(--spacing-2) center;
-  background-size: 14px;
-  padding-right: calc(var(--spacing-3) + 16px);
-  -moz-appearance: none;
-  -webkit-appearance: none;
+  width: 100%;
+  min-height: 34px;
   appearance: none;
-}
-
-select:focus,
-button:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 2px var(--primary-container);
-}
-
-select:hover {
-  background-color: var(--surface-container);
-  border-color: var(--on-surface-variant);
-}
-
-/* 下拉选项颜色方案 */
-select {
-  color-scheme: light dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  select {
-    color-scheme: dark;
-  }
-
-  select option {
-    background-color: #2d2d2d !important;
-    color: #ffffff !important;
-  }
-}
-
-:root.dark select {
-  color-scheme: dark;
-}
-
-:root.dark select option {
-  background-color: #2d2d2d !important;
-  color: #ffffff !important;
-}
-
-:root.light select {
-  color-scheme: light;
-}
-
-:root.light select option {
-  background-color: #ffffff !important;
-  color: #000000 !important;
-}
-
-button {
-  background-color: var(--primary-container);
-  color: var(--on-primary-container);
-  border: none;
-  font-weight: 500;
-  cursor: pointer;
-  margin-bottom: var(--spacing-2);
-  border-radius: var(--border-radius-xl);
-  min-height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-button:hover {
-  background-color: var(--primary-container);
-  color: var(--on-primary-container);
-  box-shadow: var(--shadow-1);
-  transform: translateY(-1px);
-}
-
-button:active {
-  transform: translateY(0);
-  box-shadow: none;
-}
-
-/* ===== 档位选择器 ===== */
-.tier-selector {
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-  background: var(--surface-container-low);
-  border-radius: 12px;
-}
-
-.tier-btn {
-  flex: 1;
-  padding: 6px 2px;
-  border: none;
-  background: transparent;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-  min-height: 42px;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-}
-
-.tier-btn .tier-icon {
-  font-size: 15px;
-  line-height: 1;
-}
-
-.tier-btn .tier-label {
-  font-size: 9px;
-  font-weight: 500;
-}
-
-.tier-btn:hover:not(.disabled) {
-  background: var(--surface-container);
-  transform: none;
-  box-shadow: none;
-}
-
-.tier-btn.active {
-  background: var(--primary-container);
-  color: var(--on-primary-container);
-}
-
-.tier-btn.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* ===== 主按钮样式 ===== */
-.btn-primary {
-  width: 100%;
-  margin-top: var(--spacing-2);
-  margin-bottom: 0;
-  background-color: var(--primary);
-  color: var(--on-primary);
-  transition: all 0.2s cubic-bezier(0.2, 0.0, 0, 1.0);
-}
-
-.btn-primary:hover {
-  /* 必须显式设置背景色以覆盖通用的 button:hover 样式 */
-  background-color: var(--primary);
-  /* 使用半透明白色叠加层来提亮背景，避免使用 filter 导致文字也变色 */
-  background-image: linear-gradient(rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.15));
-  color: var(--on-primary) !important;
-  box-shadow: var(--shadow-1);
-}
-
-.btn-primary:active {
-  transform: translateY(0);
-  /* 使用半透明黑色叠加层来压暗 */
-  background-image: linear-gradient(rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0.15));
-  box-shadow: none;
-}
-
-/* ===== 白名单区域 ===== */
-.whitelist-section {
-  margin-top: var(--spacing-2);
-  padding-top: var(--spacing-2);
-  border-top: 1px solid var(--outline-variant);
-}
-
-.whitelist-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--spacing-2);
-  padding: 4px 0;
-}
-
-.whitelist-toggle>label {
-  font-size: 13px;
-  font-weight: 500;
-  margin: 0;
-}
-
-.switch {
-  position: relative;
-  display: inline-block;
-  width: 44px;
-  height: 24px;
-}
-
-.switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: var(--surface-variant);
-  transition: all 0.3s cubic-bezier(0.2, 0.0, 0, 1.0);
-  border-radius: 12px;
-  border: 2px solid var(--outline);
-}
-
-.slider:before {
-  position: absolute;
-  content: "";
-  height: 16px;
-  width: 16px;
-  left: 2px;
-  bottom: 2px;
-  background-color: var(--outline);
-  transition: all 0.3s cubic-bezier(0.2, 0.0, 0, 1.0);
-  border-radius: 50%;
-}
-
-input:checked+.slider {
-  background-color: var(--primary);
-  border-color: var(--primary);
-}
-
-input:checked+.slider:before {
-  background-color: var(--surface);
-  transform: translateX(20px);
-}
-
-.slider:hover {
-  box-shadow: 0 0 0 6px rgba(103, 80, 164, 0.08);
-}
-
-/* ===== 白名单按钮 ===== */
-.whitelist-buttons {
-  display: flex;
-  gap: 6px;
-}
-
-.whitelist-buttons button {
-  flex: 1;
-  margin-bottom: 0;
-  font-size: 11px;
-  padding: 6px 8px;
-  background-color: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+  border-radius: 11px;
+  background-color: var(--surface-container-lowest);
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-soft) 50%), linear-gradient(135deg, var(--ink-soft) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 14px, calc(100% - 10px) 14px;
+  background-repeat: no-repeat;
+  background-size: 4px 4px, 4px 4px;
   color: var(--on-surface);
-  border: 1px solid var(--outline);
-  /* 增加边框对比度 */
-  border-radius: var(--border-radius);
-  min-height: 32px;
-}
-
-.whitelist-buttons button:hover {
-  background-color: var(--surface-container-high);
-  border-color: var(--primary);
-  /* Hover 时边框变色 */
-  color: var(--primary);
-  box-shadow: none;
-  transform: none;
-}
-
-.whitelist-buttons .btn-icon {
-  font-size: 13px;
-  /* 稍微调大图表 */
-}
-
-/* ===== 设置按钮 ===== */
-#open-settings {
-  margin-top: var(--spacing-2);
-  width: 100%;
-  background-color: transparent;
-  color: var(--primary);
-  border: 1px solid var(--outline);
-  border-radius: var(--border-radius);
-  /* 与其他按钮统一圆角 */
-  font-size: 13px;
-}
-
-#open-settings:hover {
-  background-color: var(--surface-container);
-  border-color: var(--primary);
-  color: var(--primary);
-  box-shadow: none;
-  transform: none;
-}
-
-#extension-footer {
-  text-align: center;
-  margin-top: var(--spacing-2);
+  padding: 6px 27px 6px 9px;
   font-size: 11px;
-  color: var(--on-surface-variant);
-  padding: var(--spacing-1) 0;
 }
+select:hover { border-color: color-mix(in srgb, var(--lavender) 75%, var(--outline)); }
+select:focus-visible, button:focus-visible, input:focus-visible + .check-control { outline: 2px solid var(--primary); outline-offset: 2px; }
+select:disabled { opacity: .65; background-color: var(--surface-container); }
+.hint { color: var(--on-surface-variant); font-size: 10px; line-height: 1.4; }
 
-#extension-footer a {
-  color: var(--primary);
-  text-decoration: none;
-  font-weight: 500;
-}
+.switch-card { margin-top: 8px; overflow: hidden; }
+.extension-switch-card { margin: 0 0 8px; border-color: color-mix(in srgb, var(--lavender) 55%, var(--outline-variant)); }
+.account-plan { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; width: 100%; min-height: 34px; margin: 0 0 6px; padding: 6px 9px; border-color: color-mix(in srgb, var(--mint) 62%, var(--outline-variant)); background: var(--mint-soft); color: var(--ink); text-align: left; }
+.account-plan > span { color: var(--on-surface-variant); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.account-plan > strong { font-size: 11px; }
+.account-plan > small { color: var(--primary); font-size: 9px; font-weight: 800; }
+.check-row { display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; padding: 7px 10px; cursor: pointer; }
+.check-row + .check-row { border-top: 1px dashed var(--outline-variant); }
+.check-row input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.check-control { grid-row: 1 / 3; position: relative; width: 32px; height: 18px; margin: 0 !important; border: 1px solid var(--outline); border-radius: 99px; background: var(--surface-container-highest); transition: .2s ease; }
+.check-control::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface-container-lowest); box-shadow: 0 1px 3px rgba(38, 53, 87, .25); transition: .2s ease; }
+.check-row input:checked + .check-control { border-color: var(--primary); background: var(--lavender); }
+.check-row input:checked + .check-control::after { transform: translateX(14px); background: #fffdf9; }
+.check-row > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.check-row strong { color: var(--ink); font-size: 11px; line-height: 1.2; }
+.check-row small { margin-top: 2px; color: var(--on-surface-variant); font-size: 9.5px; }
 
-#extension-footer a:hover {
-  text-decoration: underline;
-}
+.native-warning { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0 0; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--pink) 62%, var(--outline-variant)); border-radius: 11px; background: var(--pink-soft); color: var(--on-error-container); }
+.native-warning > span:first-child { display: grid; flex: 0 0 18px; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--pink); color: #643544; font-weight: 900; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+button { min-height: 36px; border: 1px solid var(--outline-variant); border-radius: 12px; padding: 7px 10px; cursor: pointer; font-size: 11px; font-weight: 800; transition: transform .16s ease, box-shadow .16s ease, background .16s ease; }
+button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-1); }
+button:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
+button:disabled { cursor: wait; opacity: .62; }
+.primary { border-color: #bba8dd; background: var(--lavender); color: #34294d; }
+.primary span { margin-left: 4px; color: #6e5798; }
+.secondary { background: var(--surface-container-lowest); color: var(--primary); }
+.secondary span { margin-left: 4px; }
+#status { min-height: 13px; padding-top: 3px; color: var(--on-surface-variant); text-align: center; font-size: 10px; }
+#status:empty { display: none; }
+footer { position: relative; z-index: 1; display: flex; justify-content: center; align-items: center; gap: 7px; padding: 4px 0 0; color: var(--on-surface-variant); font-size: 9px; }
+footer i { width: 3px; height: 3px; border-radius: 50%; background: var(--pink); }
 
-/* ===== 保存状态消息 ===== */
-.save-status {
-  color: var(--primary);
-  text-align: center;
-  margin-top: 6px;
-  font-size: 12px;
-  animation: fadeIn 0.2s ease-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+@supports not (color: color-mix(in srgb, white, black)) {
+  .panel { background: var(--surface-container-lowest); }
 }

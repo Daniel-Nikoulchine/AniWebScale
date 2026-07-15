@@ -1,0 +1,7 @@
+{
+  "allowedCallers": [
+    "chrome-extension://${CHROME_EXTENSION_ID}/",
+    "${FIREFOX_EXTENSION_ID}"
+  ]
+}
+

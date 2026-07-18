@@ -66,19 +66,19 @@ budget. Double-stage UL is reported as an explicit high-load profile but is not
 part of that baseline. `-AllowBudgetMisses` keeps any over-budget run usable as
 a diagnostic.
 
-The measured RX 6750 XT report from 2026-07-17 is checked in at
+The measured RX 6750 XT report from 2026-07-18 is checked in at
 [`artifacts/native-rx6750xt-benchmark.json`](../artifacts/native-rx6750xt-benchmark.json).
-Fifteen of the 18 preset combinations met the 41.67 ms frame budget in every
-sample. The remaining three were `AA/UL` (53.691 ms average, 55.299 ms p95),
-`BB/UL` (54.807 ms average, 55.828 ms p95), and `CA/UL` (46.738 ms average,
-47.987 ms p95). The schema-2 report therefore records
-`allPresetsWithinFrameBudget: false` while the other 15 release-baseline
-profiles pass. No quality level was reduced automatically.
+All release-target profiles met the 41.67 ms frame budget in every sample. The
+three explicit high-load profiles outside that baseline were `AA/UL` (59.027 ms
+average, 62.204 ms p95), `BB/UL` (58.563 ms average, 59.708 ms p95), and `CA/UL`
+(49.391 ms average, 50.542 ms p95). The schema-2 report therefore records
+`acceptancePassed: true` and `allPresetsWithinFrameBudget: false`. No quality
+level was reduced automatically.
 
-A 30-sample run on the same RX 6750 XT measured the 1080p inputs at
-6.058 ms average / 6.575 ms p95 for ArtCNN C4F16, 1.838 / 2.165 ms for ACNet
-F8B4, and 4.899 / 5.189 ms for ARNet F8B8. Each recorded zero misses against
-the 41.67 ms (24 fps) frame budget; results remain hardware-dependent.
+The same 30-sample run measured the 1080p inputs at 6.306 ms average / 7.274 ms
+p95 for ArtCNN C4F16, 1.918 / 2.983 ms for ACNet F8B4, and 5.361 / 6.255 ms for
+ARNet F8B8. Each recorded zero misses against the 41.67 ms (24 fps) frame
+budget; results remain hardware-dependent.
 
 ## Local installation
 

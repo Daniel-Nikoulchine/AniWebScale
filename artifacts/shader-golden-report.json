@@ -21,7 +21,7 @@
   "backends": {
     "webgpuAdapter": "WebGPU adapter",
     "d3d11Adapter": "default hardware adapter",
-    "d3d11ExecutableSha256": "c911dd38f46d3333e9ee5767eaa576cb5ae82bea800231dedd095f6c4ac122a4",
+    "d3d11ExecutableSha256": "9d2613aa3319d1789c6858b1f4f45e81ad036443290ba5a7b949197f21ad1424",
     "webgpuBundleSha256": "9462c2038fff7125f7bbf3d25e331c513172a0c0f37361ced20916b6717361c8"
   },
   "thresholds": {

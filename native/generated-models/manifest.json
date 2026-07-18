@@ -339,7 +339,7 @@
       "quality": "M",
       "scale": 1,
       "source": "glsl/Restore/Anime4K_Restore_CNN_M.glsl",
-      "source_sha256": "dd515c307d97d8e5c809f263dd94174cc5667b8c1299082cdff14e6ddfc8d4bc",
+      "source_sha256": "67ea3ed26539e8de3b7d307688535d2ff17e8d147e11dda0247da7770dbecf41",
       "vendor": "anime4k"
     },
     {
@@ -1075,7 +1075,7 @@
       "quality": "VL",
       "scale": 1,
       "source": "glsl/Restore/Anime4K_Restore_CNN_VL.glsl",
-      "source_sha256": "da18324507c31947943a4401ddcaea669a027705c5d8f4675aeca8a671c2eea7",
+      "source_sha256": "35036722733305cd4d4e57660b883bbe2569ba2914033c254327107d7b77e35e",
       "vendor": "anime4k"
     },
     {
@@ -2215,7 +2215,7 @@
       "quality": "UL",
       "scale": 1,
       "source": "glsl/Restore/Anime4K_Restore_CNN_UL.glsl",
-      "source_sha256": "bb7587a4f97706613986db9b6e0f369d712145f61704eef407dfaa91e6f24a44",
+      "source_sha256": "81ec48ff700108c8e1571ed82d4527006ee200c05e94f8b7f836c02179169b40",
       "vendor": "anime4k"
     },
     {
@@ -2543,7 +2543,7 @@
       "quality": "M",
       "scale": 1,
       "source": "glsl/Restore/Anime4K_Restore_CNN_Soft_M.glsl",
-      "source_sha256": "df1cdc360d6fbfd51b6d6deec99aefb747d0de72cc1c0ff271cd48758a6a0c5a",
+      "source_sha256": "a78a2c76898e08e09e442a9628c64208c26e8e15789649b8755223f009794c02",
       "vendor": "anime4k"
     },
     {
@@ -3279,7 +3279,7 @@
       "quality": "VL",
       "scale": 1,
       "source": "glsl/Restore/Anime4K_Restore_CNN_Soft_VL.glsl",
-      "source_sha256": "05a5063819673f68a9359450d560b05dee005067bde76f2daf10544a7c059f4e",
+      "source_sha256": "094334b0e20c1a201fe4941c7c68de72451e5aee9efb5524d7fb82b12dca64b9",
       "vendor": "anime4k"
     },
     {
@@ -4419,7 +4419,7 @@
       "quality": "UL",
       "scale": 1,
       "source": "glsl/Restore/Anime4K_Restore_CNN_Soft_UL.glsl",
-      "source_sha256": "0b928787b80ef86aaf86cd416a309baf98d0f5d61c9a58217d8381e74ce3e533",
+      "source_sha256": "41d71cad7b2f3af9086852fca70046f763272d2cb49dd83de9647d942866cac8",
       "vendor": "anime4k"
     },
     {
@@ -4895,7 +4895,7 @@
       "quality": "M",
       "scale": 2,
       "source": "glsl/Upscale/Anime4K_Upscale_CNN_x2_M.glsl",
-      "source_sha256": "249dc3be467f556ed3361deea79f42bac1ae57456c22588c2cc3c2ee8808909c",
+      "source_sha256": "716e02098a68f0d648761f2b96b4dd139e1cb09b174bb369fca3aa34328fff7e",
       "vendor": "anime4k"
     },
     {
@@ -5991,7 +5991,7 @@
       "quality": "VL",
       "scale": 2,
       "source": "glsl/Upscale/Anime4K_Upscale_CNN_x2_VL.glsl",
-      "source_sha256": "ff9028a58aac9ad470ecbe379c1accf72443b348fa59eac7af1f091e333c733e",
+      "source_sha256": "5638fe31c37c151a3443fea3451a3ef91af073f4dbb9615f6c0d1e29db11493d",
       "vendor": "anime4k"
     },
     {
@@ -7531,7 +7531,7 @@
       "quality": "UL",
       "scale": 2,
       "source": "glsl/Upscale/Anime4K_Upscale_CNN_x2_UL.glsl",
-      "source_sha256": "f6ff0c7ba1c6e586a51ba1f8b0aa5cfe5cbee3de7d34aea22a3106809c45ec01",
+      "source_sha256": "fa7cf0ecc1cca84d8291bbff5a42b60f5816d57b4e97d42bc377235ac8db02e8",
       "vendor": "anime4k"
     },
     {
@@ -8007,7 +8007,7 @@
       "quality": "M",
       "scale": 2,
       "source": "glsl/Upscale+Denoise/Anime4K_Upscale_Denoise_CNN_x2_M.glsl",
-      "source_sha256": "ca51390eabca94ed3e1d9b40dc15b34045cc966f232ba9490ae0b4c1834d94f6",
+      "source_sha256": "8c72b042e2301fe66a45c3089720459148e2504cd72af16f9c0d5017ff14181e",
       "vendor": "anime4k"
     },
     {
@@ -9103,7 +9103,7 @@
       "quality": "VL",
       "scale": 2,
       "source": "glsl/Upscale+Denoise/Anime4K_Upscale_Denoise_CNN_x2_VL.glsl",
-      "source_sha256": "a0d50717724cd5c0ad5130d2a8fec6a837ba250190039f71b933f61d953cad04",
+      "source_sha256": "359c48fe5a317fbc6b706ce368401eef496e84ed98abac7a43efebca2b65d79b",
       "vendor": "anime4k"
     },
     {
@@ -10643,7 +10643,7 @@
       "quality": "UL",
       "scale": 2,
       "source": "glsl/Upscale+Denoise/Anime4K_Upscale_Denoise_CNN_x2_UL.glsl",
-      "source_sha256": "b509f8ec8932427c95b370ff0a8135b25308522a5ef127ce563714914a32f531",
+      "source_sha256": "38bd11e7e92ff1a615a274be912d6f2cfe67f5b43771f0383a91c6ab3d0f8cb6",
       "vendor": "anime4k"
     },
     {
@@ -12215,7 +12215,7 @@
       "quality": "realtime",
       "scale": 2,
       "source": "glsl/ArtCNN_C4F16.glsl",
-      "source_sha256": "f7739b68834a8989ebe219a480cf0a7ec34b413062d3a02cf72fa70e1015784f",
+      "source_sha256": "9bc1f5ba0f865e759672cab50f1d07973615225e0335f1262742755d2f30d4f4",
       "vendor": "artcnn"
     },
     {
@@ -12887,7 +12887,7 @@
       "quality": "realtime",
       "scale": 2,
       "source": "glsl/acnet/acnet_f8b4.glsl",
-      "source_sha256": "f987441a0d05ed4b09639f750f6f160741e8927ee5a88dd3957ec3c8a7861a31",
+      "source_sha256": "cd7bd35d2f124f9697b2a1bc82586a395f5f91fba2cedc57a1845853c9af8714",
       "vendor": "acnetglsl"
     },
     {
@@ -14983,7 +14983,7 @@
       "quality": "realtime",
       "scale": 2,
       "source": "glsl/arnet/arnet_f8b8.glsl",
-      "source_sha256": "5bfdb98817116b17d3e00452939ce23c95ef0efeb4cef4a24aec74e1027d13b1",
+      "source_sha256": "c36374511bb5b14dc08824a41ce271a1e2a9cb50085f98814c7f83c541fda90c",
       "vendor": "acnetglsl"
     }
   ],
@@ -15484,7 +15484,7 @@
       "quality": "shared",
       "scale": 1,
       "source": "glsl/Restore/Anime4K_Clamp_Highlights.glsl",
-      "source_sha256": "8c5fb67c76bed3021f8a27b050c3b97a6ac1b284f9ce91c04189015c354c0217",
+      "source_sha256": "a2a9bf7fbc1d75d09660ca2e701e4d7fb0cf5457b94da47e1825032fa2b3671a",
       "vendor": "anime4k"
     }
   ]

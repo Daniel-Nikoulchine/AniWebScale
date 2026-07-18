@@ -236,6 +236,11 @@ def sha256_text(value: str) -> str:
     return sha256_bytes(value.encode("utf-8"))
 
 
+def normalize_source_newlines(value: str) -> str:
+    """Return source text with platform-independent LF line endings."""
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
 PRESET_FAMILIES, PRESET_QUALITIES, PRESET_GRAPH_SHA256 = load_preset_graph()
 
 
@@ -768,7 +773,7 @@ def generate_model(
     except FileNotFoundError as error:
         raise GenerationError(f"missing vendored shader: {source_path}") from error
     try:
-        source = source_bytes.decode("utf-8")
+        source = normalize_source_newlines(source_bytes.decode("utf-8"))
     except UnicodeDecodeError as error:
         raise GenerationError(f"vendored shader is not UTF-8: {source_path}") from error
 
@@ -826,7 +831,7 @@ def generate_model(
         "scale": spec.scale,
         "vendor": spec.vendor,
         "source": spec.source,
-        "source_sha256": sha256_bytes(source_bytes),
+        "source_sha256": sha256_text(source),
         "pass_count": len(pass_entries),
         "passes": pass_entries,
     }

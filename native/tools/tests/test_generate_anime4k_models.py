@@ -186,6 +186,17 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual([{"logical_resource": "HOOKED", "srv_slot": 0}], first_pass["bindings"])
         self.assertEqual({"MAIN": 0}, first_pass["aliases"])
 
+    def test_source_hashes_ignore_platform_line_endings(self) -> None:
+        lf = "//!DESC Example\n//!HOOK MAIN\n"
+        crlf = lf.replace("\n", "\r\n")
+        legacy_cr = lf.replace("\n", "\r")
+        self.assertEqual(lf, generator.normalize_source_newlines(crlf))
+        self.assertEqual(lf, generator.normalize_source_newlines(legacy_cr))
+        self.assertEqual(
+            generator.sha256_text(lf),
+            generator.sha256_text(generator.normalize_source_newlines(crlf)),
+        )
+
     def test_generation_is_deterministic_and_manifest_hashes_match(self) -> None:
         second_files, second_manifest = generator.build_outputs()
         self.assertEqual(self.files, second_files)

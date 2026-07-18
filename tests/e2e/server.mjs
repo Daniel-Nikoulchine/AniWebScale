@@ -193,6 +193,7 @@ function emptyPage(url) {
 
 function selfTestPage(url) {
   const token = url.searchParams.get('token') || 'missing-token';
+  const forceNoAdapter = url.searchParams.get('forceNoAdapter') === '1';
   return shell('Anime4K Firefox self-test', `
     <h1>Firefox temporary-extension self-test</h1>
     <div class="row">
@@ -275,18 +276,32 @@ function selfTestPage(url) {
         await waitFor(() => frameCount > 0);
         check('cross-origin iframe injection', frameCount === 1);
 
-        check('WebGPU available', Boolean(navigator.gpu));
-        await bridge('configure');
+        const forceNoAdapter = ${JSON.stringify(forceNoAdapter)};
+        const gpuAdapter = !forceNoAdapter && navigator.gpu
+          ? await navigator.gpu.requestAdapter().catch(() => null)
+          : null;
+        check('WebGPU API available', Boolean(navigator.gpu));
+        await bridge('configure', { forceNoAdapter });
         await waitFor(() => document.querySelector('#self-layer').dataset.anime4kAutoFullscreen === 'true');
         check('no start during normal playback',
           document.querySelectorAll('video[data-anime4k-applied="true"]').length === 0);
         if (!document.fullscreenEnabled) throw new Error('Firefox Fullscreen API is unavailable in the E2E profile.');
         await document.querySelector('#self-layer').requestFullscreen();
         await waitFor(() => document.fullscreenElement?.id === 'self-player');
-        await waitFor(() => document.querySelector('#self-layer').dataset.anime4kApplied === 'true', 60000);
-        check('automatic direct-video fullscreen output',
-          document.querySelector('#self-player > canvas')?.style.visibility === 'visible'
-          && document.querySelector('#self-layer').style.opacity === '0');
+        if (gpuAdapter) {
+          check('WebGPU adapter available', true);
+          await waitFor(() => document.querySelector('#self-layer').dataset.anime4kApplied === 'true', 60000);
+          check('automatic direct-video fullscreen output',
+            document.querySelector('#self-player > canvas')?.style.visibility === 'visible'
+            && document.querySelector('#self-layer').style.opacity === '0');
+        } else {
+          check('WebGPU adapter unavailable gate', true,
+            'No adapter on this runner; validating fail-open source visibility instead.');
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          check('no-adapter fallback keeps source visible',
+            !document.querySelector('#self-layer').dataset.anime4kApplied
+            && document.querySelector('#self-layer').style.opacity !== '0');
+        }
         await document.exitFullscreen();
         await waitFor(() => !document.fullscreenElement);
         await waitFor(() => !document.querySelector('#self-layer').dataset.anime4kApplied);

@@ -405,6 +405,12 @@ function installLocalE2ETestBridge(): void {
         || typeof data.id !== 'string') return;
     void (async () => {
       if (data.action === 'configure') {
+        if (data.forceNoAdapter === true && navigator.gpu) {
+          Object.defineProperty(navigator.gpu, 'requestAdapter', {
+            configurable: true,
+            value: async () => null,
+          });
+        }
         await chrome.storage.local.set({
           mode: 'A', quality: 'M', output: 'auto', backend: 'webgpu', statsEnabled: true,
           autoFullscreenEnabled: true, frameGenerationEnabled: false,

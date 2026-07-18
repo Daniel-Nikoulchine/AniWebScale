@@ -12,6 +12,7 @@ const workspace = path.resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const sourceDir = path.join(workspace, 'dist-firefox');
 const artifactsDir = path.join(workspace, '.tmp', 'web-ext-artifacts');
 const firefoxHeadless = process.env.E2E_FIREFOX_HEADLESS === '1';
+const firefoxForceNoAdapter = process.env.E2E_FIREFOX_FORCE_NO_ADAPTER === '1';
 const execFileAsync = promisify(execFile);
 
 async function findDebuggerOwnerPid(port) {
@@ -63,7 +64,7 @@ try {
     sourceDir,
     target: ['firefox-desktop'],
     firefox: firefoxBinary,
-    startUrl: [`${PRIMARY_ORIGIN}/firefox-self-test.html?token=${encodeURIComponent(token)}`],
+    startUrl: [`${PRIMARY_ORIGIN}/firefox-self-test.html?token=${encodeURIComponent(token)}&forceNoAdapter=${firefoxForceNoAdapter ? '1' : '0'}`],
     // Firefox exposes navigator.gpu in headless mode on Windows but currently
     // returns no adapter. Run headed by default so this suite exercises the
     // live WebGPU renderer instead of only detecting the API surface.

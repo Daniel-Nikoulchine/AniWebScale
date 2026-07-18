@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -10,6 +10,16 @@ const execFileAsync = promisify(execFile);
 const LINT_SCRIPT = 'scripts/firefox-store-lint-gate.mjs';
 const SOURCE_DIR = 'dist-firefox';
 const PIPELINE_SOURCE = 'src/core/pipeline-loader.ts';
+
+async function ensureFirefoxBundle(): Promise<void> {
+  if (existsSync(SOURCE_DIR)) return;
+  const npmCli = process.env.npm_execpath;
+  if (!npmCli) throw new Error('npm_execpath is required to build the Firefox test bundle.');
+  await execFileAsync(process.execPath, [npmCli, 'run', 'build:firefox'], {
+    timeout: 180_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+}
 
 const EXACT_WARNING = {
   _type: 'warning',
@@ -217,10 +227,11 @@ describe('firefox-store-lint-gate', () => {
   });
 
   describe('release bundle security scan (recursive)', () => {
-    it('dist-firefox top-level JS files contain no dangerous patterns', () => {
+    it('dist-firefox top-level JS files contain no dangerous patterns', async () => {
+      await ensureFirefoxBundle();
       const failures = scanReleaseBundles(SOURCE_DIR);
       expect(failures).toEqual([]);
-    });
+    }, 180_000);
 
     it('rejects nested dangerous file in temp directory', () => {
       const tmpDir = path.join('.tmp', 'test-bundle-scan');
@@ -248,6 +259,7 @@ describe('firefox-store-lint-gate', () => {
     });
 
     it('lint gate script exits 0 on current dist-firefox', async () => {
+      await ensureFirefoxBundle();
       const { stdout, stderr } = await execFileAsync('node', [LINT_SCRIPT], {
         timeout: 60_000,
       });

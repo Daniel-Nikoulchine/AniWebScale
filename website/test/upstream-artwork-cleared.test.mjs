@@ -51,7 +51,7 @@ describe('upstream artwork licensing blocker cleared', () => {
   });
 
   it('owned SVG comparison plate exists under website/public/assets/owned/', async () => {
-    let exists = false;
+    let exists;
     try {
       const stat = await readFile(
         join(PUBLIC, 'assets', 'owned', 'comparison-plate.svg'),

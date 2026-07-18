@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -16,6 +17,20 @@ jobs:
   restore-drill:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: aniwebscale_restore_drill
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: restore-drill
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d aniwebscale_restore_drill"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: website
@@ -27,23 +42,36 @@ jobs:
           cache: npm
           cache-dependency-path: website/package-lock.json
       - run: npm ci
-      - name: Download, restore and validate the latest independent backup
+      - name: Download the latest verified encrypted backup artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_DOWNLOAD_PATH: ${{ runner.temp }}/aniwebscale-restore-drill.json.gz.aes
+        run: |
+          backup_run_id=$(gh run list --workflow database-backup.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ -z "$backup_run_id" ]; then
+            echo 'No successful database backup workflow run is available.' >&2
+            exit 1
+          fi
+          download_dir="$RUNNER_TEMP/aniwebscale-backup-download"
+          mkdir -p "$download_dir"
+          gh run download "$backup_run_id" --name "aniwebscale-database-$backup_run_id" --dir "$download_dir"
+          shopt -s nullglob
+          backups=("$download_dir"/*.json.gz.aes)
+          if [ "${#backups[@]}" -ne 1 ]; then
+            echo "Expected exactly one encrypted backup artifact, found ${#backups[@]}." >&2
+            exit 1
+          fi
+          cp -- "${backups[0]}" "$BACKUP_DOWNLOAD_PATH"
+      - name: Restore and validate the backup in ephemeral PostgreSQL
         id: drill
         env:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-          RESTORE_DATABASE_URL: ${{ secrets.RESTORE_DRILL_DATABASE_URL }}
+          RESTORE_DATABASE_URL: postgresql://postgres:restore-drill@localhost:5432/aniwebscale_restore_drill
           CONFIRM_ISOLATED_RESTORE: 'yes'
           BACKUP_ENCRYPTION_KEY_B64: ${{ secrets.BACKUP_ENCRYPTION_KEY_B64 }}
-          BACKUP_SECONDARY_S3_ENDPOINT: ${{ secrets.BACKUP_SECONDARY_S3_ENDPOINT }}
-          BACKUP_SECONDARY_S3_BUCKET: ${{ secrets.BACKUP_SECONDARY_S3_BUCKET }}
-          BACKUP_SECONDARY_S3_REGION: ${{ secrets.BACKUP_SECONDARY_S3_REGION }}
-          BACKUP_SECONDARY_S3_ACCESS_KEY_ID: ${{ secrets.BACKUP_SECONDARY_S3_ACCESS_KEY_ID }}
-          BACKUP_SECONDARY_S3_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_SECONDARY_S3_SECRET_ACCESS_KEY }}
-          BACKUP_SECONDARY_S3_PREFIX: aniwebscale
           BACKUP_DOWNLOAD_PATH: ${{ runner.temp }}/aniwebscale-restore-drill.json.gz.aes
         run: |
           echo "started_ms=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
-          npm run download:backup:secondary
           npm run restore:database -- "$BACKUP_DOWNLOAD_PATH"
           npm run validate:restore-drill
       - name: Record aggregate restore-drill health
@@ -54,5 +82,5 @@ jobs:
           STARTED_MS: ${{ steps.drill.outputs.started_ms }}
         run: |
           now_ms=$(date +%s%3N)
-          echo "RESTORE_DRILL_DURATION_MS=$((now_ms - STARTED_MS))" >> "$GITHUB_ENV"
-          RESTORE_DRILL_DURATION_MS=$((now_ms - STARTED_MS)) npm run record:restore-drill
+          started_ms=${STARTED_MS:-$now_ms}
+          RESTORE_DRILL_DURATION_MS=$((now_ms - started_ms)) npm run record:restore-drill

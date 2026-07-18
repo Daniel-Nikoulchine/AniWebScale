@@ -82,7 +82,7 @@ jobs:
         run: npm run test:e2e:firefox
 
   native-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 50
     steps:
       - name: Checkout code

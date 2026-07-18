@@ -1,18 +1,12 @@
-import type { Anime4KPipeline } from 'anime4k-webgpu';
 import type { Dimensions, EnhancementEffect, RenderStats } from '../types';
 import {
   scheduleEffectsForTarget,
   scheduledEffectPipelineKey,
 } from '../shared/effect-scheduling';
-import { GENERATED_PIPELINE_CLASSES } from '../shared/generated-pipelines';
-import { EXTERNAL_GLSL_PIPELINE_CLASSES } from './external-glsl-pipeline';
 import { createAnime4KShaderDevice } from '../shared/wgsl-fidelity';
 import { RendererInitializationError, RendererRuntimeError } from './errors';
-import {
-  OnnxUpscalePipeline,
-  onnxUpscaleModelForClassName,
-  type OnnxUpscaleRuntime,
-} from './onnx-upscale-pipeline';
+import { loadPipelineConstructor } from './pipeline-loader';
+import type { Anime4KPipeline } from './pipeline-types';
 
 const fullscreenQuadWGSL = `
 struct VertexOutput {
@@ -213,13 +207,6 @@ export interface RendererOptions {
   onStats?: (stats: RenderStats) => void;
 }
 
-type PipelineConstructor = new (options: {
-  device: GPUDevice;
-  inputTexture: GPUTexture;
-  nativeDimensions?: Dimensions;
-  targetDimensions?: Dimensions;
-}) => Anime4KPipeline;
-
 export class Renderer {
   private video: HTMLVideoElement;
   private readonly canvas: HTMLCanvasElement;
@@ -245,7 +232,6 @@ export class Renderer {
   private historyPresentationIndex = 0;
   private sampler!: GPUSampler;
   private presentationUniform!: GPUBuffer;
-  private onnxUpscalePipeline: OnnxUpscalePipeline | null = null;
   private historyPipeline!: GPUComputePipeline;
   private historyTextures: [GPUTexture, GPUTexture] | null = null;
   private previousHistoryTexture: GPUTexture | null = null;
@@ -272,8 +258,6 @@ export class Renderer {
   private rebuilding = false;
   private recoveryAttempted = false;
   private stateUpdateChain: Promise<void> = Promise.resolve();
-  private preparedOnnxUpscaleRuntime: OnnxUpscaleRuntime | null = null;
-  private deviceOwnedByOrt = false;
   private cleanupScheduled = false;
   private readonly playbackStoppedHandler = () => this.handlePlaybackStopped();
 
@@ -286,8 +270,6 @@ export class Renderer {
   private frameBudgetMs = 1000 / 24;
   private overloadedSince: number | null = null;
   private warning = false;
-
-  private static anime4kModule: typeof import('anime4k-webgpu') | null = null;
 
   private constructor(options: RendererOptions) {
     this.video = options.video;
@@ -351,18 +333,6 @@ export class Renderer {
   }
 
   private async createDevice(): Promise<void> {
-    const onnxModel = this.effects
-      .map(effect => onnxUpscaleModelForClassName(effect.className))
-      .find(model => model !== null);
-    if (onnxModel) {
-      this.onProgress?.(`Loading ${onnxModel.displayName} runtime...`);
-      this.preparedOnnxUpscaleRuntime = await OnnxUpscalePipeline.prepareRuntime(onnxModel.id);
-      this.device = this.preparedOnnxUpscaleRuntime.device;
-      this.deviceOwnedByOrt = true;
-      this.finishDeviceSetup();
-      return;
-    }
-
     let adapter: GPUAdapter | null;
     try {
       // A default request is the most compatible option on Windows. Explicit
@@ -391,7 +361,6 @@ export class Renderer {
         { cause: error as Error },
       );
     }
-    this.deviceOwnedByOrt = false;
     this.finishDeviceSetup();
   }
 
@@ -400,7 +369,7 @@ export class Renderer {
       this.buildingPipelineTextures?.add(texture);
     });
     this.useImageBitmap = false;
-    this.device.lost.then(info => {
+    void this.device.lost.then(info => {
       if (!this.destroyed && info.reason !== 'destroyed') {
         void this.enqueueStateUpdate(() => this.recoverDevice(info.message));
       }
@@ -434,18 +403,8 @@ export class Renderer {
       this.targetDimensions,
     );
     this.onProgress?.('Compiling enhancement shaders...', 0, scheduled.effects.length);
-    const needsAnime4K = scheduled.effects.some(
-      effect => onnxUpscaleModelForClassName(effect.className) === null,
-    );
-    if (needsAnime4K && !Renderer.anime4kModule) Renderer.anime4kModule = await import('anime4k-webgpu');
-    const module = (Renderer.anime4kModule ?? {}) as Record<string, unknown>;
-    const local = {
-      ...GENERATED_PIPELINE_CLASSES,
-      ...EXTERNAL_GLSL_PIPELINE_CLASSES,
-    } as Record<string, PipelineConstructor>;
     const pipelines: Anime4KPipeline[] = [];
     const pipelineTextures = new Set<GPUTexture>();
-    let onnxUpscalePipeline: OnnxUpscalePipeline | null = null;
     let currentTexture = this.videoFrameTexture;
     let width = this.video.videoWidth;
     let height = this.video.videoHeight;
@@ -457,30 +416,7 @@ export class Renderer {
         this.onProgress?.(`Compiling ${effect.name}...`, index + 1, scheduled.effects.length);
         await new Promise<void>(resolve => setTimeout(resolve, 0));
         if (this.destroyed) throw new Error('Renderer was destroyed while compiling enhancement shaders.');
-        const onnxModel = onnxUpscaleModelForClassName(effect.className);
-        if (onnxModel) {
-          if (scheduled.effects.length !== 1) {
-            throw new RendererInitializationError(
-              `${onnxModel.displayName} must run as a standalone enhancement graph.`,
-            );
-          }
-          if (!this.preparedOnnxUpscaleRuntime) {
-            throw new RendererInitializationError(
-              `${onnxModel.displayName} runtime was not prepared for this renderer.`,
-            );
-          }
-          const runtime = this.preparedOnnxUpscaleRuntime;
-          // Creation takes ownership of the session even if GPU resource
-          // allocation fails, so renderer cleanup must not release it twice.
-          this.preparedOnnxUpscaleRuntime = null;
-          onnxUpscalePipeline = OnnxUpscalePipeline.create(runtime, currentTexture);
-          currentTexture = onnxUpscalePipeline.getOutputTexture();
-          width *= onnxModel.outputScale;
-          height *= onnxModel.outputScale;
-          continue;
-        }
-        const Constructor = local[effect.className]
-          ?? module[effect.className] as PipelineConstructor | undefined;
+        const Constructor = await loadPipelineConstructor(effect.className);
         if (!Constructor) {
           throw new RendererInitializationError(`Exact WebGPU kernel ${effect.className} is unavailable.`);
         }
@@ -496,15 +432,12 @@ export class Renderer {
         height *= effect.upscaleFactor ?? 1;
       }
     } catch (error) {
-      onnxUpscalePipeline?.destroy();
       this.destroyPipelineTextures(pipelineTextures);
       throw error;
     } finally {
       this.buildingPipelineTextures = null;
     }
 
-    this.onnxUpscalePipeline?.destroy();
-    this.onnxUpscalePipeline = onnxUpscalePipeline;
     this.destroyPipelineTextures(this.pipelineTextures);
     this.pipelineTextures = pipelineTextures;
     this.pipelines = pipelines;
@@ -782,7 +715,7 @@ export class Renderer {
     }
   }
 
-  private async processFrame(metadata?: VideoFrameCallbackMetadata): Promise<boolean> {
+  private async processFrame(): Promise<boolean> {
     if (this.destroyed || this.rebuilding || this.video.readyState < this.video.HAVE_CURRENT_DATA) return false;
     if (this.video.videoWidth !== this.videoFrameTexture.width
       || this.video.videoHeight !== this.videoFrameTexture.height) {
@@ -793,10 +726,8 @@ export class Renderer {
     const started = performance.now();
     await this.copyCurrentVideoFrame();
     if (this.destroyed) return false;
-    if (this.onnxUpscalePipeline) await this.onnxUpscalePipeline.process();
-    if (this.destroyed) return false;
     const encoder = this.device.createCommandEncoder({ label: 'Anime4K frame' });
-    if (!this.onnxUpscalePipeline) this.pipelines.forEach(pipeline => pipeline.pass(encoder));
+    this.pipelines.forEach(pipeline => pipeline.pass(encoder));
     const generateIntermediate = this.prepareFrameGenerationHistory(encoder);
     this.encodePresentation(encoder);
     this.device.queue.submit([encoder.finish()]);
@@ -805,7 +736,7 @@ export class Renderer {
     if (generateIntermediate) this.scheduleGeneratedFrame();
 
     const renderMs = performance.now() - started;
-    this.recordStats(renderMs, metadata);
+    this.recordStats(renderMs);
     if (!this.firstFrameRendered) {
       this.firstFrameRendered = true;
       this.onFirstFrameRendered?.(this.video);
@@ -813,7 +744,7 @@ export class Renderer {
     return true;
   }
 
-  private recordStats(renderMs: number, metadata?: VideoFrameCallbackMetadata): void {
+  private recordStats(renderMs: number): void {
     const now = performance.now();
     this.smoothedRenderMs = this.smoothedRenderMs === 0
       ? renderMs
@@ -902,7 +833,7 @@ export class Renderer {
       while (metadata && !this.destroyed) {
         this.pendingFrame = false;
         this.latestMetadata = null;
-        await this.processFrame(metadata);
+        await this.processFrame();
         metadata = this.pendingFrame ? this.latestMetadata : null;
       }
     } catch (error) {
@@ -946,19 +877,7 @@ export class Renderer {
       await this.device.queue.onSubmittedWorkDone();
       if (this.destroyed) return;
       this.createSourceTexture();
-      if (this.onnxUpscalePipeline) {
-        // The model session is expensive and was consumed during initial
-        // setup. Only its texture bindings depend on the source dimensions.
-        this.onnxUpscalePipeline.updateInputTexture(this.videoFrameTexture);
-        this.finalTexture = this.onnxUpscalePipeline.getOutputTexture();
-        this.pipelineEffectKey = scheduledEffectPipelineKey(
-          this.effects,
-          { width: this.video.videoWidth, height: this.video.videoHeight },
-          this.targetDimensions,
-        );
-      } else {
-        await this.buildPipelines();
-      }
+      await this.buildPipelines();
       this.createHistoryResources();
       this.createPresentationBindGroup();
     } finally {
@@ -995,6 +914,7 @@ export class Renderer {
     const previousFrameGenerationEnabled = this.frameGenerationEnabled;
     let gpuStateChanged = false;
     let configurationCommitted = false;
+    let postConfigurationError: RendererRuntimeError | null = null;
     this.rebuilding = true;
     try {
       const nextPipelineEffectKey = scheduledEffectPipelineKey(
@@ -1049,7 +969,7 @@ export class Renderer {
             await this.processFrame();
           } catch (error) {
             this.destroy();
-            throw new RendererRuntimeError('Rendering the updated configuration failed.', {
+            postConfigurationError = new RendererRuntimeError('Rendering the updated configuration failed.', {
               cause: error as Error,
             });
           } finally {
@@ -1067,6 +987,7 @@ export class Renderer {
       this.flushStoppedPlayback();
       this.startFrameCallbacks();
     }
+    if (postConfigurationError) throw postConfigurationError;
   }
 
   public isDestroyed(): boolean {
@@ -1135,10 +1056,6 @@ export class Renderer {
     this.stopFrameCallbacks();
     this.stopGeneratedFrameAnimation();
     this.playbackFlushPending = false;
-    // Mark the inference pipeline as stopping immediately, but let it defer its
-    // own buffers/session until the current OrtRun has settled.
-    this.onnxUpscalePipeline?.destroy();
-    this.onnxUpscalePipeline = null;
     if (this.cleanupScheduled) return;
     this.cleanupScheduled = true;
     void this.waitForFrameIdle().then(() => this.releaseResources());
@@ -1152,11 +1069,7 @@ export class Renderer {
       this.videoFrameTexture?.destroy();
       this.presentationUniform?.destroy();
       this.context?.unconfigure();
-      if (this.preparedOnnxUpscaleRuntime) {
-        void this.preparedOnnxUpscaleRuntime.session.release();
-        this.preparedOnnxUpscaleRuntime = null;
-      }
-      if (!this.deviceOwnedByOrt) this.device?.destroy();
+      this.device?.destroy();
     } catch (error) {
       console.warn('[Anime4K] Renderer cleanup failed:', error);
     }

@@ -1,8 +1,6 @@
-import { Conv2d, type Anime4KPipeline } from 'anime4k-webgpu';
-import {
-  GENERATED_EXTERNAL_GLSL_MODELS,
-  type ExternalGlslModelDefinition,
-} from '../shared/generated-external-glsl-models';
+import { Conv2d } from 'anime4k-webgpu/core';
+import type { ExternalGlslModelDefinition } from '../shared/generated-external-glsl-models';
+import type { Anime4KPipeline, PipelineConstructor } from './pipeline-types';
 
 interface PipelineDescriptor {
   device: GPUDevice;
@@ -167,22 +165,12 @@ class ExternalGlslPipeline implements Anime4KPipeline {
   }
 }
 
-export class ArtCNNX2 extends ExternalGlslPipeline {
-  constructor({ device, inputTexture }: PipelineDescriptor) {
-    super(device, inputTexture, GENERATED_EXTERNAL_GLSL_MODELS.ArtCNNX2);
-  }
+export function createExternalGlslPipelineClass(
+  model: ExternalGlslModelDefinition,
+): PipelineConstructor {
+  return class ExternalModelPipeline extends ExternalGlslPipeline {
+    constructor({ device, inputTexture }: PipelineDescriptor) {
+      super(device, inputTexture, model);
+    }
+  };
 }
-
-export class ACNetX2 extends ExternalGlslPipeline {
-  constructor({ device, inputTexture }: PipelineDescriptor) {
-    super(device, inputTexture, GENERATED_EXTERNAL_GLSL_MODELS.ACNetX2);
-  }
-}
-
-export class ARNetX2 extends ExternalGlslPipeline {
-  constructor({ device, inputTexture }: PipelineDescriptor) {
-    super(device, inputTexture, GENERATED_EXTERNAL_GLSL_MODELS.ARNetX2);
-  }
-}
-
-export const EXTERNAL_GLSL_PIPELINE_CLASSES = { ArtCNNX2, ACNetX2, ARNetX2 };

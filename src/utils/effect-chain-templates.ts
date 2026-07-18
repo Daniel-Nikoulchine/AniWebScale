@@ -11,7 +11,7 @@ import {
 import { isAnime4KMode } from '../shared/presets';
 import { findEffect, resolveAiUpscaleEffect } from './effects-map';
 
-export { OFFICIAL_PRESET_GRAPHS, type PresetStep };
+export { OFFICIAL_PRESET_GRAPHS };
 
 function classNameForStep(step: PresetStep, quality: QualityTier): string {
   switch (step) {
@@ -35,8 +35,4 @@ export function resolveEnhancementGraph(
   return isAnime4KMode(mode)
     ? resolvePresetGraph(mode, quality)
     : [resolveAiUpscaleEffect(mode, quality)];
-}
-
-export function getEffectChainSummary(effects: EnhancementEffect[]): string {
-  return effects.map(effect => effect.name.replace(/ \([^)]+\)$/, '')).join(' → ') || 'No effects';
 }

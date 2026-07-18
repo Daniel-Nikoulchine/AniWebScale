@@ -33,7 +33,7 @@ const denoiseUpscale = (quality: QualityTier): EnhancementEffect => ({
  * The three classes absent from anime4k-webgpu 1.0.0 are provided by generated
  * local pipelines, so every entry in the matrix is an exact quality variant.
  */
-export const AVAILABLE_EFFECTS: EnhancementEffect[] = [
+const AVAILABLE_EFFECTS: EnhancementEffect[] = [
   {
     id: 'anime4k/Helper/ClampHighlights',
     name: 'Clamp Highlights',
@@ -82,16 +82,6 @@ export function resolveAiUpscaleEffect(mode: AiUpscaleMode, quality: QualityTier
       id: 'arnet/F8B8/x2',
       name: 'ARNet F8B8 x2',
       className: 'ARNetX2',
-      upscaleFactor: 2,
-      alwaysApply: true,
-      webgpuAvailable: true,
-    };
-  }
-  if (mode === 'ANIMEJANAI') {
-    return {
-      id: 'animejanai/HD-V3.1/Performance/x2',
-      name: 'AnimeJaNai HD V3.1 Performance x2',
-      className: 'AnimeJaNaiX2',
       upscaleFactor: 2,
       alwaysApply: true,
       webgpuAvailable: true,

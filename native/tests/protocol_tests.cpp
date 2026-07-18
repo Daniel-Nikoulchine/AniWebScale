@@ -43,7 +43,7 @@ void test_json() {
 void test_request_validation() {
   constexpr const char* modes[] = {
       "OFF", "A", "B", "C", "AA", "BB", "CA", "CNNX2",
-      "ARTCNN", "ACNET", "ARNET", "ANIMEJANAI"};
+      "ARTCNN", "ACNET", "ARNET"};
   constexpr const char* qualities[] = {"M", "VL", "UL"};
   for (const char* mode : modes) {
     for (const char* quality : qualities) {
@@ -88,7 +88,7 @@ void test_request_validation() {
   expect(!anime4k::protocol::validate_browser_request(invalid_frame_generation).valid,
       "frame-generation flag must be boolean");
   auto update_configuration = parse_or_fail(
-      R"({"type":"updateConfiguration","protocolVersion":3,"requestId":"r","sessionId":"s","mode":"ANIMEJANAI","quality":"UL","frameGenerationEnabled":true})");
+      R"({"type":"updateConfiguration","protocolVersion":3,"requestId":"r","sessionId":"s","mode":"ARTCNN","quality":"UL","frameGenerationEnabled":true})");
   expect(anime4k::protocol::validate_browser_request(update_configuration).valid,
       "complete configuration updates validate");
   auto removed_gan = parse_or_fail(
@@ -120,7 +120,7 @@ void test_renderer_events() {
   expect(anime4k::protocol::validate_renderer_event(exit_fullscreen).valid,
       "protocol-v3 exitFullscreen command validates");
   auto capabilities = parse_or_fail(
-      R"({"type":"capabilities","protocolVersion":3,"requestId":"cap-1","windowsCapture":true,"d3d11":true,"modes":["OFF","A","B","C","AA","BB","CA","CNNX2","ARTCNN","ACNET","ARNET","ANIMEJANAI"],"qualities":["M","VL","UL"],"frameGeneration":true})");
+      R"({"type":"capabilities","protocolVersion":3,"requestId":"cap-1","windowsCapture":true,"d3d11":true,"modes":["OFF","A","B","C","AA","BB","CA","CNNX2","ARTCNN","ACNET","ARNET"],"qualities":["M","VL","UL"],"frameGeneration":true})");
   expect(anime4k::protocol::validate_renderer_event(capabilities).valid,
       "complete protocol-v3 capabilities validate");
   auto invalid_capability_mode = parse_or_fail(

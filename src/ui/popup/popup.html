@@ -11,24 +11,35 @@
       <div class="brand-mark" aria-hidden="true"><img src="icons/icon48.png" alt="" width="46" height="46"></div>
       <div class="brand-copy">
         <h1>AniWebScale~!!</h1>
-        <p>Real-time video enhancement</p>
+        <p data-i18n="realTimeVideoEnhancement">Real-time video enhancement</p>
       </div>
     </header>
 
-    <button id="account-plan" class="account-plan" type="button"><span>Plan</span><strong>Free</strong><small>Manage account</small></button>
+    <button id="account-plan" class="account-plan" type="button">
+      <span>Current plan</span><strong>Free</strong><em id="account-plan-action">Upgrade &#8594;</em>
+      <small id="account-plan-summary">Free: Anime4K + WebGPU · Pro: AI, Native + Frame Gen</small>
+    </button>
 
     <section class="switch-card extension-switch-card" aria-label="Extension status">
-      <label class="check-row"><input id="extension-enabled" type="checkbox"><span class="check-control"></span><span><strong>Extension enabled</strong><small>Process videos in this browser</small></span></label>
+      <label class="check-row"><input id="extension-enabled" type="checkbox"><span class="check-control"></span><span><strong data-i18n="extensionEnabled">Extension enabled</strong><small data-i18n="processVideos">Process videos in this browser</small></span></label>
+    </section>
+
+    <section id="site-access-card" class="site-access-card" data-state="unavailable" aria-labelledby="site-access-title">
+      <div>
+        <strong id="site-access-title" data-i18n="websiteAccess">Website access</strong>
+        <small id="site-access-summary">Checking access for this site...</small>
+      </div>
+      <button id="site-access" class="secondary" type="button" disabled>Checking...</button>
     </section>
 
     <section class="settings-card" aria-labelledby="quick-setup-title">
       <div class="section-heading">
         <span class="heading-icon lavender" aria-hidden="true">&#10022;</span>
-        <div><h2 id="quick-setup-title">Quick setup</h2></div>
+        <div><h2 id="quick-setup-title" data-i18n="quickSetup">Quick setup</h2></div>
       </div>
 
       <label class="mode-select-field">
-          <span>Enhancement mode</span>
+          <span data-i18n="enhancementMode">Enhancement mode</span>
           <select id="mode">
             <option value="OFF">Off</option>
             <optgroup label="Anime4K presets">
@@ -36,31 +47,31 @@
               <option value="AA">A+A</option><option value="BB">B+B</option><option value="CA">C+A</option>
             </optgroup>
             <optgroup label="AI upscaling">
-              <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option><option value="ANIMEJANAI">AnimeJaNai HD x2 (Performance)</option>
+              <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option>
             </optgroup>
           </select>
       </label>
       <p id="mode-description" class="mode-description" aria-live="polite"></p>
       <div class="grid compact-fields">
         <label>
-          <span>Quality</span>
+          <span data-i18n="quality">Quality</span>
           <select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select>
         </label>
-        <label><span>Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
+        <label><span data-i18n="backend">Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
       </div>
     </section>
 
     <section class="switch-card" aria-label="Enhancement options">
-      <label class="check-row"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong>Frame generation</strong><small>Motion-aware 2x</small></span></label>
-      <label class="check-row"><input id="auto-fullscreen" type="checkbox"><span class="check-control"></span><span><strong>Auto fullscreen</strong><small>Enhance when a player expands</small></span></label>
-      <label class="check-row"><input id="statistics" type="checkbox"><span class="check-control"></span><span><strong>Live statistics</strong><small>FPS, timing and dropped frames</small></span></label>
+      <label class="check-row"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong data-i18n="frameGeneration">Frame generation</strong><small id="frame-generation-description">Motion-aware 2x</small></span></label>
+      <label class="check-row"><input id="auto-fullscreen" type="checkbox"><span class="check-control"></span><span><strong data-i18n="autoFullscreen">Auto fullscreen</strong><small>Enhance when a player expands</small></span></label>
+      <label class="check-row"><input id="statistics" type="checkbox"><span class="check-control"></span><span><strong data-i18n="liveStatistics">Live statistics</strong><small>FPS, timing and dropped frames</small></span></label>
     </section>
 
     <p class="hint native-warning"><span aria-hidden="true">!</span><span><strong>Streaming video stays black?</strong> Turn off hardware acceleration in your browser settings, then restart the browser.</span></p>
 
     <div class="actions">
-      <button id="save" class="primary">Save &amp; apply <span aria-hidden="true">&#10022;</span></button>
-      <button id="open-options" class="secondary">Advanced settings <span aria-hidden="true">&#8594;</span></button>
+      <button id="save" class="primary"><span data-i18n="saveApply">Save &amp; apply</span> <span aria-hidden="true">&#10022;</span></button>
+      <button id="open-options" class="secondary"><span data-i18n="advancedSettings">Advanced settings</span> <span aria-hidden="true">&#8594;</span></button>
     </div>
     <div id="status" role="status" aria-live="polite"></div>
   </main>

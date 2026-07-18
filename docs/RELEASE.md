@@ -30,6 +30,8 @@ Pages secrets must exist before the deployment that consumes them. Hyperdrive is
 the optional `HYPERDRIVE` binding; without it, the encrypted `DATABASE_URL` connects directly to
 Neon. Static assets do not invoke the Function because `public/_routes.json` includes only `/api/*`.
 
+Before deploying account features, run `npm run generate:privacy-key` and `npm run generate:operations-token`, store both values only in the production secret store, complete `docs/DATA_PROTECTION.md`, configure every public `PRIVACY_*` fact and run `npm run migrate:database`. Put the operations token in both Cloudflare Pages and the GitHub Actions `OPERATIONS_MONITOR_TOKEN` secret. Configure all `BACKUP_SECONDARY_S3_*` Actions secrets for the independent encrypted copy. The live monitor must report the deployed schema version as current before traffic is accepted. New registration and every checkout remain fail-closed until `DATA_PROTECTION_APPROVED=true` and the other legal/tax gates are valid.
+
 ### Container alternative
 
 Copy `website/.env.production.example` to `website/.env.production`, fill every secret and ID, then set `PAID_ENTITLEMENTS_ENABLED=true` only after the live signed webhook has been verified.
@@ -64,9 +66,9 @@ Use a live Stripe Customer Portal configuration and live Price IDs. Test mode an
 
 ## 2. Finish Neon Auth production settings
 
-In the Neon Console, add the final website and browser-extension origins to the trusted-origin configuration. Configure a production email provider, enable the desired email-verification policy, and verify signup, sign-in, sign-out, and password reset before accepting real payments.
+In the Neon Console, add only the final website origin to the trusted-origin configuration, disable localhost access, and require email verification. The extension uses a website-hosted PKCE authorization flow and must not receive Neon Auth cookies. Configure a production email provider and verify signup, OTP verification, sign-in, sign-out, and password reset before accepting real payments.
 
-Keep `DATABASE_URL` server-side. Only `NEON_AUTH_URL` is public and embedded in the website/extension clients.
+Keep `DATABASE_URL` server-side. `NEON_AUTH_URL` is public only to the website account client.
 
 ## 3. Build release extension bundles
 
@@ -74,17 +76,32 @@ Set the final public values in the shell that performs the build:
 
 ```powershell
 $env:ANIME4K_ACCOUNT_API_URL = 'https://your-domain.example'
-$env:ANIME4K_NEON_AUTH_URL = 'https://your-neon-auth-host.example/neondb/auth'
 npm run build:release:all
 ```
 
-`build:release:all` fails for HTTP, localhost, or placeholder domains. Upload `dist-chrome` and `dist-firefox` only after this check passes.
+`build:release:all` fails for HTTP, localhost, or placeholder domains. Run `npm run check:bundle-sizes` after the build; it requires the separate lazy model/quality chunks and enforces the 750 KiB per-chunk budget. Upload `dist-chrome` and `dist-firefox` only after both checks pass.
+
+The current fallback production API is `https://aniwebscale.pages.dev`. Replace it with the confirmed custom domain only after Cloudflare, Neon trusted origins, Stripe URLs and legal links have all migrated together.
+
+### Signed native Windows package
+
+Native public releases must be produced by `.github/workflows/native-release.yml`. Configure repository secrets `ANIME4K_SIGNING_PFX_BASE64` (the base64-encoded code-signing PFX) and `ANIME4K_SIGNING_PFX_PASSWORD`. The workflow builds and tests both binaries, applies SHA-256 Authenticode signatures with a trusted timestamp, creates `native-release-manifest.json`, signs that manifest as detached CMS, verifies the signer and every hash, and then packages fixed-timestamp ZIP entries. The PFX is materialized only in the runner's temporary directory.
+
+Configure the repository variable `ANIWEBSCALE_PUBLIC_URL` with the final HTTPS origin. The signed release workflow uses it for `ANIME4K_ACCOUNT_API_URL`; the scheduled live and operations monitors use the same value and deliberately fail when it is empty, still points at an obsolete host, lacks store links, or loses a legal/data-protection gate.
+
+For an operator-side verification without access to the private key:
+
+```powershell
+.\native\scripts\sign-release.ps1 -BinaryDirectory .\native\build\bin\Release -VerifyOnly
+```
+
+Do not publish an unsigned local package. `package-local.ps1 -RequireNativeSignature -SkipBuild` fails unless both EXEs and the detached manifest are valid and signed by the same certificate.
 
 ## 4. Store and operator completion
 
 - Publish Chrome and Firefox listings, then put their exact URLs in the website environment.
 - Set the repository URL or leave the GitHub link disabled.
-- Review the imprint, privacy policy, terms, tax configuration, VAT ID, refund policy, and commercial rights for all bundled models/media.
+- Obtain legal/tax/data-protection approval for the imprint, privacy policy, terms, withdrawal flow, tax configuration, VAT ID/OSS treatment, vendor DPAs/transfers, retention values, refund policy and commercial rights for all bundled models/media. Registration and both test/live checkout are blocked until all three approval flags and required privacy fields are valid.
 - Upload Stripe branding and verify receipts, invoices, cancellation, monthly/yearly switching, and Lifetime purchases.
 - Run the browser, native, hardware, and DRM acceptance procedures in `docs/TESTING.md`.
 
@@ -94,9 +111,10 @@ Before creating a real payment, run the non-mutating deployment gate. It verifie
 
 ```powershell
 $env:LIVE_BASE_URL = 'https://your-domain.example'
+$env:LIVE_REQUIRE_LEGAL_APPROVAL = '1'
 npm run check:live
 ```
 
 For a pre-store deployment only, `LIVE_ALLOW_MISSING_STORE_LINKS=1` skips the Chrome/Firefox link requirement. Do not use that override for the final release gate.
 
-Create a new real account, complete the lowest-risk live purchase permitted by the operator, confirm the signed webhook updates Neon, sign into both browser extensions, verify the signed Pro license, open the Customer Portal, then refund/cancel according to the test plan. Never grant Pro from the success redirect alone.
+Confirm the daily retention and encrypted-backup workflows have succeeded. Create a new real account, download its export, verify its email, complete the lowest-risk live purchase permitted by the operator, confirm the signed webhook updates Neon, authorize both browser extensions through the website, verify the signed Pro license, open the Customer Portal, then refund/cancel and test account deletion according to the test plan. Never grant Pro from the success redirect alone.

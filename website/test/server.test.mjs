@@ -1,14 +1,20 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.PAID_ENTITLEMENTS_ENABLED = 'false';
 const { createWebsiteServer } = await import('../server.mjs');
 
 let server;
 let baseUrl;
 
 before(async () => {
-  server = createWebsiteServer();
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = 'postgresql://should:not-be-used@127.0.0.1:1/test';
+  try {
+    server = createWebsiteServer();
+  } finally {
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+  }
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   baseUrl = `http://127.0.0.1:${address.port}`;
@@ -19,6 +25,13 @@ after(async () => {
 });
 
 describe('website server', () => {
+  it('does not inherit ambient process configuration in tests', async () => {
+    const response = await fetch(`${baseUrl}/api/health`);
+    const health = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(health, { ok: true });
+  });
+
   it('serves the complete landing page with security headers', async () => {
     const response = await fetch(`${baseUrl}/`);
     const html = await response.text();
@@ -62,6 +75,10 @@ describe('website server', () => {
     assert.equal(config.legal.email, 'support@korrespont.com');
     assert.equal(config.legal.address, 'Paterkamp 11a, 59348 Lüdinghausen, Deutschland');
     assert.equal(config.legal.representatives, 'Karim Mahmoudi and Daniel Nikoulchine');
+    assert.equal(config.legal.version, '2026-07-17');
+    assert.equal(config.legal.reviewApproved, false);
+    assert.equal(config.legal.dataProtectionApproved, false);
+    assert.equal(config.auth.signupReady, false);
     assert.deepEqual(config.checkout, { proMonthly: false, proYearly: false, lifetime: false });
     assert.equal('secretKey' in config, false);
     assert.equal(JSON.stringify(config).includes('sk_test_'), false);
@@ -111,7 +128,10 @@ describe('website server', () => {
     const missing = await fetch(`${baseUrl}/definitely-missing`);
     assert.equal(privacy.status, 200);
     assert.equal(extensionlessPrivacy.status, 200);
-    assert.match(await privacy.text(), /Payments through Stripe/);
+    assert.match(await privacy.text(), /Stripe-Zahlungen/);
+    for (const page of ['/terms', '/imprint', '/withdrawal', '/refund', '/support']) {
+      assert.equal((await fetch(`${baseUrl}${page}`)).status, 200);
+    }
     assert.equal(missing.status, 404);
     assert.match(await missing.text(), /between the frames/);
   });
@@ -122,12 +142,44 @@ describe('website server', () => {
     const jwks = await fetch(`${baseUrl}/api/license/jwks.json`);
     assert.equal(account.status, 200);
     assert.equal(extensionlessAccount.status, 200);
-    assert.match(await account.text(), /One account/);
+    const accountHtml = await account.text();
+    assert.match(accountHtml, /One account/);
+    assert.match(accountHtml, /id="auth-submit"[^>]*disabled/);
+    assert.match(accountHtml, /id="auth-switch"[^>]*disabled/);
+    assert.match(accountHtml, /id="verification-form"/);
+    assert.match(accountHtml, /id="authorize-extension"/);
+    assert.match(accountHtml, /id="open-delete-account"/);
+    assert.match(accountHtml, /id="download-account-data"/);
+    assert.match(accountHtml, /id="delete-account-dialog"/);
+    assert.match(accountHtml, /id="revoke-all-sessions"/);
+    assert.match(accountHtml, /id="session-list"/);
+    assert.match(accountHtml, /id="extension-device-name"/);
+    assert.match(accountHtml, /id="browser-session-count"/);
     assert.equal(jwks.status, 200);
     const body = await jwks.json();
     assert.equal(body.keys.length, 1);
     assert.equal(body.keys[0].alg, 'ES256');
     assert.equal('d' in body.keys[0], false);
+  });
+
+  it('requires authentication before deleting an account', async () => {
+    const response = await fetch(`${baseUrl}/api/account`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        confirmationEmail: 'user@example.com',
+        password: 'correct horse battery staple',
+        acknowledged: true,
+      }),
+    });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).code, 'AUTHENTICATION_REQUIRED');
+  });
+
+  it('requires authentication before exporting an account', async () => {
+    const response = await fetch(`${baseUrl}/api/account/export`);
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).code, 'AUTHENTICATION_REQUIRED');
   });
 
   it('serves the local Lucide icon library assets', async () => {

@@ -8,13 +8,13 @@
 </head>
 <body>
   <header class="site-header">
-    <a class="brand" href="#top" aria-label="AniWebScale settings home"><img src="icons/icon128.png" alt="" width="40" height="40"><span>AniWebScale</span></a>
-    <button class="menu-button" type="button" aria-expanded="false" aria-controls="settings-nav"><span></span><span></span><span></span><span class="sr-only">Open menu</span></button>
+    <a class="brand" href="#top" aria-label="AniWebScale settings home" data-i18n-aria-label="settingsHome"><img src="icons/icon128.png" alt="" width="40" height="40"><span>AniWebScale</span></a>
+    <button class="menu-button" type="button" aria-expanded="false" aria-controls="settings-nav"><span></span><span></span><span></span><span class="sr-only" data-i18n="openMenu">Open menu</span></button>
     <nav id="settings-nav" aria-label="Settings navigation">
-      <a href="#account">Account</a>
-      <a class="active" href="#enhancement">Enhancement</a>
-      <a href="#permissions">Permissions</a>
-      <a href="#appearance">Appearance</a>
+      <a href="#account" data-i18n="account">Account</a>
+      <a class="active" href="#enhancement" data-i18n="enhancement">Enhancement</a>
+      <a href="#permissions" data-i18n="permissions">Permissions</a>
+      <a href="#appearance" data-i18n="appearance">Appearance</a>
     </nav>
     <div class="header-actions">
       <button id="theme-toggle" class="theme-button" type="button" aria-label="Switch to dark theme">
@@ -48,7 +48,7 @@
 
     <div class="section-intro" id="account">
       <span class="heading-icon mint" aria-hidden="true">&#9825;</span>
-      <h2>Account &amp; license</h2>
+      <h2 data-i18n="accountLicense">Account &amp; license</h2>
     </div>
     <section class="card account-card">
       <div class="account-copy">
@@ -58,26 +58,25 @@
         <strong id="account-email"></strong>
       </div>
       <div id="account-auth" class="account-auth">
-        <label><span>Email</span><input id="account-email-input" type="email" autocomplete="email"></label>
-        <label><span>Password</span><input id="account-password" type="password" autocomplete="current-password" minlength="8"></label>
-        <div class="account-buttons"><button id="account-sign-in" class="primary" type="button">Sign in</button><button id="account-sign-up" class="outline" type="button">Create account</button></div>
+        <p class="note">Sign in on the AniWebScale website. Your password is never entered into or stored by the extension.</p>
+        <div class="account-buttons"><button id="account-sign-in" class="primary" type="button" data-i18n="signInSecurely">Sign in securely</button><button id="account-sign-up" class="outline" type="button" data-i18n="createAccount">Create account</button></div>
       </div>
       <div id="account-session" class="account-session" hidden>
-        <button id="account-refresh" class="outline" type="button">Refresh license</button>
-        <button id="account-sign-out" class="outline" type="button">Sign out</button>
+        <button id="account-refresh" class="outline" type="button" data-i18n="refreshLicense">Refresh license</button>
+        <button id="account-sign-out" class="outline" type="button" data-i18n="signOut">Sign out</button>
       </div>
-      <button id="account-upgrade" class="outline" type="button">View plans &amp; billing</button>
+      <button id="account-upgrade" class="outline" type="button" data-i18n="viewPlansBilling">View plans &amp; billing</button>
       <p id="account-status" class="note" role="status" aria-live="polite"></p>
     </section>
 
     <div class="section-intro" id="enhancement">
       <span class="heading-icon lavender" aria-hidden="true">&#10022;</span>
-      <h2>Enhancement</h2>
+      <h2 data-i18n="enhancement">Enhancement</h2>
     </div>
     <section class="card enhancement-card">
       <div class="card-main">
         <div class="settings-grid">
-          <label class="mode-select-field"><span>Enhancement mode</span>
+          <label class="mode-select-field"><span data-i18n="enhancementMode">Enhancement mode</span>
             <select id="mode">
               <option value="OFF">Off</option>
               <optgroup label="Anime4K presets">
@@ -85,12 +84,12 @@
                 <option value="AA">A+A</option><option value="BB">B+B</option><option value="CA">C+A</option>
               </optgroup>
               <optgroup label="AI upscaling">
-                <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option><option value="ANIMEJANAI">AnimeJaNai HD x2 (Performance)</option>
+                <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option>
               </optgroup>
             </select>
           </label>
-          <label><span>Quality</span><select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select></label>
-          <label><span>Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
+          <label><span data-i18n="quality">Quality</span><select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select></label>
+          <label><span data-i18n="backend">Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
         </div>
         <div class="mode-summary">
           <p id="mode-description"></p>
@@ -98,7 +97,7 @@
         </div>
 
         <div class="toggle-list">
-          <label class="check"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong>Frame generation</strong><small>Generate a motion-aware intermediate frame for 2x frame rate.</small></span></label>
+          <label class="check"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong>Frame generation</strong><small id="frame-generation-description">Generate a motion-aware intermediate frame for 2x frame rate.</small></span></label>
           <label class="check"><input id="auto-fullscreen" type="checkbox"><span class="check-control"></span><span><strong>Automatic fullscreen</strong><small>Start enhancing as soon as a video player enters fullscreen.</small></span></label>
           <label class="check"><input id="statistics" type="checkbox"><span class="check-control"></span><span><strong>Real-time statistics</strong><small>Show FPS, render time and dropped frames over the video.</small></span></label>
         </div>
@@ -114,25 +113,30 @@
 
     <div class="section-intro" id="permissions">
       <span class="heading-icon blue" aria-hidden="true">&#9671;</span>
-      <h2>Native renderer permissions</h2>
+      <h2 data-i18n="sitePermissions">Website permissions</h2>
     </div>
     <section class="card permission-card">
-      <div><h3>Trusted sites</h3><p class="note">Permission is requested once per site and stored only on this computer.</p></div>
+      <div><h3 data-i18n="websiteAccess">Website access</h3><p class="note" data-i18n="websiteAccessDescription">AniWebScale runs only on sites you explicitly allow from the popup.</p></div>
+      <div id="website-sites"></div>
+      <button id="clear-website-sites" class="outline" type="button" data-i18n="clearWebsiteAccess">Clear website access</button>
+    </section>
+    <section class="card permission-card">
+      <div><h3 data-i18n="nativeRendererPermissions">Native renderer permissions</h3><p class="note">Permission is requested once per site and stored only on this computer.</p></div>
       <div id="native-sites"></div>
-      <button id="clear-native-sites" class="outline" type="button">Clear all permissions</button>
+      <button id="clear-native-sites" class="outline" type="button" data-i18n="clearPermissions">Clear all permissions</button>
     </section>
 
     <div class="section-intro" id="appearance">
       <span class="heading-icon pink" aria-hidden="true">&#9788;</span>
-      <h2>Appearance</h2>
+      <h2 data-i18n="appearance">Appearance</h2>
     </div>
     <section class="card appearance-card">
-      <div><h3>Theme</h3><p class="note">Follow your system or choose your favorite atmosphere.</p></div>
-      <label class="theme-field"><span>Color theme</span><select id="theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      <div><h3 data-i18n="theme">Theme</h3><p class="note">Follow your system or choose your favorite atmosphere.</p></div>
+      <label class="theme-field"><span data-i18n="colorTheme">Color theme</span><select id="theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
     </section>
 
     <div class="actions">
-      <button id="save" class="primary" type="button">Save settings <span aria-hidden="true">&#10022;</span></button>
+      <button id="save" class="primary" type="button"><span data-i18n="saveSettings">Save settings</span> <span aria-hidden="true">&#10022;</span></button>
       <div id="status" role="status" aria-live="polite"></div>
     </div>
     <footer>AniWebScale <span id="version"></span><i></i>MIT-licensed shaders<i></i>No telemetry</footer>

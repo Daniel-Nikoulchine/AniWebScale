@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, expect, test as base, type BrowserContext, type Page } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 const EXTENSION_ID = 'dlomjcbmgkfaebhplgoihbjfclaagike';
 const OVERLAY_SELECTOR = '[data-anime4k-overlay-host]';
@@ -30,14 +31,19 @@ const test = base.extend<TestFixtures, WorkerFixtures>({
     const profileRoot = path.join(workspace, '.tmp', 'e2e-profiles');
     await mkdir(profileRoot, { recursive: true });
     const profile = await mkdtemp(path.join(profileRoot, 'chromium-'));
+    if (!path.resolve(profile).startsWith(`${profileRoot}${path.sep}`)) {
+      throw new Error(`Refusing to use unexpected E2E profile path: ${profile}`);
+    }
     const context = await chromium.launchPersistentContext(profile, {
       executablePath: browserExecutable,
       channel: process.env.E2E_CHROMIUM_BINARY ? undefined : 'chromium',
       headless: process.env.E2E_HEADED !== '1',
+      locale: 'en-US',
       viewport: { width: 1280, height: 900 },
       args: [
         `--disable-extensions-except=${extensionPath}`,
         `--load-extension=${extensionPath}`,
+        '--lang=en-US',
         '--autoplay-policy=no-user-gesture-required',
         '--enable-unsafe-webgpu',
         '--ignore-gpu-blocklist',
@@ -47,9 +53,6 @@ const test = base.extend<TestFixtures, WorkerFixtures>({
       await use(context);
     } finally {
       await context.close();
-      if (!path.resolve(profile).startsWith(`${profileRoot}${path.sep}`)) {
-        throw new Error(`Refusing to remove unexpected E2E profile path: ${profile}`);
-      }
       await rm(profile, { recursive: true, force: true });
     }
   }, { scope: 'worker' }],
@@ -60,6 +63,13 @@ const test = base.extend<TestFixtures, WorkerFixtures>({
     await page.close();
   },
 });
+
+function requireOrSkipCapability(available: boolean, message: string): void {
+  if (!available && process.env.ANIME4K_REQUIRE_E2E_CAPABILITIES === '1') {
+    throw new Error(`Required E2E capability is unavailable: ${message}`);
+  }
+  test.skip(!available, message);
+}
 
 async function waitForExtension(context: BrowserContext, page: Page): Promise<void> {
   await page.goto('/media.html');
@@ -75,6 +85,21 @@ async function waitForExtension(context: BrowserContext, page: Page): Promise<vo
     );
   }
 }
+
+test('popup, settings and onboarding have no serious accessibility violations', async ({ extensionContext }) => {
+  for (const pageName of ['popup.html', 'options.html', 'onboarding.html']) {
+    const page = await extensionContext.newPage();
+    try {
+      await page.goto(`chrome-extension://${EXTENSION_ID}/${pageName}`);
+      await page.waitForLoadState('domcontentloaded');
+      const results = await new AxeBuilder({ page }).analyze();
+      const violations = results.violations.filter(({ impact }) => impact === 'serious' || impact === 'critical');
+      expect(violations, `${pageName} has serious accessibility violations`).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  }
+});
 
 async function setExtensionSettings(
   context: BrowserContext,
@@ -100,11 +125,35 @@ async function setExtensionSettings(
         expiresAt: Date.now() + 3_600_000,
       },
     });
-    await chrome.storage.sync.set({
+    await chrome.storage.local.set({
       extensionEnabled: true, mode: 'A', quality: 'M', output: 'auto', backend: 'webgpu', statsEnabled: true,
       autoFullscreenEnabled: enabled, frameGenerationEnabled: false, ...settingsOverrides,
     });
   }, { enabled: autoFullscreenEnabled, settingsOverrides: overrides });
+}
+
+async function setFreeExtensionSettings(context: BrowserContext): Promise<void> {
+  let worker = context.serviceWorkers().find(item => item.url().startsWith(`chrome-extension://${EXTENSION_ID}/`));
+  if (!worker) {
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${EXTENSION_ID}/options.html`);
+    worker = context.serviceWorkers().find(item => item.url().startsWith(`chrome-extension://${EXTENSION_ID}/`));
+    await extensionPage.close();
+  }
+  if (!worker) throw new Error(`The expected extension service worker ${EXTENSION_ID} is not running.`);
+  await worker.evaluate(async () => {
+    await chrome.storage.local.remove('aniwebscaleVerifiedLicenseV1');
+    await chrome.storage.local.set({
+      extensionEnabled: true,
+      mode: 'A',
+      quality: 'M',
+      output: 'auto',
+      backend: 'webgpu',
+      statsEnabled: true,
+      autoFullscreenEnabled: true,
+      frameGenerationEnabled: false,
+    });
+  });
 }
 
 test.beforeEach(async ({ extensionContext, extensionPage }) => {
@@ -215,7 +264,6 @@ test('presents enhancement modes with readable names and relevant controls', asy
       'ArtCNN C4F16 2x - Line/detail reconstruction (GPU: real-time)',
       'ACNet F8B4 2x - Fast lightweight upscale (GPU: very light)',
       'ARNet F8B8 2x - Strong detail recovery (GPU: balanced)',
-      'AnimeJaNai HD 2x - High-quality restoration (GPU: very high)',
     ]);
     expect(await mode.locator('option').evaluateAll((options) =>
       options.every((option) => (option as HTMLOptionElement).title.length > 60),
@@ -249,6 +297,52 @@ test('presents enhancement modes with readable names and relevant controls', asy
   }
 });
 
+test('makes Free plan limits explicit wherever enhancement features are selected', async ({ extensionContext }) => {
+  await setFreeExtensionSettings(extensionContext);
+
+  const popup = await extensionContext.newPage();
+  try {
+    await popup.goto(`chrome-extension://${EXTENSION_ID}/popup.html`);
+    await expect(popup.locator('#account-plan strong')).toHaveText('Free');
+    await expect(popup.locator('#account-plan-summary')).toContainText('Free: Anime4K + WebGPU');
+    await expect(popup.locator('#account-plan-summary')).toContainText('Pro: AI, Native + Frame Gen');
+    await expect(popup.locator('#mode option[value="ARTCNN"]')).toHaveAttribute('disabled', '');
+    await expect(popup.locator('#mode option[value="ARTCNN"]')).toContainText('— Pro');
+    await expect(popup.locator('#backend option[value="auto"]')).toHaveText('Auto — Pro');
+    await expect(popup.locator('#backend option[value="native"]')).toHaveText('Native Windows renderer — Pro');
+    await expect(popup.locator('#frame-generation')).toBeDisabled();
+    await expect(popup.locator('#frame-generation-description')).toContainText('Pro feature');
+  } finally {
+    await popup.close();
+  }
+
+  const options = await extensionContext.newPage();
+  try {
+    await options.goto(`chrome-extension://${EXTENSION_ID}/options.html`);
+    await expect(options.locator('#account-plan')).toHaveText('Free');
+    await expect(options.locator('#account-details')).toContainText('require Pro');
+    await expect(options.locator('#account-upgrade')).toHaveText('Unlock Pro features');
+    await expect(options.locator('#compatibility-hint')).toContainText('Free plan active');
+    await expect(options.locator('#mode option[value="ARTCNN"]')).toHaveAttribute('disabled', '');
+    await expect(options.locator('#mode option[value="ARTCNN"]')).toContainText('— Pro');
+    await expect(options.locator('#frame-generation-description')).toContainText('Pro feature');
+  } finally {
+    await options.close();
+  }
+
+  const onboarding = await extensionContext.newPage();
+  try {
+    await onboarding.goto(`chrome-extension://${EXTENSION_ID}/onboarding.html`);
+    await expect(onboarding.locator('#plan-hint')).toContainText('Free plan');
+    await expect(onboarding.locator('#plan-hint')).toContainText('require Pro');
+    await expect(onboarding.locator('#mode option[value="ARTCNN"]')).toHaveAttribute('disabled', '');
+    await expect(onboarding.locator('#backend option[value="native"]')).toHaveText('Native Windows renderer — Pro');
+    await expect(onboarding.locator('#frame-generation')).toBeDisabled();
+  } finally {
+    await onboarding.close();
+  }
+});
+
 test('shows the official AniWebScale logo in the settings hero', async ({ extensionContext }) => {
   const options = await extensionContext.newPage();
   try {
@@ -274,7 +368,7 @@ test('shows the official AniWebScale logo in the settings hero', async ({ extens
     await expect(root).toHaveAttribute('data-theme', nextTheme);
     await expect(root).toHaveClass(new RegExp(`(?:^|\\s)${nextTheme}(?:\\s|$)`));
     await expect(themeSelect).toHaveValue(nextTheme);
-    expect(await options.evaluate(async () => (await chrome.storage.sync.get('theme')).theme)).toBe(nextTheme);
+    expect(await options.evaluate(async () => (await chrome.storage.local.get('theme')).theme)).toBe(nextTheme);
     await themeSelect.selectOption(storedTheme);
     await expect(root).toHaveAttribute('data-theme', effectiveTheme);
 
@@ -412,12 +506,12 @@ test('keeps DOM subtitles and website controls available above the player', asyn
 test('starts only in player fullscreen, remains stable, and stops after exit', async ({ extensionContext, extensionPage: page }) => {
   test.setTimeout(90_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
-  test.skip(!hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
   await setExtensionSettings(extensionContext);
   await page.goto('/layers.html');
   await expect(page.locator(OVERLAY_SELECTOR)).toHaveCount(1);
   const enabled = await page.evaluate(() => document.fullscreenEnabled);
-  test.skip(!enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
+  requireOrSkipCapability(enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
   await page.locator('#enter-fullscreen').click();
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id)).toBe('player');
   await expect(page.locator('#layer-video')).toHaveAttribute('data-anime4k-applied', 'true', { timeout: 60_000 });
@@ -439,18 +533,18 @@ test('starts only in player fullscreen, remains stable, and stops after exit', a
   )).toBe(true);
 });
 
-for (const mode of ['ARTCNN', 'ACNET', 'ARNET', 'ANIMEJANAI'] as const) {
+for (const mode of ['ARTCNN', 'ACNET', 'ARNET'] as const) {
 test(`runs ${mode} with frame generation through WebGPU`, async ({ extensionContext, extensionPage: page }) => {
   test.setTimeout(180_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
-  test.skip(!hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
   await setExtensionSettings(extensionContext, true, {
     mode,
     frameGenerationEnabled: true,
   });
   await page.goto('/layers.html');
   const enabled = await page.evaluate(() => document.fullscreenEnabled);
-  test.skip(!enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
+  requireOrSkipCapability(enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
 
   await page.locator('#enter-fullscreen').click();
   const startup = await page.waitForFunction(() => {
@@ -477,7 +571,7 @@ for (const mode of ['A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2'] as const) {
   test(`runs ${mode} with frame generation through WebGPU`, async ({ extensionContext, extensionPage: page }) => {
     test.setTimeout(90_000);
     const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
-    test.skip(!hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+    requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
     await setExtensionSettings(extensionContext, true, {
       mode,
       quality: 'M',
@@ -485,7 +579,7 @@ for (const mode of ['A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2'] as const) {
     });
     await page.goto('/layers.html');
     const enabled = await page.evaluate(() => document.fullscreenEnabled);
-    test.skip(!enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
+    requireOrSkipCapability(enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
 
     await page.locator('#enter-fullscreen').click();
     await expect(page.locator('#layer-video')).toHaveAttribute('data-anime4k-applied', 'true', { timeout: 60_000 });
@@ -502,11 +596,11 @@ for (const mode of ['A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2'] as const) {
 test('redirects a direct video fullscreen request before automatic WebGPU startup', async ({ extensionContext, extensionPage: page }) => {
   test.setTimeout(90_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
-  test.skip(!hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
   await setExtensionSettings(extensionContext);
   await page.goto('/layers.html');
   const enabled = await page.evaluate(() => document.fullscreenEnabled);
-  test.skip(!enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
+  requireOrSkipCapability(enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
 
   await expect(page.locator('#layer-video')).toHaveAttribute('data-anime4k-auto-fullscreen', 'true');
   await expect(page.locator('#layer-video')).not.toHaveAttribute('data-anime4k-applied', 'true');
@@ -524,7 +618,7 @@ test('redirects a direct video fullscreen request before automatic WebGPU startu
 test('normalizes a broad page fullscreen to the compact player surface', async ({ extensionContext, extensionPage: page }) => {
   test.setTimeout(90_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
-  test.skip(!hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
   await setExtensionSettings(extensionContext);
   await page.goto('/layers.html');
   await page.locator('#enter-page-fullscreen').click();
@@ -553,7 +647,7 @@ test('normalizes a broad page fullscreen to the compact player surface', async (
 test('enforces one automatic renderer while fullscreen moves between videos', async ({ extensionContext, extensionPage: page }) => {
   test.setTimeout(90_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
-  test.skip(!hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
   await setExtensionSettings(extensionContext);
   await page.goto('/media.html');
   await expect(page.locator(OVERLAY_SELECTOR)).toHaveCount(3);
@@ -573,7 +667,7 @@ test('enforces one automatic renderer while fullscreen moves between videos', as
 test('releases WebGPU and overlay state across twenty real start-stop cycles', async ({ extensionContext, extensionPage: page }) => {
   test.setTimeout(240_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
-  test.skip(!hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
   await setExtensionSettings(extensionContext);
   await page.goto('/layers.html');
   await expect(page.locator(OVERLAY_SELECTOR)).toHaveCount(1);
@@ -610,7 +704,7 @@ test('runs frame generation without enhancement effects when mode is Off', async
   });
   await page.goto('/layers.html');
   const enabled = await page.evaluate(() => document.fullscreenEnabled);
-  test.skip(!enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
+  requireOrSkipCapability(enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
 
   await page.locator('#enter-fullscreen').click();
   await expect(page.locator('#layer-video')).toHaveAttribute('data-anime4k-applied', 'true', { timeout: 60_000 });

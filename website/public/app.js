@@ -16,20 +16,22 @@ function showToast(message) {
 }
 
 function preferredTheme() {
-  const saved = localStorage.getItem('aniwebscale-theme') || localStorage.getItem('anime4k-theme');
+  const saved = localStorage.getItem('aniwebscale-theme');
   if (saved === 'light' || saved === 'dark') return saved;
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-function setTheme(theme) {
+function setTheme(theme, persist = false) {
   root.dataset.theme = theme;
-  localStorage.setItem('aniwebscale-theme', theme);
+  if (persist) localStorage.setItem('aniwebscale-theme', theme);
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#20263a' : '#fffaf3');
   document.querySelector('.theme-button')?.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
 }
 
 setTheme(preferredTheme());
-document.querySelector('.theme-button')?.addEventListener('click', () => setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'));
+document.querySelector('.theme-button')?.addEventListener('click', () => {
+  setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark', true);
+});
 
 menuButton?.addEventListener('click', () => {
   const open = menuButton.getAttribute('aria-expanded') !== 'true';

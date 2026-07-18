@@ -20,12 +20,10 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 
 namespace anime4k::renderer {
 
 class Anime4KPipeline;
-class AnimeJanaiPipeline;
 class FrameGenerationPipeline;
 
 struct StartOptions {
@@ -63,19 +61,15 @@ class CaptureRenderer {
   static constexpr UINT kCaptureClosedMessage = WM_APP + 11;
   static constexpr UINT kCaptureResizeMessage = WM_APP + 12;
   static constexpr UINT kCaptureResizeDispatchFailedMessage = WM_APP + 13;
-  static constexpr UINT kNeuralFrameCompleteMessage = WM_APP + 14;
   static constexpr UINT_PTR kExitFullscreenTimer = 1;
   static constexpr UINT_PTR kGeneratedFrameTimer = 2;
   static constexpr int kEscapeHotkeyId = 0xA4E1;
   void render_latest_frame(std::uint64_t capture_generation);
   void render_generated_frame();
-  void finish_neural_frame(std::uint64_t neural_job_generation);
   void handle_capture_closed(std::uint64_t capture_generation);
   void handle_capture_resize_dispatch_failure(std::uint64_t capture_generation);
 
  private:
-  struct NeuralFrameCompletion;
-
   [[nodiscard]] bool initialize_d3d(std::string& error);
   [[nodiscard]] bool initialize_output_window(HWND source_window, std::string& error);
   [[nodiscard]] bool initialize_capture(HWND source_window, std::string& error);
@@ -149,16 +143,9 @@ class CaptureRenderer {
   Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> latest_view_;
   Microsoft::WRL::ComPtr<ID3D11Texture2D> capture_probe_texture_;
   std::unique_ptr<Anime4KPipeline> anime4k_pipeline_;
-  std::unique_ptr<AnimeJanaiPipeline> animejanai_pipeline_;
   std::unique_ptr<FrameGenerationPipeline> frame_generation_pipeline_;
   std::mutex frame_callback_mutex_;
   std::mutex d3d_mutex_;
-  std::jthread neural_worker_;
-  std::atomic_bool neural_processing_{false};
-  std::atomic_bool neural_frame_waiting_{false};
-  std::unique_ptr<NeuralFrameCompletion> neural_completion_;
-  std::uint64_t neural_job_generation_{};
-  std::uint64_t configuration_generation_{};
 
   winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice winrt_device_{nullptr};
   winrt::Windows::Graphics::Capture::GraphicsCaptureItem capture_item_{nullptr};

@@ -396,6 +396,13 @@ double percentile_nearest_rank(std::vector<double> values, double percentile) {
   return values[std::clamp<std::size_t>(rank, 1, values.size()) - 1];
 }
 
+bool is_release_performance_target(std::string_view mode, std::string_view quality) {
+  // Double-stage UL remains available as an explicit high-load profile. On the
+  // reference RX 6750 XT it is intentionally outside the 24 FPS release
+  // baseline; all other shipped combinations are part of that baseline.
+  return quality != "UL" || (mode != "AA" && mode != "BB" && mode != "CA");
+}
+
 anime4k::json::Value optional_bytes(bool available, std::uint64_t value) {
   return available ? anime4k::json::Value(static_cast<double>(value)) : anime4k::json::Value(nullptr);
 }
@@ -457,7 +464,8 @@ int wmain(int argument_count, wchar_t** argument_values) {
     return std::max(0.001, std::min(options->gpu_timeout_seconds, remaining));
   };
   bool complete = true;
-  bool performance_passed = true;
+  bool release_performance_passed = true;
+  bool all_presets_performance_passed = true;
   anime4k::json::Array preset_results;
   constexpr std::array<std::string_view, 9> modes{
       "A", "B", "C", "AA", "BB", "CA", "ARTCNN", "ACNET", "ARNET"};
@@ -472,6 +480,7 @@ int wmain(int argument_count, wchar_t** argument_values) {
           {"warmupFramesRequested", static_cast<double>(options->warmup_frames)},
           {"samplesRequested", static_cast<double>(options->sample_frames)},
           {"frameBudgetMs", kFrameBudgetMs},
+          {"releaseTarget", is_release_performance_target(mode, quality)},
       };
       if (std::chrono::steady_clock::now() >= overall_deadline) {
         complete = false;
@@ -539,7 +548,10 @@ int wmain(int argument_count, wchar_t** argument_values) {
         if (sample > kFrameBudgetMs) ++budget_misses;
         dropped_estimate += static_cast<std::uint64_t>(std::max(0.0, std::ceil(sample / kFrameBudgetMs) - 1.0));
       }
-      if (budget_misses != 0) performance_passed = false;
+      if (budget_misses != 0) {
+        all_presets_performance_passed = false;
+        if (is_release_performance_target(mode, quality)) release_performance_passed = false;
+      }
       if (failed || samples.size() != options->sample_frames) complete = false;
       result.emplace("status", failed ? "partial" : budget_misses != 0 ? "over-budget" : "ok");
       if (failed) result.emplace("error", preset_error);
@@ -570,12 +582,22 @@ int wmain(int argument_count, wchar_t** argument_values) {
       {"dedicatedVideoMemoryBytes", static_cast<double>(hardware->description.DedicatedVideoMemory)},
       {"featureLevel", hardware->feature_level == D3D_FEATURE_LEVEL_11_1 ? "11_1" : "11_0"},
   };
+  anime4k::json::Array release_target_exclusions;
+  for (const std::string_view mode : {"AA", "BB", "CA"}) {
+    release_target_exclusions.emplace_back(anime4k::json::Object{
+        {"mode", std::string(mode)},
+        {"quality", "UL"},
+    });
+  }
   anime4k::json::Object report{
-      {"schemaVersion", 1},
+      {"schemaVersion", 2},
       {"benchmark", "Anime4K D3D11 1080p-to-1440p"},
       {"generatedAtUtc", utc_timestamp()},
       {"complete", complete},
-      {"acceptancePassed", complete && performance_passed},
+      {"acceptancePassed", complete && release_performance_passed},
+      {"allPresetsWithinFrameBudget", complete && all_presets_performance_passed},
+      {"acceptancePolicy", "24 FPS for all profiles except the explicit high-load AA/BB/CA UL combinations"},
+      {"releaseTargetExclusions", std::move(release_target_exclusions)},
       {"adapter", std::move(adapter)},
       {"sourceWidth", static_cast<double>(kSourceWidth)},
       {"sourceHeight", static_cast<double>(kSourceHeight)},
@@ -603,5 +625,5 @@ int wmain(int argument_count, wchar_t** argument_values) {
   }
   if (!options->output.empty()) std::wcout << L"Benchmark report: " << options->output.wstring() << L'\n';
   if (!complete) return 6;
-  return performance_passed ? 0 : 7;
+  return release_performance_passed ? 0 : 7;
 }

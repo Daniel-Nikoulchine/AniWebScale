@@ -255,7 +255,7 @@ class RendererApplication {
           {"d3d11", true},
           {"modes", anime4k::json::Array{
               "OFF", "A", "B", "C", "AA", "BB", "CA", "CNNX2",
-              "ARTCNN", "ACNET", "ARNET", "ANIMEJANAI"}},
+              "ARTCNN", "ACNET", "ARNET"}},
           {"qualities", anime4k::json::Array{"M", "VL", "UL"}},
           {"frameGeneration", true},
       });

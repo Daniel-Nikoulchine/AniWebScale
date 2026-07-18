@@ -10,7 +10,7 @@ import {
 
 describe('native messaging protocol', () => {
   it('validates all modes, qualities, configurations, and 128-bit nonces', () => {
-    for (const mode of ['OFF', 'A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'ANIMEJANAI']) {
+    for (const mode of ['OFF', 'A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2', 'ARTCNN', 'ACNET', 'ARNET']) {
       expect(isNativeEnhancementMode(mode)).toBe(true);
     }
     expect(isNativeEnhancementMode('GANX3')).toBe(false);
@@ -20,7 +20,6 @@ describe('native messaging protocol', () => {
     expect(isNativeQuality('L')).toBe(false);
     expect(isNativeConfiguration({ mode: 'OFF', quality: 'M', frameGenerationEnabled: true })).toBe(true);
     expect(isNativeConfiguration({ mode: 'REALESRGANX4', quality: 'UL', frameGenerationEnabled: false })).toBe(false);
-    expect(isNativeConfiguration({ mode: 'ANIMEJANAI', quality: 'M', frameGenerationEnabled: false })).toBe(true);
     expect(isNativeConfiguration({ mode: 'BB', quality: 'M' })).toBe(false);
     expect(isNativeConfiguration({ mode: 'BB', quality: 'L', frameGenerationEnabled: false })).toBe(false);
     expect(isWindowNonce('0123456789abcdef0123456789abcdef')).toBe(true);
@@ -34,7 +33,7 @@ describe('native messaging protocol', () => {
       requestId: 'request-1',
       windowsCapture: true,
       d3d11: true,
-      modes: ['OFF', 'A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'ANIMEJANAI'],
+      modes: ['OFF', 'A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2', 'ARTCNN', 'ACNET', 'ARNET'],
       qualities: ['M', 'VL', 'UL'],
       frameGeneration: true,
     })).toBe(true);

@@ -145,7 +145,10 @@ dist
 *.pem
 /img
 /dist*
-/artifacts/
+/artifacts/*
+!/artifacts/native-rx6750xt-benchmark.json
+!/artifacts/shader-golden-report.json
+/backups/
 /.generated/
 /native/build*/
 /.tmp/

@@ -36,7 +36,7 @@ describe('settings migration', () => {
       quality: 'VL',
       output: 'auto',
       backend: 'auto',
-      statsEnabled: true,
+      statsEnabled: false,
       autoFullscreenEnabled: true,
       frameGenerationEnabled: false,
       hasCompletedOnboarding: false,
@@ -45,11 +45,11 @@ describe('settings migration', () => {
 
   it('preserves AI modes and frame generation settings', () => {
     expect(normalizeLegacySettings({
-      mode: 'ANIMEJANAI',
+      mode: 'ARTCNN',
       quality: 'M',
       frameGenerationEnabled: true,
     }, {})).toMatchObject({
-      mode: 'ANIMEJANAI',
+      mode: 'ARTCNN',
       frameGenerationEnabled: true,
     });
   });
@@ -74,4 +74,5 @@ describe('settings migration', () => {
   it('resets the removed Real-ESRGAN mode to the safe default', () => {
     expect(normalizeLegacySettings({ mode: 'REALESRGANX4' }, {})).toMatchObject({ mode: 'A' });
   });
+
 });

@@ -1,44 +1,49 @@
 import pg from 'pg';
 
-const { Pool } = pg;
+const { Client } = pg;
 
-export function createDatabase(connectionString = process.env.DATABASE_URL || '') {
-  const pool = connectionString
-    ? new Pool({
-        connectionString,
-        max: 4,
-        idleTimeoutMillis: 30_000,
-        connectionTimeoutMillis: 10_000,
-        application_name: 'aniwebscale-website',
-      })
-    : null;
+export function createDatabase(
+  connectionString = process.env.DATABASE_URL || '',
+  ClientClass = Client,
+) {
+  const configured = Boolean(connectionString);
+
+  async function withClient(callback) {
+    if (!configured) throw new Error('DATABASE_NOT_CONFIGURED');
+    const client = new ClientClass({
+      connectionString,
+      connectionTimeoutMillis: 10_000,
+      application_name: 'aniwebscale-website',
+    });
+    await client.connect();
+    try {
+      return await callback(client);
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+  }
 
   return {
-    configured: Boolean(pool),
+    configured,
 
     async query(text, values = []) {
-      if (!pool) throw new Error('DATABASE_NOT_CONFIGURED');
-      return pool.query(text, values);
+      return withClient(client => client.query(text, values));
     },
 
     async transaction(callback) {
-      if (!pool) throw new Error('DATABASE_NOT_CONFIGURED');
-      const client = await pool.connect();
-      try {
+      return withClient(async client => {
         await client.query('BEGIN');
-        const result = await callback((text, values = []) => client.query(text, values));
-        await client.query('COMMIT');
-        return result;
-      } catch (error) {
-        await client.query('ROLLBACK').catch(() => undefined);
-        throw error;
-      } finally {
-        client.release();
-      }
+        try {
+          const result = await callback((text, values = []) => client.query(text, values));
+          await client.query('COMMIT');
+          return result;
+        } catch (error) {
+          await client.query('ROLLBACK').catch(() => undefined);
+          throw error;
+        }
+      });
     },
 
-    async close() {
-      if (pool) await pool.end();
-    },
+    async close() {},
   };
 }

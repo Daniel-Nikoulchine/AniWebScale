@@ -18,7 +18,12 @@ module.exports = {
       exclude: /node_modules/,
     }],
   },
-  resolve: { extensions: ['.ts', '.js'] },
+  resolve: {
+    extensions: ['.ts', '.js'],
+    alias: {
+      'anime4k-webgpu/core$': path.resolve(__dirname, '../../node_modules/anime4k-webgpu/lib/index.js'),
+    },
+  },
   optimization: { minimize: false },
   devtool: false,
 };

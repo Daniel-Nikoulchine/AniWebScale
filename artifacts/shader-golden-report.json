@@ -1,0 +1,719 @@
+{
+  "schemaVersion": 2,
+  "passed": true,
+  "fixture": {
+    "source": "deterministic-rgba8-96x54",
+    "targets": {
+      "twoX": "192x108",
+      "fourX": "384x216"
+    },
+    "comparisonChannels": "clamped RGB",
+    "sha256": "f1a212e149378248b3bf96666b66b1df6bce37aaf2256519638c420ff732ccfa"
+  },
+  "officialReference": {
+    "implementation": "pinned upstream mpv GLSL executed by FFmpeg/libplacebo/Vulkan",
+    "repository": "https://github.com/bloc97/Anime4K",
+    "commit": "7684e9586f8dcc738af08a1cdceb024cc184f426",
+    "identityTransportVerified": true,
+    "manifestSha256": "039142c1ea53e1c027a531b90946a32f894e32a0afdba035b133142453ae0be8",
+    "ffmpegVersion": "ffmpeg version 8.1.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+  },
+  "backends": {
+    "webgpuAdapter": "WebGPU adapter",
+    "d3d11Adapter": "default hardware adapter",
+    "d3d11ExecutableSha256": "c911dd38f46d3333e9ee5767eaa576cb5ae82bea800231dedd095f6c4ac122a4",
+    "webgpuBundleSha256": "9462c2038fff7125f7bbf3d25e331c513172a0c0f37361ced20916b6717361c8"
+  },
+  "thresholds": {
+    "official": {
+      "minimum_ssim": 0.985,
+      "maximum_rmse": 0.035,
+      "maximum_p99_absolute": 0.135
+    },
+    "cross_backend": {
+      "minimum_ssim": 0.995,
+      "maximum_rmse": 0.015,
+      "maximum_p99_absolute": 0.07
+    }
+  },
+  "ssim": "7x7 Gaussian luminance SSIM (sigma 1.5, complete windows)",
+  "comparisons": {
+    "A_M": {
+      "officialShaderSha256": "5cba1f8072258aebf534de34115e6f728ae06f6b22d72c35273ea92fcede89ed",
+      "webgpuVsOfficial": {
+        "ssim": 0.9912427810393192,
+        "rmse": 0.019668283917994696,
+        "mean_absolute": 0.003940031432171242,
+        "p99_absolute": 0.10693522545204848,
+        "maximum_absolute": 0.2710027770227741
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9912415210381176,
+        "rmse": 0.019665971028114716,
+        "mean_absolute": 0.003931633337796674,
+        "p99_absolute": 0.10693522545204848,
+        "maximum_absolute": 0.2710027770227741
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999980546979099,
+        "rmse": 9.678119574403712e-05,
+        "mean_absolute": 2.8559696619157438e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.0009765625
+      },
+      "passed": true
+    },
+    "A_VL": {
+      "officialShaderSha256": "37a5ef51f3941e4756855b9d69c21ae38bc5aea2d40eae033af34de16c04c944",
+      "webgpuVsOfficial": {
+        "ssim": 0.9959569365169161,
+        "rmse": 0.0171313498825059,
+        "mean_absolute": 0.002777642430313959,
+        "p99_absolute": 0.08935683222705426,
+        "maximum_absolute": 0.3212939650568398
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9959579415058626,
+        "rmse": 0.017130232736988334,
+        "mean_absolute": 0.002768762886588089,
+        "p99_absolute": 0.08935683222705426,
+        "maximum_absolute": 0.3212939650568398
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999983705131512,
+        "rmse": 0.00010392166867277115,
+        "mean_absolute": 3.245782199097268e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.0009765625
+      },
+      "passed": true
+    },
+    "A_UL": {
+      "officialShaderSha256": "5e88bde48b5568023b877f06fd91458e294ca8791c4b2d00e2040d5c8f48292d",
+      "webgpuVsOfficial": {
+        "ssim": 0.9948061263122506,
+        "rmse": 0.015176596691369533,
+        "mean_absolute": 0.002469400752346645,
+        "p99_absolute": 0.08789278570134285,
+        "maximum_absolute": 0.4067315607237545
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9948048369094744,
+        "rmse": 0.015175516738495319,
+        "mean_absolute": 0.002459153771707758,
+        "p99_absolute": 0.08789447700894559,
+        "maximum_absolute": 0.4067315607237545
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999979607645202,
+        "rmse": 0.00011547317320259389,
+        "mean_absolute": 3.8006914005358034e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.00146484375
+      },
+      "passed": true
+    },
+    "B_M": {
+      "officialShaderSha256": "aa1ea1ab28af56d4af47f3084e9a8c7713846bc28ea221dc76603ba1c0c7b4ce",
+      "webgpuVsOfficial": {
+        "ssim": 0.9993035477311967,
+        "rmse": 0.0036319802805030196,
+        "mean_absolute": 0.0004248697047014009,
+        "p99_absolute": 0.015138380254825612,
+        "maximum_absolute": 0.09229157129777976
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9993047654821341,
+        "rmse": 0.0036296095904246382,
+        "mean_absolute": 0.0004140493190888947,
+        "p99_absolute": 0.015131972657740134,
+        "maximum_absolute": 0.09229157129777976
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999977877650053,
+        "rmse": 9.803154848886323e-05,
+        "mean_absolute": 2.905006286661321e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.00146484375
+      },
+      "passed": true
+    },
+    "B_VL": {
+      "officialShaderSha256": "eb175660403444e18caa7bef6624f2b41d2b6c499141d9cafc07bc15aad14d03",
+      "webgpuVsOfficial": {
+        "ssim": 0.9995142536951063,
+        "rmse": 0.004381847271173826,
+        "mean_absolute": 0.0004625689510183454,
+        "p99_absolute": 0.013176225013351639,
+        "maximum_absolute": 0.16797618579289697
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9995146091270967,
+        "rmse": 0.004380836964993101,
+        "mean_absolute": 0.00045438077546385925,
+        "p99_absolute": 0.013176225013351639,
+        "maximum_absolute": 0.16797618579289697
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999983847896127,
+        "rmse": 9.868132086642444e-05,
+        "mean_absolute": 2.971534529095324e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.0009765625
+      },
+      "passed": true
+    },
+    "B_UL": {
+      "officialShaderSha256": "3647ecdc1f87559795493005751d16e23084fe040272479c65fa22f36cf7b6cf",
+      "webgpuVsOfficial": {
+        "ssim": 0.99982862954307,
+        "rmse": 0.002522048326546843,
+        "mean_absolute": 0.00020082263468302429,
+        "p99_absolute": 0.0004957840991455242,
+        "maximum_absolute": 0.12549589585955978
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9998296817675686,
+        "rmse": 0.0025190629761538547,
+        "mean_absolute": 0.00019031270803965186,
+        "p99_absolute": 0.0004956276345654542,
+        "maximum_absolute": 0.12548428767786296
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999981663080493,
+        "rmse": 0.00011202386679781943,
+        "mean_absolute": 3.661534944434225e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.00146484375
+      },
+      "passed": true
+    },
+    "C_M": {
+      "officialShaderSha256": "7eb50d896ec3214278636e1a682f89fed20c4df625af2dec2a19688ae1a69b1e",
+      "webgpuVsOfficial": {
+        "ssim": 0.9983376843799936,
+        "rmse": 0.007482030559400342,
+        "mean_absolute": 0.0009670752383311444,
+        "p99_absolute": 0.03564658019092848,
+        "maximum_absolute": 0.22608092437485694
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9983385055532532,
+        "rmse": 0.007481759711044304,
+        "mean_absolute": 0.0009642662715555647,
+        "p99_absolute": 0.03564658019092848,
+        "maximum_absolute": 0.22608092437485694
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999994041491049,
+        "rmse": 3.692515806213208e-05,
+        "mean_absolute": 4.023926738848902e-06,
+        "p99_absolute": 0.0001220703125,
+        "maximum_absolute": 0.00048828125
+      },
+      "passed": true
+    },
+    "C_VL": {
+      "officialShaderSha256": "1c6f4e416fe779c406399fa83c8a2bf53a1c5d3f49d3322394cb0804539abe3a",
+      "webgpuVsOfficial": {
+        "ssim": 0.9968460013123038,
+        "rmse": 0.01012344185484333,
+        "mean_absolute": 0.0014881381765683443,
+        "p99_absolute": 0.055177763134679925,
+        "maximum_absolute": 0.20899186294775696
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9968465033301419,
+        "rmse": 0.010123424392870242,
+        "mean_absolute": 0.0014859046233001124,
+        "p99_absolute": 0.055177427853437044,
+        "maximum_absolute": 0.20899186294775696
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999996347672918,
+        "rmse": 4.113275368576032e-05,
+        "mean_absolute": 5.756140736395439e-06,
+        "p99_absolute": 0.000244140625,
+        "maximum_absolute": 0.00048828125
+      },
+      "passed": true
+    },
+    "C_UL": {
+      "officialShaderSha256": "89e98a48da65f671143e5830f63e1f4440cb77156cecc9edf86356da3a920098",
+      "webgpuVsOfficial": {
+        "ssim": 0.9968516903652667,
+        "rmse": 0.010593413573541424,
+        "mean_absolute": 0.0015648749023686357,
+        "p99_absolute": 0.0551779643034257,
+        "maximum_absolute": 0.24340074870536738
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9968517543617968,
+        "rmse": 0.010593845535754319,
+        "mean_absolute": 0.0015622767378414774,
+        "p99_absolute": 0.0551779643034257,
+        "maximum_absolute": 0.24340074870536738
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999994919699189,
+        "rmse": 4.535882476096391e-05,
+        "mean_absolute": 7.108160497720349e-06,
+        "p99_absolute": 0.000244140625,
+        "maximum_absolute": 0.00048828125
+      },
+      "passed": true
+    },
+    "AA_M": {
+      "officialShaderSha256": "f90e1700e5fa2cdbaeac36bdee130446017c730ea20ae864f827b9264fd0b2f8",
+      "webgpuVsOfficial": {
+        "ssim": 0.9890948194209117,
+        "rmse": 0.024199664866379884,
+        "mean_absolute": 0.005208293441913912,
+        "p99_absolute": 0.1274433508812085,
+        "maximum_absolute": 0.4716868848706798
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9890929286706732,
+        "rmse": 0.024197291814878525,
+        "mean_absolute": 0.005195492394286941,
+        "p99_absolute": 0.1274433508812085,
+        "maximum_absolute": 0.4716868848706798
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999963642900396,
+        "rmse": 0.0001438062283008309,
+        "mean_absolute": 5.399293760642593e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.001953125
+      },
+      "passed": true
+    },
+    "AA_VL": {
+      "officialShaderSha256": "18597a9192779df2d8506817d975913119b802d68b6ff22ea900a1ad5a2d21ef",
+      "webgpuVsOfficial": {
+        "ssim": 0.9958000538070932,
+        "rmse": 0.018154545262803544,
+        "mean_absolute": 0.003033940236288755,
+        "p99_absolute": 0.09447622662270161,
+        "maximum_absolute": 0.3061572984616998
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9958014491855676,
+        "rmse": 0.018152476332179576,
+        "mean_absolute": 0.003022449469927469,
+        "p99_absolute": 0.09398980059557871,
+        "maximum_absolute": 0.3061572984616998
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999963186020606,
+        "rmse": 0.00014488440945405388,
+        "mean_absolute": 5.646685038697082e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.001708984375
+      },
+      "passed": true
+    },
+    "AA_UL": {
+      "officialShaderSha256": "a82d299b52c0f0495a4fb92f08443b2a11af81b0419274429d60cfd43606cbce",
+      "webgpuVsOfficial": {
+        "ssim": 0.9940852053255687,
+        "rmse": 0.016469850227793622,
+        "mean_absolute": 0.0027922028242495624,
+        "p99_absolute": 0.09033423665550855,
+        "maximum_absolute": 0.432367827663653
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9940843872938117,
+        "rmse": 0.01646572057409048,
+        "mean_absolute": 0.00277839516984761,
+        "p99_absolute": 0.09033423665550855,
+        "maximum_absolute": 0.431879546413653
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999964225703994,
+        "rmse": 0.00015343246730862136,
+        "mean_absolute": 6.126633504167997e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.001708984375
+      },
+      "passed": true
+    },
+    "BB_M": {
+      "officialShaderSha256": "29e3d630993b8952669d500b39b4ed96d9fa532884034bb65a65572d896c169f",
+      "webgpuVsOfficial": {
+        "ssim": 0.9996468334348263,
+        "rmse": 0.0026915013030792325,
+        "mean_absolute": 0.000294634993707368,
+        "p99_absolute": 0.004887908774891314,
+        "maximum_absolute": 0.11475186803807125
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9996486386546769,
+        "rmse": 0.0026897474324828357,
+        "mean_absolute": 0.00027764466127096096,
+        "p99_absolute": 0.0048876778033684065,
+        "maximum_absolute": 0.11475186803807125
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.999996341906586,
+        "rmse": 0.00013245452854144458,
+        "mean_absolute": 4.989903040782169e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.00146484375
+      },
+      "passed": true
+    },
+    "BB_VL": {
+      "officialShaderSha256": "5eb908e8543237360d68ea367262fb346d7091f89f4e5a23ea709be39521bef6",
+      "webgpuVsOfficial": {
+        "ssim": 0.9997717204136433,
+        "rmse": 0.00313823185598981,
+        "mean_absolute": 0.0002991646978382931,
+        "p99_absolute": 0.007325589677748545,
+        "maximum_absolute": 0.1967848987540055
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9997728249265968,
+        "rmse": 0.003135732861464502,
+        "mean_absolute": 0.00028754038782442663,
+        "p99_absolute": 0.007326222986762776,
+        "maximum_absolute": 0.19701770687299724
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999964149341016,
+        "rmse": 0.00013106226336556713,
+        "mean_absolute": 4.9906316186481544e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.00146484375
+      },
+      "passed": true
+    },
+    "BB_UL": {
+      "officialShaderSha256": "be51ddb0ae304445c2e302093875a1cc406050d9174e4444d8b5a269f2c99e93",
+      "webgpuVsOfficial": {
+        "ssim": 0.9997797074750402,
+        "rmse": 0.00244954720548245,
+        "mean_absolute": 0.00019116366736812444,
+        "p99_absolute": 0.0006066113139686913,
+        "maximum_absolute": 0.1271897590505074
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9997806193340537,
+        "rmse": 0.0024468584439774487,
+        "mean_absolute": 0.00017908884858338741,
+        "p99_absolute": 0.0004957170428969704,
+        "maximum_absolute": 0.1270719486724651
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999967174034909,
+        "rmse": 0.00014477744155792495,
+        "mean_absolute": 5.659415988335884e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.001953125
+      },
+      "passed": true
+    },
+    "CA_M": {
+      "officialShaderSha256": "8a1fc8702f1cf16556f39f842e1c69fc77a8ed287456b6d99da62ff8475d9f17",
+      "webgpuVsOfficial": {
+        "ssim": 0.9966592818338568,
+        "rmse": 0.011636272205178275,
+        "mean_absolute": 0.0017869536314189893,
+        "p99_absolute": 0.05883065227550166,
+        "maximum_absolute": 0.3427805752651255
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.996661402804978,
+        "rmse": 0.011635556283480912,
+        "mean_absolute": 0.0017786635311052802,
+        "p99_absolute": 0.05908386412079425,
+        "maximum_absolute": 0.3427805752651255
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999984664851659,
+        "rmse": 7.217730294273559e-05,
+        "mean_absolute": 1.6184456631112e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.0009765625
+      },
+      "passed": true
+    },
+    "CA_VL": {
+      "officialShaderSha256": "f0f2ace17ae0a42a435b8b762320c99ae09b4d4cb5bcef813209873cd7037ad5",
+      "webgpuVsOfficial": {
+        "ssim": 0.9976753533112402,
+        "rmse": 0.009871789305957541,
+        "mean_absolute": 0.001391573887273259,
+        "p99_absolute": 0.05176334091515988,
+        "maximum_absolute": 0.3105544449053941
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9976771815235533,
+        "rmse": 0.009869401840069496,
+        "mean_absolute": 0.0013833937663435105,
+        "p99_absolute": 0.05176318445057981,
+        "maximum_absolute": 0.3105544449053941
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999985963163829,
+        "rmse": 8.87385382207821e-05,
+        "mean_absolute": 2.533147387482502e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.0009765625
+      },
+      "passed": true
+    },
+    "CA_UL": {
+      "officialShaderSha256": "2f83fba24fbba7db800fffffef938312b60aaba0ea3c1231bc514f0184ceff75",
+      "webgpuVsOfficial": {
+        "ssim": 0.9971087450692985,
+        "rmse": 0.012030096786722561,
+        "mean_absolute": 0.001792007337002138,
+        "p99_absolute": 0.06420200679980165,
+        "maximum_absolute": 0.27978201205701153
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9971090440607089,
+        "rmse": 0.012028963032850486,
+        "mean_absolute": 0.001783547358721617,
+        "p99_absolute": 0.06396849459019993,
+        "maximum_absolute": 0.28002615268201153
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999984277597976,
+        "rmse": 9.075685748646536e-05,
+        "mean_absolute": 2.6247566642523303e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.0009765625
+      },
+      "passed": true
+    }
+  },
+  "fourXComparisons": {
+    "AA_M": {
+      "officialShaderSha256": "f90e1700e5fa2cdbaeac36bdee130446017c730ea20ae864f827b9264fd0b2f8",
+      "webgpuVsOfficial": {
+        "ssim": 0.9854694481555083,
+        "rmse": 0.0258903433896494,
+        "mean_absolute": 0.005869473376871925,
+        "p99_absolute": 0.13232872642004267,
+        "maximum_absolute": 0.42774090180819413
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9854634919420927,
+        "rmse": 0.0258877984426072,
+        "mean_absolute": 0.005856789837795415,
+        "p99_absolute": 0.13232795154783705,
+        "maximum_absolute": 0.42774090180819413
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999935203850753,
+        "rmse": 0.00017391210641172375,
+        "mean_absolute": 7.023239448865867e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.0029296875
+      },
+      "passed": true
+    },
+    "AA_VL": {
+      "officialShaderSha256": "18597a9192779df2d8506817d975913119b802d68b6ff22ea900a1ad5a2d21ef",
+      "webgpuVsOfficial": {
+        "ssim": 0.9937473817786081,
+        "rmse": 0.019821109222957992,
+        "mean_absolute": 0.003501496818656184,
+        "p99_absolute": 0.12304875257495995,
+        "maximum_absolute": 0.2929736749089227
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9937477066880206,
+        "rmse": 0.019818803659098563,
+        "mean_absolute": 0.0034883263175630123,
+        "p99_absolute": 0.12304875257495995,
+        "maximum_absolute": 0.2924853936589227
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999942717060721,
+        "rmse": 0.00018399228573330752,
+        "mean_absolute": 8.12577374984698e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.00390625
+      },
+      "passed": true
+    },
+    "AA_UL": {
+      "officialShaderSha256": "a82d299b52c0f0495a4fb92f08443b2a11af81b0419274429d60cfd43606cbce",
+      "webgpuVsOfficial": {
+        "ssim": 0.9927693551069192,
+        "rmse": 0.017701690853794947,
+        "mean_absolute": 0.0031740839665528194,
+        "p99_absolute": 0.09472800793469138,
+        "maximum_absolute": 0.4191852546587701
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9927665071168138,
+        "rmse": 0.017697574241696833,
+        "mean_absolute": 0.003159963883587824,
+        "p99_absolute": 0.09424364574988553,
+        "maximum_absolute": 0.4186969734087701
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.999994188367369,
+        "rmse": 0.0001943550367626131,
+        "mean_absolute": 8.354420675953598e-05,
+        "p99_absolute": 0.00067138671875,
+        "maximum_absolute": 0.00341796875
+      },
+      "passed": true
+    },
+    "BB_M": {
+      "officialShaderSha256": "29e3d630993b8952669d500b39b4ed96d9fa532884034bb65a65572d896c169f",
+      "webgpuVsOfficial": {
+        "ssim": 0.9993924743402939,
+        "rmse": 0.003253171982819624,
+        "mean_absolute": 0.00038179607794733663,
+        "p99_absolute": 0.010255433642328504,
+        "maximum_absolute": 0.11377543965056836
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9993942550794644,
+        "rmse": 0.0032513149192838326,
+        "mean_absolute": 0.0003638859062023697,
+        "p99_absolute": 0.010255508149271342,
+        "maximum_absolute": 0.11377543965056836
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999933390701486,
+        "rmse": 0.00015406286517440537,
+        "mean_absolute": 6.29494953114892e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.00244140625
+      },
+      "passed": true
+    },
+    "BB_VL": {
+      "officialShaderSha256": "5eb908e8543237360d68ea367262fb346d7091f89f4e5a23ea709be39521bef6",
+      "webgpuVsOfficial": {
+        "ssim": 0.9994928761824423,
+        "rmse": 0.0037389040724876035,
+        "mean_absolute": 0.0003500026665632342,
+        "p99_absolute": 0.006829481473401622,
+        "maximum_absolute": 0.26415694872611006
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9994943226746813,
+        "rmse": 0.0037358009475494387,
+        "mean_absolute": 0.0003368107330152677,
+        "p99_absolute": 0.0065879336900129815,
+        "maximum_absolute": 0.26391280810111006
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.999994449601703,
+        "rmse": 0.00016761004186819408,
+        "mean_absolute": 7.358163790662348e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.0023193359375
+      },
+      "passed": true
+    },
+    "BB_UL": {
+      "officialShaderSha256": "be51ddb0ae304445c2e302093875a1cc406050d9174e4444d8b5a269f2c99e93",
+      "webgpuVsOfficial": {
+        "ssim": 0.999505304351528,
+        "rmse": 0.0035298219803571837,
+        "mean_absolute": 0.0002642320780308748,
+        "p99_absolute": 0.0009736269264515041,
+        "maximum_absolute": 0.15404978390006294
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9995072403504026,
+        "rmse": 0.003525370847972257,
+        "mean_absolute": 0.0002521426422535332,
+        "p99_absolute": 0.0009715034785801047,
+        "maximum_absolute": 0.15404978390006294
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999946092477835,
+        "rmse": 0.00018163216112905285,
+        "mean_absolute": 7.787326790599359e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.003173828125
+      },
+      "passed": true
+    },
+    "CA_M": {
+      "officialShaderSha256": "8a1fc8702f1cf16556f39f842e1c69fc77a8ed287456b6d99da62ff8475d9f17",
+      "webgpuVsOfficial": {
+        "ssim": 0.9936589959836468,
+        "rmse": 0.013113445426700954,
+        "mean_absolute": 0.002128078389580105,
+        "p99_absolute": 0.06884063769598309,
+        "maximum_absolute": 0.3481512145227741
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9936604599446262,
+        "rmse": 0.013112837276266333,
+        "mean_absolute": 0.0021153438910304543,
+        "p99_absolute": 0.06884063769598309,
+        "maximum_absolute": 0.3481512145227741
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999960726115045,
+        "rmse": 0.00010798136779484419,
+        "mean_absolute": 3.3834437962330175e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.0013427734375
+      },
+      "passed": true
+    },
+    "CA_VL": {
+      "officialShaderSha256": "f0f2ace17ae0a42a435b8b762320c99ae09b4d4cb5bcef813209873cd7037ad5",
+      "webgpuVsOfficial": {
+        "ssim": 0.9957008738289571,
+        "rmse": 0.01135928281124087,
+        "mean_absolute": 0.0017573426625861347,
+        "p99_absolute": 0.05957122148470284,
+        "maximum_absolute": 0.3891677187046998
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9957030432103572,
+        "rmse": 0.011356930485881914,
+        "mean_absolute": 0.0017450979105945571,
+        "p99_absolute": 0.05957122148470284,
+        "maximum_absolute": 0.38927881600719083
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999966853504595,
+        "rmse": 0.00013011851295703135,
+        "mean_absolute": 4.813738489224587e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.00146484375
+      },
+      "passed": true
+    },
+    "CA_UL": {
+      "officialShaderSha256": "2f83fba24fbba7db800fffffef938312b60aaba0ea3c1231bc514f0184ceff75",
+      "webgpuVsOfficial": {
+        "ssim": 0.9952650766060706,
+        "rmse": 0.012896634569259553,
+        "mean_absolute": 0.0020605467490518465,
+        "p99_absolute": 0.06836164001106282,
+        "maximum_absolute": 0.3034646287229629
+      },
+      "d3d11VsOfficial": {
+        "ssim": 0.9952645586792369,
+        "rmse": 0.012896555885996815,
+        "mean_absolute": 0.0020488583143857884,
+        "p99_absolute": 0.06836158040550855,
+        "maximum_absolute": 0.3034646287229629
+      },
+      "webgpuVsD3d11": {
+        "ssim": 0.9999966811314839,
+        "rmse": 0.00013161850023264511,
+        "mean_absolute": 4.770559447514729e-05,
+        "p99_absolute": 0.00048828125,
+        "maximum_absolute": 0.001708984375
+      },
+      "passed": true
+    }
+  }
+}

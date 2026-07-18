@@ -1,20 +1,14 @@
-import type { Anime4KPipeline } from 'anime4k-webgpu';
 import * as Anime4K from 'anime4k-webgpu';
 import { scheduleEffectsForTarget } from '../../src/shared/effect-scheduling';
-import { GENERATED_PIPELINE_CLASSES } from '../../src/shared/generated-pipelines';
+import { GENERATED_KERNELS } from '../../src/shared/generated-kernels';
+import { createGeneratedPipelineClass } from '../../src/shared/generated-pipelines';
 import { createAnime4KShaderDevice } from '../../src/shared/wgsl-fidelity';
 import { resolvePresetGraph } from '../../src/utils/effect-chain-templates';
 import type { Anime4KMode, QualityTier } from '../../src/types';
+import type { Anime4KPipeline, PipelineConstructor } from '../../src/core/pipeline-types';
 
 const SOURCE_WIDTH = 96;
 const SOURCE_HEIGHT = 54;
-
-type PipelineConstructor = new (options: {
-  device: GPUDevice;
-  inputTexture: GPUTexture;
-  nativeDimensions?: { width: number; height: number };
-  targetDimensions?: { width: number; height: number };
-}) => Anime4KPipeline;
 
 let device: GPUDevice | null = null;
 let anime4kDevice: GPUDevice | null = null;
@@ -96,7 +90,11 @@ async function runGolden(
     { width: targetWidth, height: targetHeight },
   ).effects;
   const module = Anime4K as Record<string, unknown>;
-  const local = GENERATED_PIPELINE_CLASSES as Record<string, PipelineConstructor>;
+  const local: Record<string, PipelineConstructor> = {
+    CNNSoftUL: createGeneratedPipelineClass('CNNSoftUL', GENERATED_KERNELS.CNNSoftUL),
+    DenoiseCNNx2M: createGeneratedPipelineClass('DenoiseCNNx2M', GENERATED_KERNELS.DenoiseCNNx2M),
+    DenoiseCNNx2UL: createGeneratedPipelineClass('DenoiseCNNx2UL', GENERATED_KERNELS.DenoiseCNNx2UL),
+  };
   const pipelines: Anime4KPipeline[] = [];
   let current = input;
   let width = SOURCE_WIDTH;

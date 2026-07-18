@@ -47,6 +47,10 @@ import {
   signOut,
   signUp,
 } from './account/service';
+import {
+  migrateLegacyBroadSiteAccess,
+  synchronizeRegisteredContentScripts,
+} from './site-access';
 
 const SESSION_STORAGE_KEY = 'anime4kNativeSessionV1';
 const CONSENT_STORAGE_KEY = 'anime4kNativeConsentByOrigin';
@@ -65,12 +69,6 @@ interface PreparedVideo {
   devicePixelRatio?: number;
   targetWidth?: number;
   targetHeight?: number;
-  message?: string;
-}
-
-interface PreparedTopFrame {
-  ok: boolean;
-  isolatedFrame?: boolean;
   message?: string;
 }
 
@@ -140,6 +138,7 @@ let latestStatus: NativeStatusSnapshot = { active: false };
 let activeEnhancement: ActiveEnhancementRecord | null = null;
 let operationChain: Promise<unknown> = Promise.resolve();
 let fullscreenExitSessionId: string | null = null;
+let siteAccessChain: Promise<void> = Promise.resolve();
 
 function serialized<T>(operation: () => Promise<T>): Promise<T> {
   const result = operationChain.then(operation, operation);
@@ -147,8 +146,18 @@ function serialized<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
+function updateSiteAccess(migrateLegacy = false): Promise<void> {
+  if (__ANIME4K_E2E__) return Promise.resolve();
+  const operation = siteAccessChain.then(async () => {
+    if (migrateLegacy) await migrateLegacyBroadSiteAccess();
+    await synchronizeRegisteredContentScripts();
+  });
+  siteAccessChain = operation.catch(() => undefined);
+  return operation;
+}
+
 async function isExtensionEnabled(): Promise<boolean> {
-  const stored = await chrome.storage.sync.get(['extensionEnabled']);
+  const stored = await chrome.storage.local.get(['extensionEnabled']);
   return stored.extensionEnabled !== false;
 }
 
@@ -1092,7 +1101,7 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
       // native host here when recovering an orphaned session; otherwise the
       // same expensive native pipeline would be rebuilt twice.
       if (activeSession && !contentUpdatedNativeSession) {
-        const settings = await chrome.storage.sync.get(['mode', 'quality', 'frameGenerationEnabled']);
+        const settings = await chrome.storage.local.get(['mode', 'quality', 'frameGenerationEnabled']);
         const configuration = {
           mode: settings.mode,
           quality: settings.quality,
@@ -1112,26 +1121,24 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
       return { ok: true, account: await refreshAccountStatus() };
 
     case 'ACCOUNT_SIGN_IN':
-      if (typeof message.email !== 'string' || typeof message.password !== 'string') {
-        return { ok: false, message: 'Email and password are required.' };
-      }
-      return { ok: true, account: await signIn(message.email, message.password) };
+      return { ok: true, account: await signIn() };
 
     case 'ACCOUNT_SIGN_UP':
-      if (typeof message.email !== 'string' || typeof message.password !== 'string') {
-        return { ok: false, message: 'Email and password are required.' };
-      }
-      return { ok: true, account: await signUp(message.email, message.password) };
+      return { ok: true, account: await signUp() };
 
     case 'ACCOUNT_SIGN_OUT':
       return { ok: true, account: await signOut() };
+
+    case 'SITE_ACCESS_SYNC':
+      await updateSiteAccess();
+      return { ok: true };
 
     case 'OPEN_OPTIONS_PAGE':
       await chrome.runtime.openOptionsPage();
       return undefined;
 
     case 'OPEN_ACCOUNT_PAGE':
-      await chrome.tabs.create({ url: `${__ANIME4K_ACCOUNT_API_URL__}/account.html` });
+      await chrome.tabs.create({ url: `${__ANIME4K_ACCOUNT_API_URL__}/account` });
       return undefined;
 
     case 'OPEN_ONBOARDING':
@@ -1203,6 +1210,9 @@ chrome.windows.onRemoved.addListener(windowId => {
 
 chrome.runtime.onStartup.addListener(() => {
   void serialized(recoverPersistedSession);
+  void updateSiteAccess().catch(error => {
+    console.warn('[Site access] Startup synchronization failed.', error);
+  });
 });
 
 chrome.runtime.onInstalled.addListener(details => {
@@ -1211,11 +1221,29 @@ chrome.runtime.onInstalled.addListener(details => {
     await recoverPersistedSession();
     if (details.reason === 'install' || details.reason === 'update') await checkOnboarding();
   });
+  void updateSiteAccess(true).catch(error => {
+    console.warn('[Site access] Installation synchronization failed.', error);
+  });
+});
+
+chrome.permissions.onAdded.addListener(() => {
+  void updateSiteAccess().catch(error => {
+    console.warn('[Site access] Could not register scripts for newly granted access.', error);
+  });
+});
+
+chrome.permissions.onRemoved.addListener(() => {
+  void updateSiteAccess().catch(error => {
+    console.warn('[Site access] Could not remove scripts for revoked access.', error);
+  });
 });
 
 // MV3 service workers can restart without onStartup. Reconcile the durable
 // session every time the background module itself is evaluated.
 void serialized(recoverPersistedSession);
+void updateSiteAccess(true).catch(error => {
+  console.warn('[Site access] Initial synchronization failed.', error);
+});
 void refreshAccountStatus().catch(error => {
   console.warn('[Account] Initial license refresh failed; Free mode remains active.', error);
 });

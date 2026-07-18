@@ -14,7 +14,7 @@ import {
 export const ANIME4K_MODES: readonly Anime4KMode[] = GENERATED_ANIME4K_MODES;
 export const QUALITY_TIERS: readonly QualityTier[] = GENERATED_QUALITY_TIERS;
 export const AI_UPSCALE_MODES = [
-  'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'ANIMEJANAI',
+  'CNNX2', 'ARTCNN', 'ACNET', 'ARNET',
 ] as const;
 export const ENHANCEMENT_MODES: readonly EnhancementMode[] = [
   'OFF',
@@ -22,34 +22,18 @@ export const ENHANCEMENT_MODES: readonly EnhancementMode[] = [
   ...AI_UPSCALE_MODES,
 ];
 
-export const MODE_LABELS: Record<EnhancementMode, string> = {
-  OFF: 'Off',
-  A: 'Mode A',
-  B: 'Mode B',
-  C: 'Mode C',
-  AA: 'Mode A+A',
-  BB: 'Mode B+B',
-  CA: 'Mode C+A',
-  CNNX2: 'CNN Upscale x2',
-  ARTCNN: 'ArtCNN C4F16 x2 (GLSL)',
-  ACNET: 'ACNet F8B4 x2 (GLSL)',
-  ARNET: 'ARNet F8B8 x2 (GLSL)',
-  ANIMEJANAI: 'AnimeJaNai HD x2 (Performance)',
-};
-
 export const MODE_DESCRIPTIONS: Record<EnhancementMode, string> = {
   OFF: 'Disables image enhancement. Frame generation can still be enabled separately.',
   A: 'Restores line detail, then applies Anime4K CNN upscaling. The balanced default for most anime.',
   B: 'Uses softer restoration before Anime4K CNN upscaling to reduce ringing on blurry or compressed video.',
   C: 'Denoises and upscales in one Anime4K CNN pass. Best suited to visibly noisy animation.',
-  AA: 'Runs the Anime4K A restoration chain twice for stronger detail and up to 4x scaling. Higher GPU load.',
-  BB: 'Runs the softer Anime4K B chain twice for blurry sources and up to 4x scaling. Higher GPU load.',
-  CA: 'Denoises and upscales first, then restores and can upscale again. Strong result with up to 4x scaling.',
+  AA: 'Runs the Anime4K A restoration chain twice for stronger detail and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline.',
+  BB: 'Runs the softer Anime4K B chain twice for blurry sources and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline.',
+  CA: 'Denoises and upscales first, then restores and can upscale again. UL is a high-end GPU profile outside the 24 FPS baseline.',
   CNNX2: 'Official Anime4K CNN at a fixed 2x scale. Produces a sharp result; Quality changes model size and GPU load.',
   ARTCNN: 'Fixed 2x GLSL network for reconstructing anime line art and natural detail at real-time speed.',
   ACNET: 'Small fixed 2x GLSL network that prioritizes speed and very low GPU load over maximum detail recovery.',
   ARNET: 'Deeper fixed 2x GLSL network with stronger detail recovery than ACNet at a higher, balanced GPU load.',
-  ANIMEJANAI: 'AnimeJaNai HD V3.1 Performance restores anime and enlarges it by a fixed 2x. Very high GPU load; Native recommended.',
 };
 
 export const MODE_TO_LEGACY_BASE: Record<Anime4KMode, BaseMode> = {
@@ -82,7 +66,6 @@ export const MODE_TO_ID: Record<EnhancementMode, string> = {
   ARTCNN: 'ai-artcnn-c4f16-glsl-x2',
   ACNET: 'ai-acnet-f8b4-glsl-x2',
   ARNET: 'ai-arnet-f8b8-glsl-x2',
-  ANIMEJANAI: 'ai-animejanai-hd-v3-1-performance-x2',
 };
 
 export const ID_TO_MODE: Record<string, EnhancementMode> = Object.fromEntries(
@@ -97,28 +80,8 @@ export function isEnhancementMode(value: unknown): value is EnhancementMode {
   return typeof value === 'string' && ENHANCEMENT_MODES.includes(value as EnhancementMode);
 }
 
-export function isAiUpscaleMode(mode: EnhancementMode): boolean {
-  return AI_UPSCALE_MODES.includes(mode as (typeof AI_UPSCALE_MODES)[number]);
-}
-
 export function isProcessingEnabled(mode: EnhancementMode, frameGenerationEnabled = false): boolean {
   return mode !== 'OFF' || frameGenerationEnabled;
-}
-
-export function supportsOnnxWebGpuRuntime(userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent): boolean {
-  return !/Firefox\//i.test(userAgent);
-}
-
-export function isOnnxUpscaleMode(mode: EnhancementMode): boolean {
-  return mode === 'ANIMEJANAI';
-}
-
-/** Whether the browser WebGPU renderer can initialize the selected mode. */
-export function supportsWebGpuConfiguration(
-  mode: EnhancementMode,
-  userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent,
-): boolean {
-  return !isOnnxUpscaleMode(mode) || supportsOnnxWebGpuRuntime(userAgent);
 }
 
 export function modeUsesQuality(mode: EnhancementMode): boolean {

@@ -4,8 +4,16 @@ import process from 'node:process';
 import { parse } from 'acorn';
 
 const sourcePath = path.resolve('node_modules/anime4k-webgpu/lib/index.js');
-const outputPath = path.resolve('.generated/anime4k-webgpu/index.js');
+const outputDirectory = path.resolve('.generated/anime4k-webgpu');
 const checkOnly = process.argv.includes('--check');
+
+const bundles = {
+  core: ['Conv2d', 'DepthToSpace', 'Overlay'],
+  common: ['ClampHighlights'],
+  'quality-m': ['CNNM', 'CNNSoftM', 'CNNx2M'],
+  'quality-vl': ['CNNVL', 'CNNSoftVL', 'CNNx2VL', 'DenoiseCNNx2VL'],
+  'quality-ul': ['CNNUL', 'CNNx2UL'],
+};
 
 const source = fs.readFileSync(sourcePath, 'utf8');
 const ast = parse(source, { ecmaVersion: 'latest' });
@@ -38,31 +46,6 @@ const moduleSources = new Map(moduleObject.properties.map(property => {
   return [id, source.slice(property.start, property.end)];
 }));
 
-const upscaleIndexId = [...moduleSources.entries()]
-  .find(([, code]) => code.includes('t(1720)') && code.includes('t(3299)'))?.[0];
-
-if (!upscaleIndexId) throw new Error('Could not locate the anime4k-webgpu upscale export module.');
-
-let upscaleIndex = moduleSources.get(upscaleIndexId);
-for (const removedModuleId of ['1720', '3299']) {
-  const exportPattern = new RegExp(`,?x\\(t\\(${removedModuleId}\\),e\\),?`);
-  const patched = upscaleIndex.replace(exportPattern, match => {
-    const hasLeadingComma = match.startsWith(',');
-    const hasTrailingComma = match.endsWith(',');
-    return hasLeadingComma && hasTrailingComma ? ',' : '';
-  });
-  if (patched === upscaleIndex) {
-    throw new Error(`Could not remove legacy GAN module ${removedModuleId} from the upscale exports.`);
-  }
-  upscaleIndex = patched;
-}
-moduleSources.set(upscaleIndexId, upscaleIndex);
-
-const runtimeSource = source.slice(moduleObject.end);
-const runtimeModuleCalls = [...runtimeSource.matchAll(/\bt\((\d+)\)/g)];
-const entryModuleId = runtimeModuleCalls.at(-1)?.[1];
-if (!entryModuleId) throw new Error('Could not locate the anime4k-webgpu entry module.');
-
 const dependencies = new Map();
 for (const [id, code] of moduleSources) {
   const referenced = new Set();
@@ -70,42 +53,88 @@ for (const [id, code] of moduleSources) {
   dependencies.set(id, referenced);
 }
 
-const reachable = new Set();
-const pending = [entryModuleId];
-while (pending.length > 0) {
-  const id = pending.pop();
-  if (reachable.has(id)) continue;
-  if (!moduleSources.has(id)) throw new Error(`Missing referenced anime4k-webgpu module ${id}.`);
-  reachable.add(id);
-  dependencies.get(id).forEach(dependency => pending.push(dependency));
-}
-
-for (const removedModuleId of ['1720', '3299']) {
-  if (reachable.has(removedModuleId)) {
-    throw new Error(`Legacy GAN module ${removedModuleId} is still reachable.`);
+function findExportModule(exportName) {
+  const escaped = exportName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const assignment = new RegExp(`\\be\\.${escaped}(?:=|\\b)`);
+  const harmonyExport = new RegExp(`\\b${escaped}:\\(\\)=>`);
+  const candidates = [...moduleSources.entries()]
+    .filter(([, code]) => assignment.test(code) || harmonyExport.test(code));
+  if (candidates.length !== 1) {
+    throw new Error(`Expected one module exporting ${exportName}, found ${candidates.length}.`);
   }
+  return candidates[0][0];
 }
 
-const retainedModules = moduleObject.properties
-  .map(property => String(property.key.value ?? property.key.name))
-  .filter(id => reachable.has(id))
-  .map(id => moduleSources.get(id));
-const generated = source.slice(0, moduleObject.start)
-  + `{${retainedModules.join(',')}}`
-  + source.slice(moduleObject.end);
+function renderBundle(exportNames) {
+  const syntheticEntryId = '999999';
+  const exportModules = Object.fromEntries(
+    exportNames.map(exportName => [exportName, findExportModule(exportName)]),
+  );
+  const exportGetters = exportNames
+    .map(exportName => `${exportName}:()=>t(${exportModules[exportName]}).${exportName}`)
+    .join(',');
+  const syntheticEntry = `${syntheticEntryId}:(r,e,t)=>{t.r(e),t.d(e,{${exportGetters}})}`;
+  const bundleSources = new Map(moduleSources);
+  bundleSources.set(syntheticEntryId, syntheticEntry);
 
-if (/GANx3L|GANx4UUL/.test(generated)) {
-  throw new Error('The pruned anime4k-webgpu bundle still contains GAN x3/x4 implementations.');
-}
+  const bundleDependencies = new Map(dependencies);
+  bundleDependencies.set(
+    syntheticEntryId,
+    new Set(Object.values(exportModules)),
+  );
 
-if (checkOnly) {
-  if (!fs.existsSync(outputPath) || fs.readFileSync(outputPath, 'utf8') !== generated) {
-    throw new Error('The pruned anime4k-webgpu bundle is out of date. Run npm run generate:anime4k-vendor.');
+  const reachable = new Set();
+  const pending = [syntheticEntryId];
+  while (pending.length > 0) {
+    const id = pending.pop();
+    if (reachable.has(id)) continue;
+    if (!bundleSources.has(id)) throw new Error(`Missing referenced anime4k-webgpu module ${id}.`);
+    reachable.add(id);
+    bundleDependencies.get(id).forEach(dependency => pending.push(dependency));
   }
-} else {
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  fs.writeFileSync(outputPath, generated);
+
+  const retainedModules = [
+    ...moduleObject.properties
+      .map(property => String(property.key.value ?? property.key.name))
+      .filter(id => reachable.has(id))
+      .map(id => bundleSources.get(id)),
+    syntheticEntry,
+  ];
+  const originalRuntime = source.slice(moduleObject.end);
+  const entryCalls = [...originalRuntime.matchAll(/\bt\((\d+)\)/g)];
+  const entryCall = entryCalls.at(-1);
+  if (!entryCall || entryCall.index === undefined) {
+    throw new Error('Could not locate the anime4k-webgpu entry module.');
+  }
+  const runtime = originalRuntime.slice(0, entryCall.index)
+    + `t(${syntheticEntryId})`
+    + originalRuntime.slice(entryCall.index + entryCall[0].length);
+
+  const generated = source.slice(0, moduleObject.start)
+    + `{${retainedModules.join(',')}}`
+    + runtime;
+  if (/GANx3L|GANx4UUL|GANUUL/.test(generated)) {
+    throw new Error('A split anime4k-webgpu bundle still contains a legacy GAN implementation.');
+  }
+  return { generated, retainedCount: retainedModules.length };
 }
 
-const removedCount = moduleSources.size - retainedModules.length;
-console.log(`anime4k-webgpu: retained ${retainedModules.length} modules, removed ${removedCount} unused modules`);
+let changed = false;
+for (const [bundleName, exportNames] of Object.entries(bundles)) {
+  const outputPath = path.join(outputDirectory, `${bundleName}.js`);
+  const { generated, retainedCount } = renderBundle(exportNames);
+  const current = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf8') : null;
+  if (current !== generated) {
+    if (checkOnly) {
+      throw new Error(`The ${bundleName} anime4k-webgpu bundle is out of date. Run npm run generate:anime4k-vendor.`);
+    }
+    fs.mkdirSync(outputDirectory, { recursive: true });
+    fs.writeFileSync(outputPath, generated);
+    changed = true;
+  }
+  console.log(`anime4k-webgpu/${bundleName}: retained ${retainedCount} modules (${generated.length} bytes)`);
+}
+
+const legacyOutputPath = path.join(outputDirectory, 'index.js');
+if (!checkOnly && fs.existsSync(legacyOutputPath)) fs.rmSync(legacyOutputPath);
+if (!checkOnly && changed) console.log('anime4k-webgpu: split vendor bundles updated');

@@ -7,6 +7,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 const { Pool } = pg;
 const publicUrl = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const authUrl = (process.env.NEON_AUTH_URL || '').replace(/\/$/, '');
+const authOrigin = (process.env.E2E_AUTH_ORIGIN || 'https://aniwebscale.pages.dev').replace(/\/$/, '');
 
 if (process.env.E2E_ALLOW_SANDBOX_MUTATION !== '1') {
   throw new Error('Set E2E_ALLOW_SANDBOX_MUTATION=1 to run the sandbox mutation test.');
@@ -48,7 +49,7 @@ async function authRequest(path, init = {}) {
   const response = await fetch(`${authUrl}/${path}`, {
     ...init,
     headers: {
-      Origin: publicUrl,
+      Origin: authOrigin,
       ...(init.body ? { 'Content-Type': 'application/json' } : {}),
       ...(cookies.size ? { Cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join('; ') } : {}),
       ...init.headers,
@@ -97,12 +98,38 @@ async function cleanup() {
 }
 
 try {
-  const signup = await authRequest('sign-up/email', {
+  const signupResponse = await fetch(`${authOrigin}/api/auth/sign-up`, {
     method: 'POST',
+    headers: {
+      Origin: authOrigin,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ email, password, name: 'AniWebScale E2E' }),
   });
-  userId = signup.user?.id || signup.data?.user?.id || '';
-  if (!userId) throw new Error('Neon Auth signup returned no user ID.');
+  const signup = await signupResponse.json().catch(() => ({}));
+  if (!signupResponse.ok || signup.success !== true) {
+    throw new Error(`Website signup failed with ${signupResponse.status}: ${signup.error || 'unknown error'}`);
+  }
+  const client = await pool.connect();
+  try {
+    const user = await client.query(
+      `UPDATE neon_auth."user"
+          SET "emailVerified" = true, "updatedAt" = now()
+        WHERE email = $1
+        RETURNING id::text`,
+      [email],
+    );
+    userId = user.rows[0]?.id || '';
+  } finally {
+    client.release();
+  }
+  if (!userId) throw new Error('Website signup returned no database user.');
+
+  await authRequest('sign-in/email', {
+    method: 'POST',
+    headers: { Origin: authOrigin },
+    body: JSON.stringify({ email, password }),
+  });
 
   const tokenBody = await authRequest('token');
   const authToken = tokenBody.token || tokenBody.data?.token;
@@ -121,7 +148,12 @@ try {
         'Content-Type': 'application/json',
         'Idempotency-Key': `e2e_${expected.plan}_${suffix}`,
       },
-      body: JSON.stringify({ plan: expected.plan }),
+      body: JSON.stringify({
+        plan: expected.plan,
+        legalAccepted: true,
+        immediatePerformanceRequested: true,
+        legalVersion: process.env.LEGAL_VERSION || '2026-07-17',
+      }),
     });
     let checkoutSessionId = checkout.url?.match(/cs_test_[A-Za-z0-9]+/)?.[0] || '';
     if (!checkoutSessionId) {

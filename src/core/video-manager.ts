@@ -25,7 +25,7 @@ function cleanupVideoEnhancer(video: HTMLVideoElement, allowStash = true): void 
   EnhancerMap.dissociateEnhancer(video);
 }
 
-export function processVideoElement(video: HTMLVideoElement, source: string): void {
+function processVideoElement(video: HTMLVideoElement, source: string): void {
   if (EnhancerMap.hasEnhancer(video) || !video.isConnected) return;
 
   const stashedEnhancer = findAndUnstashEnhancer(video);
@@ -147,10 +147,6 @@ export async function initializeOnPage(): Promise<void> {
   window.addEventListener('beforeunload', handlePageUnload, { once: true });
 }
 
-export function setupDOMObserver(): MutationObserver {
-  return observeRoot(document, 'manual-initial-scan');
-}
-
 export async function handleSettingsUpdate(
   message: { type: string; modifiedModeId?: string },
   sendResponse: (response?: { status: string; message: string }) => void,
@@ -200,7 +196,7 @@ export async function handleSettingsUpdate(
   }
 }
 
-export function deinitializeOnPage(): void {
+function deinitializeOnPage(): void {
   window.removeEventListener('beforeunload', handlePageUnload);
   handlePageUnload();
 }

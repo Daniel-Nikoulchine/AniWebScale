@@ -2,10 +2,10 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const PRIMARY_PORT = Number(process.env.E2E_PRIMARY_PORT || 4173);
-export const CROSS_ORIGIN_PORT = Number(process.env.E2E_CROSS_ORIGIN_PORT || 4174);
+const PRIMARY_PORT = Number(process.env.E2E_PRIMARY_PORT || 4173);
+const CROSS_ORIGIN_PORT = Number(process.env.E2E_CROSS_ORIGIN_PORT || 4174);
 export const PRIMARY_ORIGIN = `http://127.0.0.1:${PRIMARY_PORT}`;
-export const CROSS_ORIGIN = `http://127.0.0.1:${CROSS_ORIGIN_PORT}`;
+const CROSS_ORIGIN = `http://127.0.0.1:${CROSS_ORIGIN_PORT}`;
 
 // Two seconds of a deterministic 320x180 VP9/WebM frame sequence. Keeping the
 // fixture inline makes the harness independent of ffmpeg and external sites.

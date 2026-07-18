@@ -1,0 +1,34 @@
+name: Data operations monitor
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aniwebscale-data-operations-monitor
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      - name: Require recent successful retention and backup jobs
+        env:
+          OPERATIONS_BASE_URL: ${{ vars.ANIWEBSCALE_PUBLIC_URL }}
+          OPERATIONS_MONITOR_TOKEN: ${{ secrets.OPERATIONS_MONITOR_TOKEN }}
+        run: npm run check:operations

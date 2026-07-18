@@ -34,14 +34,6 @@ describe('native fallback request validation', () => {
     })).toBe(true);
   });
 
-  it('accepts the AnimeJaNai native performance route', () => {
-    expect(isNativeFallbackRequest({
-      ...request,
-      reason: 'animejanai-performance',
-      configuration: { ...request.configuration, mode: 'ANIMEJANAI' },
-    })).toBe(true);
-  });
-
   it('still rejects unsafe geometry and malformed configuration fields', () => {
     expect(isNativeFallbackRequest({
       ...request,

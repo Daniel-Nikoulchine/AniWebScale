@@ -13,6 +13,7 @@ import {
   type IntrinsicCaptureStage,
 } from './shared/intrinsic-capture';
 import { calculateRenderedVideoRect } from './shared/video-content-rect';
+import { shouldApplySettingsChange } from './utils/settings-change';
 
 const VIDEO_ID_ATTRIBUTE = 'data-anime4k-video-id';
 const NATIVE_ROOT_ATTRIBUTE = 'data-anime4k-native-root';
@@ -20,6 +21,8 @@ const NATIVE_VIDEO_ATTRIBUTE = 'data-anime4k-native-video';
 const NATIVE_DOCUMENT_ATTRIBUTE = 'data-anime4k-native-document';
 const NATIVE_KEEP_ATTRIBUTE = 'data-anime4k-native-keep';
 const NATIVE_STYLE_ID = 'anime4k-native-isolation-style';
+const CONTENT_INSTANCE_KEY = '__anime4kContentInstalledV1';
+const contentGlobal = globalThis as typeof globalThis & { [CONTENT_INSTANCE_KEY]?: boolean };
 
 interface IsolationState {
   sessionId: string;
@@ -402,7 +405,7 @@ function installLocalE2ETestBridge(): void {
         || typeof data.id !== 'string') return;
     void (async () => {
       if (data.action === 'configure') {
-        await chrome.storage.sync.set({
+        await chrome.storage.local.set({
           mode: 'A', quality: 'M', output: 'auto', backend: 'webgpu', statsEnabled: true,
           autoFullscreenEnabled: true, frameGenerationEnabled: false,
         });
@@ -821,31 +824,35 @@ async function handleRuntimeMessage(request: Record<string, unknown>): Promise<u
   }
 }
 
-chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-  void handleRuntimeMessage(request as Record<string, unknown>).then(sendResponse, error => {
-    console.error('[AniWebScale] Content message handler failed.', error);
-    sendResponse({ ok: false, message: error instanceof Error ? error.message : String(error) });
+if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
+  contentGlobal[CONTENT_INSTANCE_KEY] = true;
+
+  chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+    void handleRuntimeMessage(request as Record<string, unknown>).then(sendResponse, error => {
+      console.error('[AniWebScale] Content message handler failed.', error);
+      sendResponse({ ok: false, message: error instanceof Error ? error.message : String(error) });
+    });
+    return true;
   });
-  return true;
-});
 
-chrome.storage.onChanged.addListener((_changes, areaName) => {
-  if (areaName !== 'sync') return;
-  void handleSettingsUpdate({ type: 'SETTINGS_UPDATED' }, () => undefined).catch(error => {
-    console.info('[AniWebScale] Could not apply changed fullscreen settings:', error instanceof Error ? error.message : String(error));
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (!shouldApplySettingsChange(changes, areaName)) return;
+    void handleSettingsUpdate({ type: 'SETTINGS_UPDATED' }, () => undefined).catch(error => {
+      console.info('[AniWebScale] Could not apply changed fullscreen settings:', error instanceof Error ? error.message : String(error));
+    });
   });
-});
 
-void initializeOnPage();
-if (__ANIME4K_E2E__) installLocalE2ETestBridge();
-window.addEventListener('anime4k-video-reattached', handleNativeVideoReattach);
+  void initializeOnPage();
+  if (__ANIME4K_E2E__) installLocalE2ETestBridge();
+  window.addEventListener('anime4k-video-reattached', handleNativeVideoReattach);
 
-window.addEventListener('pagehide', () => {
-  window.removeEventListener('anime4k-video-reattached', handleNativeVideoReattach);
-  if (isolation) {
-    void chrome.runtime.sendMessage({ type: 'NATIVE_STOP', sessionId: isolation.sessionId }).catch(() => undefined);
-  }
-  if (directTitle) {
-    void chrome.runtime.sendMessage({ type: 'NATIVE_STOP', sessionId: directTitle.sessionId }).catch(() => undefined);
-  }
-}, { once: true });
+  window.addEventListener('pagehide', () => {
+    window.removeEventListener('anime4k-video-reattached', handleNativeVideoReattach);
+    if (isolation) {
+      void chrome.runtime.sendMessage({ type: 'NATIVE_STOP', sessionId: isolation.sessionId }).catch(() => undefined);
+    }
+    if (directTitle) {
+      void chrome.runtime.sendMessage({ type: 'NATIVE_STOP', sessionId: directTitle.sessionId }).catch(() => undefined);
+    }
+  }, { once: true });
+}

@@ -23,6 +23,9 @@ function decodePrivateKey(value) {
   }
 }
 
+/**
+ * @param {{issuer?: string, audience?: string, privateKeyBase64?: string}} [options]
+ */
 export function createLicenseService({
   issuer,
   audience = process.env.LICENSE_AUDIENCE || 'aniwebscale-extension',

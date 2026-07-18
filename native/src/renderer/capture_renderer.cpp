@@ -1,7 +1,6 @@
 #include "capture_renderer.hpp"
 
 #include "anime4k_pipeline.hpp"
-#include "animejanai_pipeline.hpp"
 #include "frame_generation_pipeline.hpp"
 
 #include "anime4k/capture_lifecycle.hpp"
@@ -41,10 +40,6 @@ constexpr std::int32_t kCaptureBufferCount = 3;
 
 std::string hresult_message(HRESULT result) {
   return win32::wide_to_utf8(winrt::hresult_error(result).message().c_str());
-}
-
-bool is_neural_upscale_mode(std::string_view mode) noexcept {
-  return mode == "ANIMEJANAI";
 }
 
 std::wstring lower_case(std::wstring value) {
@@ -97,21 +92,6 @@ json::Value make_renderer_error(const StartOptions& options, std::string code, s
 
 }  // namespace
 
-struct CaptureRenderer::NeuralFrameCompletion {
-  PipelineOutput output;
-  std::string error;
-  std::chrono::steady_clock::time_point started{};
-  std::uint64_t job_generation{};
-  std::uint64_t capture_generation{};
-  std::uint64_t configuration_generation{};
-  std::uint64_t resize_generation{};
-  std::uint32_t source_width{};
-  std::uint32_t source_height{};
-  double capture_time_ms{};
-  bool failed{};
-  bool cancelled{};
-};
-
 CaptureRenderer::CaptureRenderer(EventSink event_sink)
     : event_sink_(std::move(event_sink)), renderer_thread_id_(GetCurrentThreadId()) {}
 
@@ -126,10 +106,6 @@ bool CaptureRenderer::start(const StartOptions& options, std::string& error) {
     return false;
   }
   options_ = options;
-  if (++configuration_generation_ == 0) ++configuration_generation_;
-  neural_completion_.reset();
-  neural_processing_.store(false, std::memory_order_release);
-  neural_frame_waiting_.store(false, std::memory_order_release);
   output_presented_ = false;
   capture_geometry_logged_ = false;
   source_window_ = find_source_window(error);
@@ -174,17 +150,13 @@ void CaptureRenderer::update_configuration(
     bool frame_generation_enabled) {
   if (output_window_ != nullptr) KillTimer(output_window_, kGeneratedFrameTimer);
   std::scoped_lock lock(d3d_mutex_);
-  const bool neural_model_changed =
-      (is_neural_upscale_mode(options_.mode) || is_neural_upscale_mode(mode)) && options_.mode != mode;
   const bool changed = options_.mode != mode || options_.quality != quality
       || options_.frame_generation_enabled != frame_generation_enabled;
   options_.mode = std::move(mode);
   options_.quality = std::move(quality);
   options_.frame_generation_enabled = frame_generation_enabled;
   if (!changed) return;
-  if (++configuration_generation_ == 0) ++configuration_generation_;
   if (frame_generation_pipeline_ != nullptr) frame_generation_pipeline_->clear_resources();
-  if (neural_model_changed && animejanai_pipeline_ != nullptr) animejanai_pipeline_->clear_resources();
   last_rendered_capture_time_ms_ = 0.0;
   frame_interval_ms_ = 1000.0 / 24.0;
 }
@@ -208,18 +180,11 @@ void CaptureRenderer::update_playback_state(bool active, double media_time_secon
 void CaptureRenderer::stop(std::string_view reason) {
   (void)reason;
   active_.store(false, std::memory_order_release);
-  neural_worker_.request_stop();
   frame_pending_.store(false, std::memory_order_release);
   health_detector_.reset();
   playback_active_ = false;
   media_time_seconds_ = 0.0;
   playback_state_received_ = {};
-  if (neural_worker_.joinable() && neural_worker_.get_id() != std::this_thread::get_id()) {
-    neural_worker_.join();
-  }
-  neural_completion_.reset();
-  neural_processing_.store(false, std::memory_order_release);
-  neural_frame_waiting_.store(false, std::memory_order_release);
   reset_frame_generation();
   release_capture();
   release_output();
@@ -237,7 +202,7 @@ bool CaptureRenderer::initialize_d3d(std::string& error) {
     const HRESULT removal_reason = device_->GetDeviceRemovedReason();
     const bool complete = context_ != nullptr && vertex_shader_ != nullptr && present_shader_ != nullptr
         && sampler_ != nullptr && winrt_device_ != nullptr && anime4k_pipeline_ != nullptr
-        && frame_generation_pipeline_ != nullptr && animejanai_pipeline_ != nullptr;
+        && frame_generation_pipeline_ != nullptr;
     if (!d3d::requires_device_recreation(S_OK, removal_reason) && complete) return true;
     if (FAILED(removal_reason)) {
       win32::debug_log(
@@ -297,7 +262,6 @@ bool CaptureRenderer::initialize_d3d(std::string& error) {
   }
   winrt_device_ = inspectable.as<IDirect3DDevice>();
   anime4k_pipeline_ = std::make_unique<Anime4KPipeline>(device_.Get(), context_.Get());
-  animejanai_pipeline_ = std::make_unique<AnimeJanaiPipeline>(device_.Get(), context_.Get());
   frame_generation_pipeline_ = std::make_unique<FrameGenerationPipeline>(device_.Get(), context_.Get());
   return true;
 }
@@ -487,7 +451,6 @@ void CaptureRenderer::apply_pending_capture_resize(std::uint64_t capture_generat
         capture_probe_texture_.Reset();
         if (anime4k_pipeline_ != nullptr) anime4k_pipeline_->clear_resources();
         if (frame_generation_pipeline_ != nullptr) frame_generation_pipeline_->clear_resources();
-        if (animejanai_pipeline_ != nullptr) animejanai_pipeline_->clear_resources();
         last_rendered_capture_time_ms_ = 0.0;
         frame_interval_ms_ = 1000.0 / 24.0;
       }
@@ -588,7 +551,6 @@ void CaptureRenderer::release_output() {
   }
   if (anime4k_pipeline_ != nullptr) anime4k_pipeline_->clear_resources();
   if (frame_generation_pipeline_ != nullptr) frame_generation_pipeline_->clear_resources();
-  if (animejanai_pipeline_ != nullptr) animejanai_pipeline_->clear_resources();
   back_buffer_view_.Reset();
   swap_chain_.Reset();
   const HWND window = output_window_;
@@ -603,18 +565,10 @@ void CaptureRenderer::release_output() {
 }
 
 void CaptureRenderer::release_d3d() {
-  neural_worker_.request_stop();
-  if (neural_worker_.joinable() && neural_worker_.get_id() != std::this_thread::get_id()) {
-    neural_worker_.join();
-  }
-  neural_completion_.reset();
-  neural_processing_.store(false, std::memory_order_release);
-  neural_frame_waiting_.store(false, std::memory_order_release);
   std::scoped_lock lock(d3d_mutex_);
   capture_probe_texture_.Reset();
   latest_view_.Reset();
   latest_texture_.Reset();
-  animejanai_pipeline_.reset();
   frame_generation_pipeline_.reset();
   anime4k_pipeline_.reset();
   sampler_.Reset();
@@ -663,9 +617,6 @@ bool CaptureRenderer::process_and_present(
     processed.view = source_view;
     processed.width = source_width;
     processed.height = source_height;
-  } else if (is_neural_upscale_mode(options_.mode)) {
-    error = "AnimeJaNai frames must be processed by the neural worker";
-    return false;
   } else {
     if (anime4k_pipeline_ == nullptr) {
       error = "Anime4K compute pipeline is not initialized";
@@ -915,8 +866,8 @@ void CaptureRenderer::on_frame_arrived(
         {
           std::scoped_lock lock(d3d_mutex_);
           // stop() and a replacement capture can both win while this callback
-          // waits for neural processing. Never copy or dispatch work for that
-          // stale frame after acquiring the serialized D3D context.
+          // waits for the serialized D3D context. Never copy or dispatch work
+          // for that stale frame after acquiring it.
           if (!active() || !capture::is_current_generation(
                   capture_generation, capture_generation_.load(std::memory_order_acquire))
               || capture_resize_state_.has_pending()) return;
@@ -1003,12 +954,6 @@ void CaptureRenderer::render_latest_frame(std::uint64_t capture_generation) {
   if (!capture::should_handle_capture_window_message(
           active(), capture_generation,
           capture_generation_.load(std::memory_order_acquire))) return;
-  if (neural_processing_.load(std::memory_order_acquire)) {
-    // Leave frame_pending_ set so WGC coalesces every newer compositor frame
-    // into a single replacement while the native model is running.
-    neural_frame_waiting_.store(true, std::memory_order_release);
-    return;
-  }
   frame_pending_.store(false, std::memory_order_release);
   if (output_window_ != nullptr) KillTimer(output_window_, kGeneratedFrameTimer);
   if (!active() || capture_resize_state_.has_pending()) return;
@@ -1016,16 +961,6 @@ void CaptureRenderer::render_latest_frame(std::uint64_t capture_generation) {
   std::string error;
   capture::HealthState health = capture::HealthState::healthy;
   bool render_failed = false;
-  bool run_neural_async = false;
-  ComPtr<ID3D11Texture2D> neural_source;
-  ComPtr<ID3D11ShaderResourceView> neural_source_view;
-  D3D11_TEXTURE2D_DESC neural_description{};
-  double neural_capture_time_ms = 0.0;
-  std::uint64_t neural_capture_generation = 0;
-  std::uint64_t neural_configuration_generation = 0;
-  std::uint64_t neural_resize_generation = 0;
-  std::uint64_t neural_job_generation = 0;
-  HWND completion_window = nullptr;
   {
     std::scoped_lock frame_lock(frame_callback_mutex_);
     if (capture_resize_state_.has_pending()) return;
@@ -1040,89 +975,12 @@ void CaptureRenderer::render_latest_frame(std::uint64_t capture_generation) {
       if (!probe_warning.empty()) win32::debug_log("renderer", "capture health probe: " + probe_warning);
     }
     if (health == capture::HealthState::healthy) {
-      if (is_neural_upscale_mode(options_.mode)) {
-        neural_source = latest_texture_;
-        neural_source_view = latest_view_;
-        neural_description = description;
-        neural_capture_time_ms = latest_capture_time_ms_;
-        neural_capture_generation = capture_generation_.load(std::memory_order_acquire);
-        neural_configuration_generation = configuration_generation_;
-        neural_resize_generation = capture_resize_state_.generation();
-        if (++neural_job_generation_ == 0) ++neural_job_generation_;
-        neural_job_generation = neural_job_generation_;
-        completion_window = output_window_;
-        neural_completion_.reset();
-        neural_processing_.store(true, std::memory_order_release);
-        run_neural_async = true;
-      } else if (!process_and_present(
-                     latest_texture_.Get(), latest_view_.Get(), description.Width, description.Height,
-                     latest_capture_time_ms_, error)) {
+      if (!process_and_present(
+              latest_texture_.Get(), latest_view_.Get(), description.Width, description.Height,
+              latest_capture_time_ms_, error)) {
         render_failed = true;
       }
     }
-  }
-  if (run_neural_async) {
-    if (neural_worker_.joinable()) neural_worker_.join();
-    neural_worker_ = std::jthread([
-        this,
-        source = std::move(neural_source),
-        source_view = std::move(neural_source_view),
-        description = neural_description,
-        capture_time_ms = neural_capture_time_ms,
-        capture_generation = neural_capture_generation,
-        configuration_generation = neural_configuration_generation,
-        resize_generation = neural_resize_generation,
-        job_generation = neural_job_generation,
-        completion_window,
-        started](std::stop_token stop_token) {
-      auto completion = std::make_unique<NeuralFrameCompletion>();
-      completion->started = started;
-      completion->job_generation = job_generation;
-      completion->capture_generation = capture_generation;
-      completion->configuration_generation = configuration_generation;
-      completion->resize_generation = resize_generation;
-      completion->source_width = description.Width;
-      completion->source_height = description.Height;
-      completion->capture_time_ms = capture_time_ms;
-      {
-        std::scoped_lock lock(d3d_mutex_);
-        const capture::NeuralGenerationSnapshot job_generations{
-            capture_generation, configuration_generation, resize_generation};
-        const auto current_generations = [this]() {
-          return capture::NeuralGenerationSnapshot{
-              capture_generation_.load(std::memory_order_acquire),
-              configuration_generation_,
-              capture_resize_state_.generation(),
-          };
-        };
-        if (!capture::should_process_neural_frame(
-                stop_token.stop_requested(), active(), is_neural_upscale_mode(options_.mode),
-                capture_resize_state_.has_pending(), job_generations, current_generations())) {
-          completion->cancelled = true;
-        } else if (animejanai_pipeline_ == nullptr) {
-          completion->failed = true;
-          completion->error = "AnimeJaNai DirectML pipeline is not initialized";
-        } else if (!animejanai_pipeline_->execute(
-                       source.Get(), source_view.Get(), description.Width, description.Height,
-                       completion->output, completion->error)) {
-          completion->failed = true;
-        }
-        if (!completion->failed && !capture::should_process_neural_frame(
-                stop_token.stop_requested(), active(), is_neural_upscale_mode(options_.mode),
-                capture_resize_state_.has_pending(), job_generations, current_generations())) {
-          completion->cancelled = true;
-        }
-      }
-      if (stop_token.stop_requested() || !active()) completion->cancelled = true;
-      neural_completion_ = std::move(completion);
-      if (completion_window == nullptr ||
-          !PostMessageW(
-              completion_window, kNeuralFrameCompleteMessage,
-              static_cast<WPARAM>(job_generation), 0)) {
-        neural_processing_.store(false, std::memory_order_release);
-      }
-    });
-    return;
   }
   if (render_failed) {
     const HRESULT removal_reason = device_ == nullptr ? S_OK : device_->GetDeviceRemovedReason();
@@ -1153,90 +1011,6 @@ void CaptureRenderer::render_latest_frame(std::uint64_t capture_generation) {
   }
   const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
   emit_metrics(elapsed);
-}
-
-void CaptureRenderer::finish_neural_frame(std::uint64_t neural_job_generation) {
-  if (!neural_processing_.load(std::memory_order_acquire)) return;
-  if (neural_job_generation != neural_job_generation_) return;
-  if (neural_worker_.joinable()) neural_worker_.join();
-  if (neural_completion_ == nullptr
-      || neural_completion_->job_generation != neural_job_generation) return;
-  auto completion = std::move(neural_completion_);
-  neural_processing_.store(false, std::memory_order_release);
-
-  const auto render_waiting_frame = [this, capture_generation = completion->capture_generation]() {
-    if (!capture::should_handle_capture_window_message(
-            active(), capture_generation,
-            capture_generation_.load(std::memory_order_acquire))) return;
-    if (neural_frame_waiting_.exchange(false, std::memory_order_acq_rel)) {
-      frame_pending_.store(false, std::memory_order_release);
-      if (output_window_ != nullptr) {
-        PostMessageW(
-            output_window_, kFrameReadyMessage,
-            static_cast<WPARAM>(capture_generation), 0);
-      }
-    }
-  };
-  if (completion->cancelled
-      || !capture::should_present_neural_completion(
-          active(), is_neural_upscale_mode(options_.mode), capture_resize_state_.has_pending(),
-          {completion->capture_generation, completion->configuration_generation, completion->resize_generation},
-          {capture_generation_.load(std::memory_order_acquire),
-           configuration_generation_, capture_resize_state_.generation()})) {
-    render_waiting_frame();
-    return;
-  }
-  if (completion->failed) {
-    const HRESULT removal_reason = device_ == nullptr ? S_OK : device_->GetDeviceRemovedReason();
-    const bool device_lost = d3d::requires_device_recreation(S_OK, removal_reason);
-    std::string error = std::move(completion->error);
-    if (device_lost && FAILED(removal_reason)) {
-      error += " (D3D11 device removal reason: " + hresult_message(removal_reason) + ")";
-    }
-    fail_active_session(
-        device_lost ? "device_lost" : "render_failed",
-        error.empty() ? "Native ONNX upscaler inference failed." : std::move(error),
-        device_lost ? "device_lost" : "render_failed",
-        device_lost ? "native-render-device-lost" : "native-neural-upscale-failed",
-        device_lost);
-    return;
-  }
-
-  std::string error;
-  bool render_failed = false;
-  {
-    std::scoped_lock lock(d3d_mutex_);
-    if (!capture::should_present_neural_completion(
-            active(), is_neural_upscale_mode(options_.mode), capture_resize_state_.has_pending(),
-            {completion->capture_generation, completion->configuration_generation, completion->resize_generation},
-            {capture_generation_.load(std::memory_order_acquire),
-             configuration_generation_, capture_resize_state_.generation()})) {
-      render_waiting_frame();
-      return;
-    }
-    update_content_rectangle(completion->source_width, completion->source_height);
-    last_render_hresult_ = S_OK;
-    render_failed = !present_processed_frame(
-        completion->output.texture.Get(), completion->output.view.Get(),
-        completion->capture_time_ms, error);
-  }
-  if (render_failed) {
-    const HRESULT removal_reason = device_ == nullptr ? S_OK : device_->GetDeviceRemovedReason();
-    const bool device_lost = d3d::requires_device_recreation(last_render_hresult_, removal_reason);
-    if (device_lost && FAILED(removal_reason) && removal_reason != last_render_hresult_) {
-      error += " (D3D11 device removal reason: " + hresult_message(removal_reason) + ")";
-    }
-    fail_active_session(
-        device_lost ? "device_lost" : "render_failed",
-        error.empty() ? "Native ONNX upscaler presentation failed." : std::move(error),
-        device_lost ? "device_lost" : "render_failed",
-        device_lost ? "native-render-device-lost" : "native-neural-upscale-failed",
-        device_lost);
-    return;
-  }
-  emit_metrics(std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - completion->started).count());
-  render_waiting_frame();
 }
 
 capture::HealthState CaptureRenderer::probe_capture_health(
@@ -1411,9 +1185,6 @@ LRESULT CALLBACK CaptureRenderer::window_proc(HWND window, UINT message, WPARAM 
   switch (message) {
     case kFrameReadyMessage:
       self->render_latest_frame(static_cast<std::uint64_t>(wparam));
-      return 0;
-    case kNeuralFrameCompleteMessage:
-      self->finish_neural_frame(static_cast<std::uint64_t>(wparam));
       return 0;
     case kCaptureResizeMessage:
       self->apply_pending_capture_resize(static_cast<std::uint64_t>(wparam));

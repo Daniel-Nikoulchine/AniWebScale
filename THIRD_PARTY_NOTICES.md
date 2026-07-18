@@ -4,7 +4,6 @@ This project includes and modifies software and generated shader data from:
 
 - [Anime4K](https://github.com/bloc97/Anime4K), Copyright (c) 2019 bloc97.
 - [Anime4K-WebGPU](https://github.com/Anime4KWebBoost/Anime4K-WebGPU), Copyright (c) 2012-2023 Scott Chacon and others.
-- [ONNX Runtime](https://github.com/microsoft/onnxruntime), Copyright (c) Microsoft Corporation.
 - [Anime4K-WebExtension](https://github.com/chenmozhijin/Anime4K-WebExtension), Copyright (c) 2025 沉默の金.
 - [ArtCNN](https://github.com/Artoriuz/ArtCNN), Copyright (c) 2021 Artoriuz.
 - [ACNetGLSL](https://github.com/TianZerL/ACNetGLSL), Copyright (c) 2021 TianZerL.
@@ -34,24 +33,8 @@ Anime4K model descriptions and weights and are covered by the Anime4K notice
 above. `src/shared/generated-external-glsl-models.ts` retains the pinned ArtCNN
 C4F16, ACNet F8B4, and ARNet F8B8 weights and is covered by the corresponding
 ArtCNN and ACNetGLSL notices above. Complete license copies ship as
-`models/ArtCNN.LICENSE.txt` and `models/ACNetGLSL.LICENSE.txt`. Magpie code and
+`licenses/ArtCNN.LICENSE.txt` and `licenses/ACNetGLSL.LICENSE.txt`. Magpie code and
 binaries are not included.
-
-The `AnimeJaNai-HD-V3.1-Performance-x2.onnx` model originates from
-[mpv-AnimeJaNai](https://github.com/the-database/mpv-AnimeJaNai). It is bundled
-under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
-(CC BY-NC-SA 4.0). It may not be used for commercial purposes, attribution is
-required, and adaptations must be shared under the same license. The complete
-license is shipped beside the model as `models/AnimeJaNai.LICENSE.txt`. The
-packaged graph adds Float32 input/output casts for browser ONNX Runtime
-compatibility while retaining the original FP16 network and weights.
-
-The native package also includes the upstream `aji` DirectML inference bridge
-from [animejanai-inference](https://github.com/the-database/animejanai-inference),
-ONNX Runtime DirectML 1.24.4, and Microsoft DirectML 1.15.4. Their complete
-notices are shipped under `models/animejanai/licenses/`. The `aji` binary and
-model remain subject to the AnimeJaNai CC BY-NC-SA 4.0 terms above; ONNX Runtime
-and DirectML are MIT licensed.
 
 ## Lucide theme icons
 

@@ -9,6 +9,25 @@ export class AuthenticationError extends Error {
   }
 }
 
+export async function requireActiveAccount(database, user) {
+  if (!database?.configured) {
+    throw new AuthenticationError('Account authentication is not configured.');
+  }
+  const result = await database.query(
+    `SELECT id::text, email
+       FROM neon_auth."user"
+      WHERE id = $1
+        AND banned IS NOT TRUE`,
+    [user.id],
+  );
+  const account = result.rows[0];
+  if (!account) throw new AuthenticationError('This account is unavailable.');
+  return {
+    id: account.id,
+    email: typeof account.email === 'string' ? account.email : user.email,
+  };
+}
+
 export function createAuthVerifier(authBaseUrl = process.env.NEON_AUTH_URL || '') {
   const normalized = authBaseUrl.replace(/\/$/, '');
   const origin = normalized ? new URL(normalized).origin : '';

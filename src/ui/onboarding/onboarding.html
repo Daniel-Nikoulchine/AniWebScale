@@ -22,15 +22,19 @@
     <div class="setup-panel">
       <header>
         <div class="brand"><img class="mini-mark" src="icons/icon32.png" alt="" width="26" height="26">AniWebScale</div>
-        <p class="step">WELCOME / 01</p>
-        <h1>Let's make your videos <em>sparkle!</em></h1>
+        <p class="step" data-i18n="welcomeStep">WELCOME / 01</p>
+        <h1 data-i18n="onboardingTitle">Let's make your videos sparkle!</h1>
         <p class="lead">Pick a comfortable starting point. You can change every option later.</p>
       </header>
 
       <section>
-        <div class="section-heading"><span aria-hidden="true">&#10022;</span><div><h2>Choose your defaults</h2><p>Your everyday enhancement recipe.</p></div></div>
+        <div class="section-heading"><span aria-hidden="true">&#10022;</span><div><h2 data-i18n="chooseDefaults">Choose your defaults</h2><p>Your everyday enhancement recipe.</p></div></div>
+        <div id="plan-hint" class="plan-hint" aria-live="polite">
+          <span><strong>Free plan</strong> Anime4K presets + WebGPU are included. AI upscaling, Native and Frame generation require Pro.</span>
+          <button id="view-plans" type="button" data-i18n="viewProPlans">View Pro plans</button>
+        </div>
         <div class="grid">
-          <label class="mode-select-field"><span>Enhancement mode</span>
+          <label class="mode-select-field"><span data-i18n="enhancementMode">Enhancement mode</span>
             <select id="mode">
               <option value="OFF">Off</option>
               <optgroup label="Anime4K presets">
@@ -38,7 +42,7 @@
                 <option value="AA">A+A</option><option value="BB">B+B</option><option value="CA">C+A</option>
               </optgroup>
               <optgroup label="AI upscaling">
-                <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option><option value="ANIMEJANAI">AnimeJaNai HD x2 (Performance)</option>
+                <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option>
               </optgroup>
             </select>
           </label>
@@ -46,15 +50,15 @@
             <p id="mode-description"></p>
             <span id="mode-profile" class="mode-profile"></span>
           </div>
-          <label><span>Quality</span><select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select></label>
-          <label><span>Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
-          <label class="check"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong>Frame generation</strong><small>Motion-aware 2x, even while enhancement is off.</small></span></label>
+          <label><span data-i18n="quality">Quality</span><select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select></label>
+          <label><span data-i18n="backend">Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
+          <label class="check"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong data-i18n="frameGeneration">Frame generation</strong><small id="frame-generation-description">Motion-aware 2x, even while enhancement is off.</small></span></label>
         </div>
       </section>
 
       <div class="tips">
         <div class="tip"><span aria-hidden="true">&#10003;</span><p><strong>Fullscreen friendly</strong>Starts and stops with your video player.</p></div>
-        <div class="tip"><span aria-hidden="true">&#9825;</span><p><strong>Privacy first</strong>No telemetry, DRM bypass or silent site access.</p></div>
+        <div class="tip"><span aria-hidden="true">&#9825;</span><p><strong>Privacy first</strong>No telemetry, DRM bypass or silent site access. Allow each video site from the popup when you need it.</p></div>
       </div>
       <details>
         <summary>Important native renderer notes</summary>
@@ -66,7 +70,7 @@
       </details>
 
       <div class="finish-row">
-        <button id="finish" type="button">Finish setup <span aria-hidden="true">&#8594;</span></button>
+        <button id="finish" type="button"><span data-i18n="finishSetup">Finish setup</span> <span aria-hidden="true">&#8594;</span></button>
         <div id="status" role="status" aria-live="polite"></div>
       </div>
     </div>

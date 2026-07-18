@@ -67,15 +67,33 @@ async function deploy() {
   await run(process.execPath, ['scripts/bootstrap-cloudflare.mjs', '--skip-secrets']);
 }
 
-async function health() {
-  const response = await fetch(`${publicUrl}/api/health`, { cache: 'no-store' });
-  if (!response.ok) throw new Error(`Cloudflare health returned ${response.status}.`);
-  return response.json();
+async function deploymentReadiness() {
+  const operationsToken = String(values.OPERATIONS_MONITOR_TOKEN || '').trim();
+  if (operationsToken.length < 32) throw new Error('OPERATIONS_MONITOR_TOKEN is missing or invalid.');
+  const response = await fetch(`${publicUrl}/api/operations/status`, {
+    cache: 'no-store',
+    headers: { Authorization: `Bearer ${operationsToken}` },
+  });
+  if (response.status !== 200 && response.status !== 503) {
+    throw new Error(`Protected Cloudflare readiness returned ${response.status}.`);
+  }
+  const status = await response.json();
+  if (!status.readiness) throw new Error('Protected Cloudflare readiness is missing.');
+  return status.readiness;
 }
 
 const values = parseDotenv(await readFile(environmentFile));
 if (!isStripeSecretKey(values.STRIPE_SECRET_KEY)) {
   throw new Error('STRIPE_SECRET_KEY is missing or invalid.');
+}
+if (values.STRIPE_SECRET_KEY.startsWith('sk_live_')
+  && (values.LEGAL_REVIEW_APPROVED !== 'true'
+    || values.TAX_CONFIGURATION_APPROVED !== 'true'
+    || !values.LEGAL_TAX_NOTICE?.trim())) {
+  throw new Error(
+    'Live Stripe setup requires LEGAL_REVIEW_APPROVED=true, '
+    + 'TAX_CONFIGURATION_APPROVED=true, and a reviewed LEGAL_TAX_NOTICE.',
+  );
 }
 
 const stripe = new Stripe(values.STRIPE_SECRET_KEY, {
@@ -84,7 +102,7 @@ const stripe = new Stripe(values.STRIPE_SECRET_KEY, {
 });
 const endpointList = await stripe.webhookEndpoints.list({ limit: 100 });
 let endpoint = endpointList.data.find(item => item.url === endpointUrl && item.status === 'enabled');
-let signingSecret = '';
+let signingSecret;
 
 if (!endpoint) {
   endpoint = await stripe.webhookEndpoints.create({
@@ -186,7 +204,7 @@ if (signingSecret) {
 await putSecret('PAID_ENTITLEMENTS_ENABLED', 'true');
 await deploy();
 
-const readiness = await health();
+const readiness = await deploymentReadiness();
 if (!readiness.fulfillmentReady) {
   throw new Error('Cloudflare is deployed, but paid fulfillment remains unavailable.');
 }

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "AniWebScale",
+  "name": "__MSG_extensionName__",
   "description": "__MSG_description__",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7/QBCSx1Jb4tZw70g6/O9SVeevG/1uO8ZePp+j+BQsoa4xw4FeadS4FakMb4bqrcu69tEhmlkd2XbWS7W5s80Z2B9Qe+HCqrn/ZUgbFBB+CKMKUVVH93JTZXu6PxYWkD6k7hjad1K6oKHWZ929r+u8PHjqAk4XyoKYKDH59/7oNkFsEVvtT+PwfqAhRSFRxrR8Ef8SDDVnbaiQfaAHbxXStCG7GnunMaDt5AWU3oRJumbi5HfrQVf3ktraF4BWICqoX97OWOSch2oeYImVxFQK4jI3cdcYPrvQiaWtRaH7wpXrxQnWlFzCQrgRUodt3oLt/ouHXkbXszFwMG+bR0NQIDAQAB",
   "version": "1.0.0",
@@ -17,44 +17,14 @@
   "background": {
     "service_worker": "background.js"
   },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "fullscreen-bridge.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true,
-      "match_about_blank": true,
-      "match_origin_as_fallback": true,
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "run_at": "document_idle",
-      "all_frames": true,
-      "match_about_blank": true,
-      "match_origin_as_fallback": true
-    }
-  ],
   "permissions": [
     "storage",
-    "tabs",
-    "nativeMessaging"
+    "activeTab",
+    "identity",
+    "nativeMessaging",
+    "scripting"
   ],
-  "host_permissions": [
+  "optional_host_permissions": [
     "http://*/*",
     "https://*/*"
   ],
@@ -68,10 +38,7 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "chunks/*.js",
-        "*.mjs",
-        "models/*.onnx",
-        "ort/*"
+        "chunks/*.js"
       ],
       "matches": [
         "http://*/*",

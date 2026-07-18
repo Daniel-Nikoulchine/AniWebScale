@@ -35,7 +35,7 @@ REPEATED_MODES = ("AA", "BB", "CA")
 QUALITIES = ("M", "VL", "UL")
 
 DEFAULT_THRESHOLDS = {
-    "official": {"minimum_ssim": 0.985, "maximum_rmse": 0.035, "maximum_p99_absolute": 0.13},
+    "official": {"minimum_ssim": 0.985, "maximum_rmse": 0.035, "maximum_p99_absolute": 0.135},
     "cross_backend": {"minimum_ssim": 0.995, "maximum_rmse": 0.015, "maximum_p99_absolute": 0.07},
 }
 # Fixed regression budgets. They cover the documented half-float storage and

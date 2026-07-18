@@ -17,7 +17,5 @@ function httpsUrl(name, input, pathSuffix = '') {
 }
 
 const accountApiUrl = httpsUrl('ANIME4K_ACCOUNT_API_URL', process.env.ANIME4K_ACCOUNT_API_URL);
-const neonAuthUrl = httpsUrl('ANIME4K_NEON_AUTH_URL', process.env.ANIME4K_NEON_AUTH_URL, '/auth');
 
 console.log(`Release account origin: ${new URL(accountApiUrl).origin}`);
-console.log(`Release Neon Auth origin: ${new URL(neonAuthUrl).origin}`);

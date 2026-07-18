@@ -37,21 +37,38 @@ module.exports = (env, argv) => {
   const isDevelopment = argv.mode === 'development';
   const targetBrowser = process.env.TARGET_BROWSER || 'chrome';
   const isE2EBuild = process.env.ANIME4K_E2E === '1';
-  const accountApiUrl = process.env.ANIME4K_ACCOUNT_API_URL || 'http://localhost:4242';
-  const neonAuthUrl = process.env.ANIME4K_NEON_AUTH_URL
-    || 'https://ep-orange-lake-ajqnw0vw.neonauth.c-3.us-east-2.aws.neon.tech/neondb/auth';
+  const accountApiUrl = process.env.ANIME4K_ACCOUNT_API_URL
+    || (isDevelopment ? 'http://localhost:4242' : 'https://aniwebscale.pages.dev');
 
-  const manifest = require('./manifest.json');
-  const browserOnnxAssets = targetBrowser === 'firefox' ? [] : [
-    {
-      from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs',
-      to: 'ort/ort-wasm-simd-threaded.asyncify.mjs',
-    },
-    {
-      from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm',
-      to: 'ort/ort-wasm-simd-threaded.asyncify.wasm',
-    },
-  ];
+  const manifest = structuredClone(require('./manifest.json'));
+  const extensionIdentities = require('./native/extension-identities.json');
+
+  // Browser E2E runs cannot interact with the permission prompt. Keep the
+  // production manifest granular while giving the test-only build deterministic
+  // content-script injection.
+  if (isE2EBuild) {
+    delete manifest.optional_host_permissions;
+    manifest.host_permissions = ['http://*/*', 'https://*/*'];
+    manifest.content_scripts = [
+      {
+        matches: ['http://*/*', 'https://*/*'],
+        js: ['fullscreen-bridge.js'],
+        run_at: 'document_start',
+        all_frames: true,
+        match_about_blank: true,
+        match_origin_as_fallback: true,
+        world: 'MAIN',
+      },
+      {
+        matches: ['http://*/*', 'https://*/*'],
+        js: ['content.js'],
+        run_at: 'document_idle',
+        all_frames: true,
+        match_about_blank: true,
+        match_origin_as_fallback: true,
+      },
+    ];
+  }
 
   // Apply the browser-specific manifest shape.
   if (targetBrowser === 'firefox') {
@@ -61,9 +78,9 @@ module.exports = (env, argv) => {
     manifest.background.scripts = ['background.js'];
     manifest.browser_specific_settings = {
       gecko: {
-        id: 'anime4k-webextension@chenmozhijin',
+        id: extensionIdentities.firefoxExtensionId,
         data_collection_permissions: {
-          required: ['none']
+          required: ['authenticationInfo', 'personallyIdentifyingInfo']
         }
       },
     };
@@ -106,28 +123,30 @@ module.exports = (env, argv) => {
     resolve: {
       extensions: ['.ts', '.js'],
       alias: {
-        'anime4k-webgpu$': path.resolve(__dirname, '.generated/anime4k-webgpu/index.js'),
+        'anime4k-webgpu/core$': path.resolve(__dirname, '.generated/anime4k-webgpu/core.js'),
+        'anime4k-webgpu/common$': path.resolve(__dirname, '.generated/anime4k-webgpu/common.js'),
+        'anime4k-webgpu/quality-m$': path.resolve(__dirname, '.generated/anime4k-webgpu/quality-m.js'),
+        'anime4k-webgpu/quality-vl$': path.resolve(__dirname, '.generated/anime4k-webgpu/quality-vl.js'),
+        'anime4k-webgpu/quality-ul$': path.resolve(__dirname, '.generated/anime4k-webgpu/quality-ul.js'),
+        'anime4k-model/cnn-soft-ul$': path.resolve(__dirname, '.generated/anime4k-models/cnn-soft-ul.js'),
+        'anime4k-model/denoise-cnn-x2-m$': path.resolve(__dirname, '.generated/anime4k-models/denoise-cnn-x2-m.js'),
+        'anime4k-model/denoise-cnn-x2-ul$': path.resolve(__dirname, '.generated/anime4k-models/denoise-cnn-x2-ul.js'),
+        'anime4k-model/artcnn-x2$': path.resolve(__dirname, '.generated/anime4k-models/artcnn-x2.js'),
+        'anime4k-model/acnet-x2$': path.resolve(__dirname, '.generated/anime4k-models/acnet-x2.js'),
+        'anime4k-model/arnet-x2$': path.resolve(__dirname, '.generated/anime4k-models/arnet-x2.js'),
       },
-      conditionNames: ['onnxruntime-web-use-extern-wasm', 'webpack', 'browser', 'import', 'default'],
     },
     plugins: [
       new DefinePlugin({
         __ANIME4K_E2E__: JSON.stringify(isE2EBuild),
-        __ANIME4K_BROWSER_ONNX__: JSON.stringify(targetBrowser !== 'firefox'),
         __ANIME4K_ACCOUNT_API_URL__: JSON.stringify(accountApiUrl.replace(/\/$/, '')),
-        __ANIME4K_NEON_AUTH_URL__: JSON.stringify(neonAuthUrl.replace(/\/$/, '')),
       }),
       new CleanWebpackPlugin(),
       new CopyWebpackPlugin({
         patterns: [
           { from: '*.png', context: 'public/icons', to: 'icons' },
-          { from: 'public/_locales/en', to: '_locales/en' },
-          {
-            from: 'public/models',
-            to: 'models',
-            ...(targetBrowser === 'firefox' ? { globOptions: { ignore: ['**/*.onnx'] } } : {}),
-          },
-          ...browserOnnxAssets,
+          { from: 'public/_locales', to: '_locales' },
+          { from: 'public/licenses', to: 'licenses' },
         ],
       }),
       new HtmlWebpackPlugin({
@@ -165,6 +184,10 @@ module.exports = (env, argv) => {
       new RemoveUnsafeGlobalFallbackPlugin(),
     ].filter(Boolean),
     devtool: isDevelopment ? 'inline-source-map' : false,
+    performance: {
+      maxAssetSize: 750 * 1024,
+      maxEntrypointSize: 750 * 1024,
+    },
     watch: isDevelopment,
   };
 };

@@ -16,13 +16,9 @@ export const DEFAULT_SETTINGS: Anime4KWebExtSettings = {
   quality: 'M',
   output: 'auto',
   backend: 'webgpu',
-  statsEnabled: true,
+  statsEnabled: false,
   autoFullscreenEnabled: true,
   frameGenerationEnabled: false,
-};
-
-const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
-  hasCompletedOnboarding: false,
 };
 
 function isBackend(value: unknown): value is RenderBackend {
@@ -32,7 +28,7 @@ function isBackend(value: unknown): value is RenderBackend {
 export async function getSettings(): Promise<Anime4KWebExtSettings> {
   // selectedModeId is read only so a content script opened during a 0.x → 1.x
   // update can still choose the user's former built-in mode before migration.
-  const data = await chrome.storage.sync.get([
+  const data = await chrome.storage.local.get([
     'extensionEnabled',
     'mode',
     'quality',
@@ -64,15 +60,6 @@ export async function getSettings(): Promise<Anime4KWebExtSettings> {
   return await hasStoredProLicense() ? settings : applyFreePlanLimits(settings);
 }
 
-export async function getLocalSettings(): Promise<LocalSettings> {
-  const data = await chrome.storage.local.get(['hasCompletedOnboarding']);
-  return {
-    hasCompletedOnboarding: typeof data.hasCompletedOnboarding === 'boolean'
-      ? data.hasCompletedOnboarding
-      : DEFAULT_LOCAL_SETTINGS.hasCompletedOnboarding,
-  };
-}
-
 function storageSet(area: chrome.storage.StorageArea, values: Record<string, unknown>): Promise<void> {
   return new Promise((resolve, reject) => {
     area.set(values, () => {
@@ -101,7 +88,7 @@ export async function saveSettings(settings: Partial<Anime4KWebExtSettings>): Pr
     update.frameGenerationEnabled = settings.frameGenerationEnabled;
   }
   update.output = 'auto';
-  await storageSet(chrome.storage.sync, update as Record<string, unknown>);
+  await storageSet(chrome.storage.local, update as Record<string, unknown>);
 }
 
 export function getEffectsForPreset(mode: EnhancementMode, quality: QualityTier): EnhancementEffect[] {

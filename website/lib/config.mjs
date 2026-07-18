@@ -44,6 +44,16 @@ export function isAuthUrl(input) {
   }
 }
 
+export function isBase64Key(input, bytes = 32) {
+  try {
+    const normalized = value(input);
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) return false;
+    return Buffer.from(normalized, 'base64').length === bytes;
+  } catch {
+    return false;
+  }
+}
+
 export function isPkcs8PrivateKey(input) {
   try {
     const pem = Buffer.from(value(input), 'base64').toString('utf8');

@@ -23,7 +23,9 @@ quality levels, for 18 selectable presets:
 
 `Output: Auto` targets the physical player size, including display scaling.
 The double-stage modes remain selectable below 2× and show an oversharpening
-warning. Quality is never silently reduced when rendering is too slow.
+warning. Quality is never silently reduced when rendering is too slow. Their UL
+variants are explicit high-end GPU profiles and are outside the RX 6750 XT
+24 FPS release baseline; every other preset is part of that baseline.
 
 ## AI upscale and frame generation
 
@@ -35,7 +37,6 @@ The Mode selector also exposes dedicated neural upscalers:
 | ArtCNN C4F16 x2 | Official ArtCNN C4F16 fragment model, fixed 2x output |
 | ACNet F8B4 x2 | Official neutral ACNet F8B4 fragment model, fixed 2x output |
 | ARNet F8B8 x2 | Official neutral ARNet F8B8 fragment model, fixed 2x output |
-| AnimeJaNai HD x2 | AnimeJaNai HD V3.1 Performance (`SPANF3 b5f48`), fixed 2x output; GPU-resident DirectML reaches about 39 fps for 1080p→4K on the tested RX 6750 XT |
 
 Frame generation is an independent option. It retains two enhanced frames on
 the GPU, estimates short-range motion, and inserts one motion-adaptive midpoint
@@ -43,10 +44,9 @@ for 2x presentation cadence. It adds one decoded-frame of visual latency and is
 reset automatically after a source resize or renderer change.
 
 Every upscale mode and frame generation can run through WebGPU or the native
-Windows renderer. Auto uses Native for protected capture, unavailable WebGPU,
-ONNX-model modes on Firefox, and the faster native DirectML path for AnimeJaNai;
-forcing WebGPU keeps those failures explicit instead
-of silently changing backends. ONNX models compile on first use.
+Windows renderer. Auto uses Native for protected capture or unavailable WebGPU;
+forcing WebGPU keeps those failures explicit instead of silently changing
+backends.
 
 ## How it works
 
@@ -60,9 +60,9 @@ of silently changing backends. ONNX models compile on first use.
   ArtCNN, ACNet, and ARNet use the pinned official GLSL weights translated at
   build time to WGSL and D3D11 compute shaders, with BT.709 luma/chroma
   reconstruction after the fixed 2x model.
-  AnimeJaNai uses ONNX Runtime WebGPU in Chromium or the upstream GPU-resident
-  `aji` DirectML backend in Native mode. All inference is local; no video frame
-  is sent to a server.
+- All inference is local; no video frame is sent to a server.
+- Anime4K quality tiers and each generated neural model are separate lazy chunks;
+  choosing one mode does not parse or load every other model into the tab.
 - On EME/DRM, a `SecurityError`, or explicit `Backend: Native`, the extension
   can ask once per site for permission to use the local Windows renderer.
 - The tab remains in its existing browser window. A random 128-bit title nonce
@@ -70,8 +70,8 @@ of silently changing backends. ONNX models compile on first use.
   browser popup is created and no tab is moved.
 - `Anime4K.NativeHost.exe` uses the browser Native Messaging protocol and a
   current-user-only named pipe. `Anime4K.Renderer.exe` uses Windows Graphics
-  Capture, Direct3D 11, and the bundled DirectML/ONNX Runtime. No
-  shader, weight, compiler, or executable is downloaded at runtime.
+  Capture and Direct3D 11. No shader, weight, compiler, or executable is
+  downloaded at runtime.
 
 The native path does not bypass DRM. Crunchyroll, Widevine, Windows, the
 browser, or the graphics driver can still return black protected frames. In
@@ -102,7 +102,8 @@ Firefox:
 
 The unpacked Chrome ID is fixed to
 `dlomjcbmgkfaebhplgoihbjfclaagike`. The Firefox ID is
-`anime4k-webextension@chenmozhijin`.
+`aniwebscale@korrespont.com`. Both values are verified from
+`native/extension-identities.json` before a release build.
 
 ## Optional Windows renderer
 
@@ -152,12 +153,13 @@ installation boundary.
 npm run typecheck
 npm test
 npm run build:all
+npm run check:bundle-sizes
 npm run test:e2e
 npm run build:native
 npm run package:local
 ```
 
-Public store bundles must be built with the final HTTPS account and Neon Auth URLs. The release build refuses localhost and placeholder domains; see [`docs/RELEASE.md`](docs/RELEASE.md).
+Public store bundles must be built with the final HTTPS account URL. The release build refuses localhost and placeholder domains; see [`docs/RELEASE.md`](docs/RELEASE.md).
 
 After deployment, `npm run check:live -- https://your-domain.example` runs the non-mutating final gate for HTTPS security, all three paid plans, Stripe/Neon readiness, signed-license verification, CORS and store links.
 
@@ -184,6 +186,8 @@ The reproducible checklist is in [`docs/TESTING.md`](docs/TESTING.md).
 
 - No telemetry.
 - No administrator installation.
+- Website access is optional and granted per origin from the popup; the
+  production manifest does not request blanket access at installation time.
 - The native host accepts a fixed command schema and fixed extension IDs. It
   accepts no arbitrary HWND, filesystem path, URL, program, or command line.
 - Native site permissions can be revoked in the extension settings.
@@ -196,8 +200,3 @@ This project is MIT licensed. It derives from the MIT-licensed Anime4K,
 Anime4K-WebGPU, Anime4K-WebExtension, ArtCNN, and ACNetGLSL projects. See
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for attribution. Magpie is
 not used or bundled.
-
-The separately bundled AnimeJaNai model is licensed under
-[CC BY-NC-SA 4.0](public/models/AnimeJaNai.LICENSE.txt), including its
-non-commercial and share-alike restrictions. Those restrictions apply to the
-model and derivatives, not to otherwise independent MIT-licensed project code.

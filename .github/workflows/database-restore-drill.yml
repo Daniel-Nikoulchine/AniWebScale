@@ -1,0 +1,58 @@
+name: Isolated database restore drill
+
+on:
+  schedule:
+    - cron: '47 4 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aniwebscale-database-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      - name: Download, restore and validate the latest independent backup
+        id: drill
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          RESTORE_DATABASE_URL: ${{ secrets.RESTORE_DRILL_DATABASE_URL }}
+          CONFIRM_ISOLATED_RESTORE: 'yes'
+          BACKUP_ENCRYPTION_KEY_B64: ${{ secrets.BACKUP_ENCRYPTION_KEY_B64 }}
+          BACKUP_SECONDARY_S3_ENDPOINT: ${{ secrets.BACKUP_SECONDARY_S3_ENDPOINT }}
+          BACKUP_SECONDARY_S3_BUCKET: ${{ secrets.BACKUP_SECONDARY_S3_BUCKET }}
+          BACKUP_SECONDARY_S3_REGION: ${{ secrets.BACKUP_SECONDARY_S3_REGION }}
+          BACKUP_SECONDARY_S3_ACCESS_KEY_ID: ${{ secrets.BACKUP_SECONDARY_S3_ACCESS_KEY_ID }}
+          BACKUP_SECONDARY_S3_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_SECONDARY_S3_SECRET_ACCESS_KEY }}
+          BACKUP_SECONDARY_S3_PREFIX: aniwebscale
+          BACKUP_DOWNLOAD_PATH: ${{ runner.temp }}/aniwebscale-restore-drill.json.gz.aes
+        run: |
+          echo "started_ms=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+          npm run download:backup:secondary
+          npm run restore:database -- "$BACKUP_DOWNLOAD_PATH"
+          npm run validate:restore-drill
+      - name: Record aggregate restore-drill health
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          RESTORE_DRILL_SUCCESS: ${{ steps.drill.outcome == 'success' }}
+          STARTED_MS: ${{ steps.drill.outputs.started_ms }}
+        run: |
+          now_ms=$(date +%s%3N)
+          echo "RESTORE_DRILL_DURATION_MS=$((now_ms - STARTED_MS))" >> "$GITHUB_ENV"
+          RESTORE_DRILL_DURATION_MS=$((now_ms - STARTED_MS)) npm run record:restore-drill

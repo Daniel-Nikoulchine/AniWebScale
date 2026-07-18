@@ -219,7 +219,6 @@ target_compile_options(anime4k_model_package PRIVATE /W4 /permissive- /EHsc /utf
 
 add_library(anime4k_native_pipeline STATIC
   src/renderer/anime4k_pipeline.cpp
-  src/renderer/animejanai_pipeline.cpp
   src/renderer/frame_generation_pipeline.cpp
   ${FullscreenVS_HEADER}
   ${PresentPS_HEADER}
@@ -229,7 +228,6 @@ add_library(anime4k_native_pipeline STATIC
 target_include_directories(anime4k_native_pipeline PUBLIC include src/renderer)
 target_include_directories(anime4k_native_pipeline PRIVATE
   "${CMAKE_CURRENT_BINARY_DIR}/generated"
-  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/animejanai/include"
 )
 target_link_libraries(anime4k_native_pipeline PUBLIC anime4k_native_common d3d11 windowsapp)
 target_compile_options(anime4k_native_pipeline PRIVATE /W4 /permissive- /EHsc /utf-8)
@@ -293,17 +291,12 @@ target_include_directories(Anime4K.Benchmark PRIVATE include "${CMAKE_CURRENT_BI
 target_link_libraries(Anime4K.Benchmark PRIVATE anime4k_native_pipeline dxgi)
 target_compile_options(Anime4K.Benchmark PRIVATE /W4 /permissive- /EHsc /utf-8)
 
-add_executable(Anime4K.NeuralBenchmark src/benchmark/neural.cpp)
-target_include_directories(Anime4K.NeuralBenchmark PRIVATE include src/renderer)
-target_link_libraries(Anime4K.NeuralBenchmark PRIVATE anime4k_native_pipeline dxgi)
-target_compile_options(Anime4K.NeuralBenchmark PRIVATE /W4 /permissive- /EHsc /utf-8)
-
 add_executable(Anime4K.Golden src/golden/main.cpp)
 target_include_directories(Anime4K.Golden PRIVATE include src/renderer)
 target_link_libraries(Anime4K.Golden PRIVATE anime4k_native_pipeline)
 target_compile_options(Anime4K.Golden PRIVATE /W4 /permissive- /EHsc /utf-8)
 
-set_target_properties(Anime4K.NativeHost Anime4K.Renderer Anime4K.Benchmark Anime4K.NeuralBenchmark Anime4K.Golden PROPERTIES
+set_target_properties(Anime4K.NativeHost Anime4K.Renderer Anime4K.Benchmark Anime4K.Golden PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
@@ -337,6 +330,10 @@ if(ANIME4K_NATIVE_BUILD_TESTS)
   target_link_libraries(anime4k_native_tests PRIVATE anime4k_native_common)
   target_compile_options(anime4k_native_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
   add_test(NAME anime4k_native_protocol COMMAND anime4k_native_tests)
+  add_executable(anime4k_protocol_fuzz_tests tests/protocol_fuzz_tests.cpp)
+  target_link_libraries(anime4k_protocol_fuzz_tests PRIVATE anime4k_native_common)
+  target_compile_options(anime4k_protocol_fuzz_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
+  add_test(NAME anime4k_native_protocol_fuzz COMMAND anime4k_protocol_fuzz_tests)
   add_executable(anime4k_pipeline_tests tests/model_pipeline_tests.cpp)
   target_link_libraries(anime4k_pipeline_tests PRIVATE anime4k_native_pipeline)
   target_compile_options(anime4k_pipeline_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
@@ -349,10 +346,6 @@ if(ANIME4K_NATIVE_BUILD_TESTS)
   target_link_libraries(anime4k_frame_generation_tests PRIVATE anime4k_native_pipeline)
   target_compile_options(anime4k_frame_generation_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
   add_test(NAME anime4k_native_frame_generation COMMAND anime4k_frame_generation_tests)
-  add_executable(anime4k_animejanai_tests tests/animejanai_pipeline_tests.cpp)
-  target_link_libraries(anime4k_animejanai_tests PRIVATE anime4k_native_pipeline)
-  target_compile_options(anime4k_animejanai_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
-  add_test(NAME anime4k_native_animejanai COMMAND anime4k_animejanai_tests)
   add_test(
     NAME anime4k_native_payload_assets
     COMMAND "${CMAKE_COMMAND}"

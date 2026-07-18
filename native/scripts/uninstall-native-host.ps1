@@ -4,7 +4,13 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$hostName = 'io.github.anime4k_browser.native'
+$nativeRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$identityPath = Join-Path $nativeRoot 'extension-identities.json'
+if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
+    throw "Extension identity file is missing: $identityPath"
+}
+$identities = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json
+$hostName = [string] $identities.nativeHostName
 $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
 if (-not $localAppData) {
     throw 'The per-user LocalAppData directory could not be resolved.'

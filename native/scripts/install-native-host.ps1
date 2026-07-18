@@ -6,10 +6,20 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$hostName = 'io.github.anime4k_browser.native'
-$chromeExtensionId = 'dlomjcbmgkfaebhplgoihbjfclaagike'
-$firefoxExtensionId = 'anime4k-webextension@chenmozhijin'
 $nativeRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$identityPath = Join-Path $nativeRoot 'extension-identities.json'
+if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
+    throw "Extension identity file is missing: $identityPath"
+}
+$identities = Get-Content -LiteralPath $identityPath -Raw | ConvertFrom-Json
+$hostName = [string] $identities.nativeHostName
+$chromeExtensionId = [string] $identities.chromeExtensionId
+$firefoxExtensionId = [string] $identities.firefoxExtensionId
+if ($hostName -notmatch '^[a-z0-9_]+(?:\.[a-z0-9_]+)+$' -or
+    $chromeExtensionId -notmatch '^[a-p]{32}$' -or
+    $firefoxExtensionId -notmatch '^[^\s@]+@[^\s@]+$') {
+    throw 'Extension identity file contains an invalid native host, Chrome ID, or Firefox ID.'
+}
 $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
 if (-not $localAppData) {
     throw 'The per-user LocalAppData directory could not be resolved.'
@@ -43,6 +53,20 @@ function Copy-OwnedTree {
         throw "Refusing to replace non-directory path $ownedDestination."
     }
     Copy-Item -LiteralPath $Source -Destination $ownedDestination -Recurse -Force
+}
+
+function Remove-OwnedTree {
+    param([Parameter(Mandatory)] [string] $Path)
+    $ownedPath = Assert-OwnedInstallChild $Path
+    if (-not (Test-Path -LiteralPath $ownedPath)) { return }
+    if (-not (Test-Path -LiteralPath $ownedPath -PathType Container)) {
+        throw "Refusing to remove non-directory path $ownedPath."
+    }
+    $item = Get-Item -LiteralPath $ownedPath -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to remove the reparse point $ownedPath."
+    }
+    Remove-Item -LiteralPath $ownedPath -Recurse -Force
 }
 
 function Read-NativePayloadManifest {
@@ -115,7 +139,6 @@ foreach ($entry in $payloadEntries) {
         throw "$relativePath was not found in $binaryRoot. Rebuild the native renderer before installing."
     }
 }
-$modelRoot = Join-Path $binaryRoot 'models'
 $licenseRoot = Join-Path $binaryRoot 'licenses'
 $utf8 = [Text.UTF8Encoding]::new($false)
 
@@ -126,7 +149,7 @@ if ($PSCmdlet.ShouldProcess($installRoot, 'Install AniWebScale native host')) {
     [IO.File]::WriteAllText($marker, $hostName, $utf8)
     Copy-Item -LiteralPath (Join-Path $binaryRoot 'Anime4K.NativeHost.exe') -Destination $installRoot -Force
     Copy-Item -LiteralPath (Join-Path $binaryRoot 'Anime4K.Renderer.exe') -Destination $installRoot -Force
-    Copy-OwnedTree -Source $modelRoot -Destination (Join-Path $installRoot 'models')
+    Remove-OwnedTree -Path (Join-Path $installRoot 'models')
     Copy-OwnedTree -Source $licenseRoot -Destination (Join-Path $installRoot 'licenses')
     $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $nativeRoot '..'))
     $documentation = @(

@@ -64,7 +64,6 @@ class Anime4KPipeline {
   Microsoft::WRL::ComPtr<ID3D11Device> device_;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
   Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_;
-  Microsoft::WRL::ComPtr<ID3D11Buffer> constant_buffer_;
   std::unordered_map<std::string, Microsoft::WRL::ComPtr<ID3D11ComputeShader>> shaders_;
   std::vector<ResourcePtr> texture_pool_;
   std::unique_ptr<ExecutionPlan> execution_plan_;

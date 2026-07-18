@@ -2,7 +2,6 @@ import { ANIME4K_APPLIED_ATTR, ANIME4K_FULLSCREEN_AUTO_ATTR } from '../constants
 import type {
   Anime4KWebExtSettings,
   Dimensions,
-  EnhancementMode,
   RenderStats,
 } from '../types';
 import {
@@ -10,7 +9,6 @@ import {
   isDoubleMode,
   isProcessingEnabled,
   MODE_TO_ID,
-  supportsWebGpuConfiguration,
 } from '../shared/presets';
 import {
   allowsNativeFallback,
@@ -200,8 +198,6 @@ export class VideoEnhancer {
       requested: settings.backend,
       protectedPlayback: this.isProtectedPlayback(),
       webgpuAvailable: Boolean(navigator.gpu),
-      webgpuCompatible: supportsWebGpuConfiguration(settings.mode),
-      preferNative: settings.mode === 'ANIMEJANAI',
     });
   }
 
@@ -219,7 +215,7 @@ export class VideoEnhancer {
         return;
       }
       const selectedBackend = this.selectBackend(settings);
-      this.assertBackendCompatibility(settings, selectedBackend);
+      this.assertBackendCompatibility(selectedBackend);
       this.currentSettings = settings;
       const claim = await chrome.runtime.sendMessage({
         type: 'ENHANCEMENT_CLAIM',
@@ -235,16 +231,12 @@ export class VideoEnhancer {
       if (selectedBackend === 'native') {
         const reason: NativeFallbackReason = settings.backend === 'native'
           ? 'native-selected'
-          : settings.mode === 'ANIMEJANAI'
-          ? 'animejanai-performance'
           : this.isProtectedPlayback() ? 'eme' : 'webgpu-unavailable';
         try {
           if (!await this.requestNativeFallback(reason, settings, revision)) return;
         } catch (error) {
           if (!this.isTransitionCurrent(revision)) return;
-          if (settings.backend !== 'auto' || settings.mode !== 'ANIMEJANAI'
-            || !navigator.gpu || !supportsWebGpuConfiguration(settings.mode)) throw error;
-          if (!await this.initRenderer({ ...settings, backend: 'webgpu' }, revision)) return;
+          throw error;
         }
       } else if (selectedBackend === 'webgpu') {
         if (!await this.initRenderer(settings, revision)) return;
@@ -325,7 +317,7 @@ export class VideoEnhancer {
         return false;
       }
       // Player frameworks frequently replace the <video> node while shaders
-      // or ONNX are still initializing. Align the completed renderer with the
+      // are still initializing. Align the completed renderer with the
       // latest node before it can own callbacks or expose an applied marker.
       while (rendererVideo !== this.video && this.isTransitionCurrent(revision)) {
         const nextVideo = this.video;
@@ -558,7 +550,7 @@ export class VideoEnhancer {
     if (this.destroyed) return;
     const processingEnabled = isProcessingEnabled(newSettings.mode, newSettings.frameGenerationEnabled);
     const selectedBackend = this.selectBackend(newSettings);
-    if (processingEnabled) this.assertBackendCompatibility(newSettings, selectedBackend);
+    if (processingEnabled) this.assertBackendCompatibility(selectedBackend);
     const previousSettings = this.currentSettings;
     const previousModeId = this.currentModeId;
     const previousOversharpenWarning = this.oversharpenWarning;
@@ -674,52 +666,18 @@ export class VideoEnhancer {
       this.releaseWebGPUResources();
       this.overlay.hideCanvas();
       try {
-        if (!await this.requestNativeFallback(
-          newSettings.mode === 'ANIMEJANAI' && newSettings.backend === 'auto'
-            ? 'animejanai-performance'
-            : 'native-selected',
-          newSettings,
-          revision,
-        )) return;
-      } catch (error) {
-        if (!this.isTransitionCurrent(revision)) return;
-        if (newSettings.mode === 'ANIMEJANAI' && newSettings.backend === 'auto'
-          && navigator.gpu && supportsWebGpuConfiguration(newSettings.mode)) {
-          if (!await this.initRenderer({ ...newSettings, backend: 'webgpu' }, revision)) return;
-        } else {
-          await this.stopEnhancement(false);
-          if (!this.destroyed) {
-            this.showNotification(error instanceof Error ? error.message : 'The native renderer could not be started.');
-          }
-          throw error;
-        }
-      }
-      if (!this.isTransitionCurrent(revision)) return;
-      VideoEnhancer.activeEnhancer = this;
-      this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
-      return;
-    }
-
-    const onnxMode = (mode: EnhancementMode | undefined) => (
-      mode === 'ANIMEJANAI' ? mode : null
-    );
-    if (onnxMode(previousSettings?.mode) !== onnxMode(newSettings.mode)) {
-      const revision = this.beginTransition();
-      this.releaseWebGPUResources();
-      this.overlay.hideCanvas();
-      try {
-        if (!await this.initRenderer(newSettings, revision)) return;
-        if (!this.isTransitionCurrent(revision)) return;
-        VideoEnhancer.activeEnhancer = this;
-        this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+        if (!await this.requestNativeFallback('native-selected', newSettings, revision)) return;
       } catch (error) {
         if (!this.isTransitionCurrent(revision)) return;
         await this.stopEnhancement(false);
         if (!this.destroyed) {
-          this.showNotification(error instanceof Error ? error.message : 'The AI runtime could not be changed.');
+          this.showNotification(error instanceof Error ? error.message : 'The native renderer could not be started.');
         }
         throw error;
       }
+      if (!this.isTransitionCurrent(revision)) return;
+      VideoEnhancer.activeEnhancer = this;
+      this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
       return;
     }
 
@@ -746,14 +704,8 @@ export class VideoEnhancer {
     }
   }
 
-  private assertBackendCompatibility(
-    settings: Anime4KWebExtSettings,
-    selectedBackend: SelectedBackend,
-  ): void {
+  private assertBackendCompatibility(selectedBackend: SelectedBackend): void {
     if (selectedBackend !== 'unavailable') return;
-    if (!supportsWebGpuConfiguration(settings.mode)) {
-      throw new Error('ONNX AI upscaling cannot use WebGPU in Firefox. Select Auto or Native instead.');
-    }
     throw new Error('WebGPU is unavailable and Backend is forced to WebGPU. Select Auto or Native instead.');
   }
 

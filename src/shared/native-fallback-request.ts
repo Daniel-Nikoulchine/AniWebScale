@@ -6,7 +6,6 @@ const FALLBACK_REASONS = [
   'security-error',
   'webgpu-unavailable',
   'video-frame-import-failed',
-  'animejanai-performance',
   'native-selected',
 ] as const;
 

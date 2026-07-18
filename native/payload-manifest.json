@@ -2,58 +2,6 @@
   "version": 1,
   "files": [
     {
-      "source": "../public/models/AnimeJaNai-HD-V3.1-Performance-x2.onnx",
-      "destination": "models/AnimeJaNai-HD-V3.1-Performance-x2.onnx"
-    },
-    {
-      "source": "../public/models/AnimeJaNai.LICENSE.txt",
-      "destination": "models/AnimeJaNai.LICENSE.txt"
-    },
-    {
-      "source": "third_party/animejanai/AnimeJaNai.conf",
-      "destination": "models/animejanai/AnimeJaNai.conf"
-    },
-    {
-      "source": "third_party/animejanai/include/aji.h",
-      "destination": "models/animejanai/include/aji.h"
-    },
-    {
-      "source": "third_party/animejanai/licenses/AnimeJaNai.LICENSE.txt",
-      "destination": "models/animejanai/licenses/AnimeJaNai.LICENSE.txt"
-    },
-    {
-      "source": "third_party/animejanai/licenses/DirectML.LICENSE.txt",
-      "destination": "models/animejanai/licenses/DirectML.LICENSE.txt"
-    },
-    {
-      "source": "third_party/animejanai/licenses/ONNXRuntime.LICENSE.txt",
-      "destination": "models/animejanai/licenses/ONNXRuntime.LICENSE.txt"
-    },
-    {
-      "source": "third_party/animejanai/models/2x_AnimeJaNai_HD_V3.1_Performance_SPANF3_b5f48_unshuffle_fp16.onnx",
-      "destination": "models/animejanai/models/2x_AnimeJaNai_HD_V3.1_Performance_SPANF3_b5f48_unshuffle_fp16.onnx"
-    },
-    {
-      "source": "third_party/animejanai/runtime/aji.dll",
-      "destination": "models/animejanai/runtime/aji.dll"
-    },
-    {
-      "source": "third_party/animejanai/runtime/aji_dml.dll",
-      "destination": "models/animejanai/runtime/aji_dml.dll"
-    },
-    {
-      "source": "third_party/animejanai/runtime/DirectML.dll",
-      "destination": "models/animejanai/runtime/DirectML.dll"
-    },
-    {
-      "source": "third_party/animejanai/runtime/onnxruntime.dll",
-      "destination": "models/animejanai/runtime/onnxruntime.dll"
-    },
-    {
-      "source": "third_party/animejanai/runtime/onnxruntime_providers_shared.dll",
-      "destination": "models/animejanai/runtime/onnxruntime_providers_shared.dll"
-    },
-    {
       "source": "third_party/artcnn/LICENSE",
       "destination": "licenses/ArtCNN.LICENSE.txt"
     },

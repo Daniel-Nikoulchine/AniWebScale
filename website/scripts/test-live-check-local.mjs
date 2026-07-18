@@ -20,8 +20,12 @@ async function availablePort() {
 }
 
 function signingKey() {
-  const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
-  return Buffer.from(privateKey.export({ type: 'pkcs8', format: 'pem' })).toString('base64');
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const publicJwk = publicKey.export({ format: 'jwk' });
+  return {
+    privateKeyBase64: Buffer.from(privateKey.export({ type: 'pkcs8', format: 'pem' })).toString('base64'),
+    publicJwk,
+  };
 }
 
 async function waitForHealth(baseUrl, child) {
@@ -51,6 +55,7 @@ async function stop(child) {
 
 const port = await availablePort();
 const baseUrl = `http://localhost:${port}`;
+const licenseKey = signingKey();
 const env = {
   ...process.env,
   NODE_ENV: 'test',
@@ -64,8 +69,22 @@ const env = {
   STRIPE_PORTAL_CONFIGURATION_ID: 'bpc_Portal123456789012',
   DATABASE_URL: 'postgresql://owner:password@127.0.0.1:5432/neondb?sslmode=require',
   NEON_AUTH_URL: 'https://auth.example.com/neondb/auth',
-  LICENSE_PRIVATE_KEY_PKCS8_B64: signingKey(),
+  LICENSE_PRIVATE_KEY_PKCS8_B64: licenseKey.privateKeyBase64,
+  PRIVACY_HASH_KEY_B64: Buffer.alloc(32, 7).toString('base64'),
+  OPERATIONS_MONITOR_TOKEN: 'local-operations-monitor-token-1234567890',
+  LIVE_EXPECTED_LICENSE_JWK_X: licenseKey.publicJwk.x,
+  LIVE_EXPECTED_LICENSE_JWK_Y: licenseKey.publicJwk.y,
   PAID_ENTITLEMENTS_ENABLED: 'true',
+  LEGAL_REVIEW_APPROVED: 'true',
+  TAX_CONFIGURATION_APPROVED: 'true',
+  DATA_PROTECTION_APPROVED: 'true',
+  LEGAL_TAX_NOTICE: 'VAT included where applicable.',
+  LEGAL_VERSION: '2026-07-17',
+  PRIVACY_CLOUDFLARE_LOG_RETENTION_DAYS: '1',
+  PRIVACY_NEON_PITR_RETENTION_DAYS: '7',
+  PRIVACY_AUTH_SESSION_RETENTION_DAYS: '30',
+  PRIVACY_VENDOR_REVIEW_DATE: '2026-07-17',
+  PRIVACY_TRANSFER_SAFEGUARDS: 'Local readiness fixture with reviewed safeguards.',
   PUBLIC_PRICE_MONTHLY: '4.99',
   PUBLIC_PRICE_YEARLY: '41.99',
   PUBLIC_PRICE_LIFETIME: '59.99',

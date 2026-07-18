@@ -100,10 +100,11 @@ struct Anime4KPipeline::Resource {
 
 struct Anime4KPipeline::ExecutionPlan {
   struct ResolvedPass {
+    PassConstants constants{};
     ComPtr<ID3D11ComputeShader> shader;
+    ComPtr<ID3D11Buffer> constant_buffer;
     std::vector<ResourcePtr> inputs;
     ResourcePtr destination;
-    PassConstants constants{};
     std::uint32_t dispatch_x{};
     std::uint32_t dispatch_y{};
   };
@@ -140,7 +141,7 @@ Anime4KPipeline::Anime4KPipeline(ID3D11Device* device, ID3D11DeviceContext* cont
 Anime4KPipeline::~Anime4KPipeline() = default;
 
 bool Anime4KPipeline::initialize(std::string& error) {
-  if (sampler_ != nullptr && constant_buffer_ != nullptr) return true;
+  if (sampler_ != nullptr) return true;
   D3D11_SAMPLER_DESC sampler_description{};
   sampler_description.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
   sampler_description.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -150,15 +151,6 @@ bool Anime4KPipeline::initialize(std::string& error) {
   HRESULT result = device_->CreateSamplerState(&sampler_description, &sampler_);
   if (FAILED(result)) {
     error = "CreateSamplerState for Anime4K compute failed: " + hresult_message(result);
-    return false;
-  }
-  D3D11_BUFFER_DESC buffer_description{};
-  buffer_description.ByteWidth = sizeof(PassConstants);
-  buffer_description.Usage = D3D11_USAGE_DEFAULT;
-  buffer_description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-  result = device_->CreateBuffer(&buffer_description, nullptr, &constant_buffer_);
-  if (FAILED(result)) {
-    error = "CreateBuffer for Anime4K constants failed: " + hresult_message(result);
     return false;
   }
   return true;
@@ -322,6 +314,19 @@ bool Anime4KPipeline::ensure_execution_plan(
       }
       resolved.dispatch_x = (output_width + 7U) / 8U;
       resolved.dispatch_y = (output_height + 7U) / 8U;
+      D3D11_BUFFER_DESC constants_description{};
+      constants_description.ByteWidth = sizeof(PassConstants);
+      constants_description.Usage = D3D11_USAGE_IMMUTABLE;
+      constants_description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+      D3D11_SUBRESOURCE_DATA constants_data{};
+      constants_data.pSysMem = &resolved.constants;
+      const HRESULT constants_result = device_->CreateBuffer(
+          &constants_description, &constants_data, &resolved.constant_buffer);
+      if (FAILED(constants_result)) {
+        error = "CreateBuffer for immutable Anime4K pass constants failed: "
+            + hresult_message(constants_result);
+        return false;
+      }
       candidate->passes.push_back(std::move(resolved));
 
       resources[pass.output_resource] = destination;
@@ -386,15 +391,16 @@ bool Anime4KPipeline::execute(
   if (plan.source->view.Get() != source_view) plan.source->view = source_view;
   std::array<ID3D11ShaderResourceView*, kMaximumInputs> input_views{};
   std::array<ID3D11ShaderResourceView*, kMaximumInputs> null_views{};
+  // Sampler state is invariant for every generated pass. Bind it once per
+  // frame instead of repeating the same driver call hundreds of times.
+  context_->CSSetSamplers(0, 1, sampler_.GetAddressOf());
   for (const ExecutionPlan::ResolvedPass& pass : plan.passes) {
     for (std::size_t index = 0; index < pass.inputs.size(); ++index) {
       input_views[index] = pass.inputs[index] == nullptr ? nullptr : pass.inputs[index]->view.Get();
     }
 
-    context_->UpdateSubresource(constant_buffer_.Get(), 0, nullptr, &pass.constants, 0, 0);
     context_->CSSetShader(pass.shader.Get(), nullptr, 0);
-    context_->CSSetConstantBuffers(0, 1, constant_buffer_.GetAddressOf());
-    context_->CSSetSamplers(0, 1, sampler_.GetAddressOf());
+    context_->CSSetConstantBuffers(0, 1, pass.constant_buffer.GetAddressOf());
     context_->CSSetShaderResources(0, static_cast<UINT>(pass.inputs.size()), input_views.data());
     context_->CSSetUnorderedAccessViews(0, 1, pass.destination->unordered_view.GetAddressOf(), nullptr);
     context_->Dispatch(pass.dispatch_x, pass.dispatch_y, 1);

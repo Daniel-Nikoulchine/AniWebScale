@@ -5,6 +5,11 @@
  * to the video's parent surface before the browser consumes user activation.
  */
 (() => {
+  const marker = '__anime4kFullscreenBridgeInstalledV1';
+  const pageWindow = window as Window & { [marker]?: boolean };
+  if (pageWindow[marker]) return;
+  pageWindow[marker] = true;
+
   const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'requestFullscreen');
   const original = descriptor?.value as typeof Element.prototype.requestFullscreen | undefined;
   if (!descriptor || typeof original !== 'function') return;

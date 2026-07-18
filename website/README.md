@@ -6,8 +6,14 @@ The `website` folder is a standalone marketing site and Node server. It includes
 - features, interactive comparison, pricing, FAQ and browser download links;
 - Stripe-hosted Checkout for monthly, yearly and one-time Pro plans;
 - signed Stripe webhook endpoint;
-- Neon Auth account page and database-backed Pro entitlements;
-- short-lived signed licenses consumed by the browser extension;
+- enumeration-safe, rate-limited account registration plus Neon sign-in and OTP verification;
+- password-confirmed self-service account deletion with immediate subscription cancellation;
+- authenticated machine-readable account export;
+- account security summary, user-named extension devices, individual session revocation and one-click revocation of all browser and extension sessions;
+- pseudonymous per-IP and per-account throttling for registration, checkout, billing, export, deletion and session/extension authorization operations;
+- daily retention cleanup and backup-deletion reconciliation;
+- PKCE-protected website authorization for Chrome and Firefox;
+- revocable extension sessions plus short-lived signed licenses;
 - Checkout success and cancellation pages;
 - Stripe customer portal link support;
 - privacy, terms and imprint starter pages;
@@ -23,13 +29,15 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-Run `npm run generate:license-key` once and copy the generated value into `.env`. Open `http://localhost:4242`. Without the remaining Stripe and Neon secrets, the full site runs in safe preview mode and paid buttons explain that checkout still needs configuration.
+Run `npm run generate:license-key` and `npm run generate:privacy-key` once and copy the generated values into `.env`. Open `http://localhost:4242`. Without the remaining Stripe, Neon and reviewed compliance values, the site runs in safe preview mode; new registration and paid buttons remain disabled.
 
 Verify the completed configuration without printing secret values:
 
 ```powershell
 npm run check:config
 ```
+
+Database changes are append-only SQL files in `migrations/`. Apply them with `npm run migrate:database`; the runner records checksums in `app.schema_migrations`, uses an advisory lock and refuses modified migrations that have already run.
 
 ## Stripe setup
 
@@ -61,15 +69,20 @@ Stripe recommends using the Checkout Session ID in the success URL and fulfillin
 The container image includes a non-root runtime user, a health check, configuration validation, and graceful shutdown. Deployment and extension release commands are documented in [`../docs/RELEASE.md`](../docs/RELEASE.md).
 
 - Set `PUBLIC_URL` to the final HTTPS origin.
-- Add the production origin to the Neon Auth trusted-domain list, configure SMTP, and enable email verification.
+- Add only the production website origin to the Neon Auth trusted-domain list, disable localhost access, configure SMTP, and require email verification.
 - Use live Stripe keys and live-mode Price IDs only in the production secret store.
 - Create a live-mode customer portal configuration and set its ID as `STRIPE_PORTAL_CONFIGURATION_ID`.
 - Configure a live Stripe webhook for `https://your-domain.example/api/stripe-webhook`.
 - Configure Chrome, Firefox and GitHub URLs.
-- Replace all `LEGAL_*` placeholders and have the legal pages reviewed for the operator and sales regions.
+- Complete all `LEGAL_*` values, have the legal pages and EU sales regions reviewed, and set `LEGAL_REVIEW_APPROVED=true` only for the approved version.
+- Confirm VAT treatment, tax-inclusive Stripe prices and any OSS obligations with a tax adviser. Set `TAX_CONFIGURATION_APPROVED=true` only after that review; live Stripe checkout otherwise remains fail-closed.
+- Complete `../docs/DATA_PROTECTION.md`, execute and record vendor terms and transfer safeguards, configure every `PRIVACY_*` value, and set `DATA_PROTECTION_APPROVED=true` only for the reviewed deployment.
+- Configure the daily `.github/workflows/data-retention.yml` job and treat a failed cleanup as P1.
+- Generate a separate backup key, configure the mandatory independent S3-compatible destination and a dedicated `RESTORE_DRILL_DATABASE_URL`, then enable the daily backup and weekly isolated restore workflows described in `../docs/OPERATIONS.md`.
+- Generate an operations token, configure it as `OPERATIONS_MONITOR_TOKEN` in Pages and GitHub Actions, and enable `.github/workflows/operations-monitor.yml` so stale retention or backup jobs alert automatically.
 - Decide whether `STRIPE_AUTOMATIC_TAX` can be enabled for the Stripe account.
 - Use a stable `LICENSE_PRIVATE_KEY_PKCS8_B64`, then set `PAID_ENTITLEMENTS_ENABLED=true` only after a signed webhook has been tested end to end.
-- Build the extension with `ANIME4K_ACCOUNT_API_URL=https://your-domain.example`. The optional `ANIME4K_NEON_AUTH_URL` variable overrides its public Auth endpoint.
+- Run `npm run migrate:database` before deployment, confirm the protected operations endpoint reports the expected schema version, then build the extension with `ANIME4K_ACCOUNT_API_URL=https://your-domain.example`.
 - Set the Stripe Dashboard branding to match the pastel palette and upload `public/assets/logo-v2.png`.
 - Replace the upstream anime demonstration frames with owned or commercially licensed material before a paid public launch. See `public/assets/anime4k/UPSTREAM_NOTICE.txt`.
 
@@ -79,7 +92,7 @@ After deploying, run the final non-mutating gate from the repository root:
 npm run check:live -- https://your-domain.example
 ```
 
-It fails until Monthly, Yearly, Lifetime, Customer Portal, Neon Auth, HTTPS/HSTS, the public license key, CORS and both browser-store links are production-ready.
+It fails until Monthly, Yearly, Lifetime, Customer Portal, Neon Auth, privacy retention/transfer configuration, HTTPS/HSTS, the public license key, CORS and both browser-store links are production-ready.
 
 ## Cloudflare Pages + Workers Free
 

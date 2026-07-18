@@ -1,17 +1,45 @@
-import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { createNeonAuthClient } from './neon-auth-client';
 import {
   AccountStatus,
   LICENSE_STORAGE_KEY,
   VerifiedLicenseState,
   hasStoredProLicense,
   isStoredLicenseActive,
+  verifiedStoredLicense,
+  verifyLicenseToken,
 } from './entitlement';
 
 const apiUrl = __ANIME4K_ACCOUNT_API_URL__.replace(/\/$/, '');
-const authClient = createNeonAuthClient(__ANIME4K_NEON_AUTH_URL__);
-const licenseJwks = createRemoteJWKSet(new URL(`${apiUrl}/api/license/jwks.json`));
+const EXTENSION_SESSION_KEY = 'aniwebscaleExtensionSessionV1';
+const PKCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 let refreshPromise: Promise<AccountStatus> | null = null;
+
+interface ExtensionSession {
+  refreshToken: string;
+  userId: string;
+  email: string | null;
+  expiresAt: number;
+}
+
+interface LicenseResponse {
+  token?: string;
+  userId?: string;
+  email?: string | null;
+  refreshToken?: string;
+  sessionExpiresAt?: string;
+  error?: string;
+  code?: string;
+}
+
+class AccountServerError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'AccountServerError';
+  }
+}
 
 function message(error: unknown, fallback: string): string {
   if (error && typeof error === 'object') {
@@ -22,20 +50,24 @@ function message(error: unknown, fallback: string): string {
   return fallback;
 }
 
-async function sessionUser(): Promise<{ id: string; email: string | null } | null> {
-  const result = await authClient.getSession();
-  if (result?.error) throw new Error(message(result.error, 'Could not read the account session.'));
-  const user = result.data?.user;
-  if (!user || typeof user.id !== 'string') return null;
-  return { id: user.id, email: typeof user.email === 'string' ? user.email : null };
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
 }
 
-async function authToken(): Promise<string> {
-  const result = await authClient.token();
-  if (result?.error) throw new Error(message(result.error, 'Could not refresh the account token.'));
-  const token = result?.data?.token;
-  if (typeof token !== 'string') throw new Error('The account session expired. Please sign in again.');
-  return token;
+function randomSecret(): string {
+  return base64Url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+async function sha256(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return base64Url(new Uint8Array(digest));
 }
 
 function freeStatus(email: string | null = null, signedIn = false, statusMessage?: string): AccountStatus {
@@ -49,11 +81,55 @@ function freeStatus(email: string | null = null, signedIn = false, statusMessage
   };
 }
 
+function statusFromLicense(
+  license: VerifiedLicenseState,
+  session: ExtensionSession,
+  statusMessage?: string,
+): AccountStatus {
+  return {
+    signedIn: true,
+    email: session.email,
+    plan: license.plan,
+    status: license.status,
+    features: license.features,
+    ...(statusMessage ? { message: statusMessage } : {}),
+  };
+}
+
+async function storedSession(): Promise<ExtensionSession | null> {
+  const stored = await chrome.storage.local.get([EXTENSION_SESSION_KEY]);
+  const value = stored[EXTENSION_SESSION_KEY] as Partial<ExtensionSession> | undefined;
+  if (!value
+    || typeof value.refreshToken !== 'string'
+    || !PKCE_PATTERN.test(value.refreshToken)
+    || typeof value.userId !== 'string'
+    || typeof value.expiresAt !== 'number'
+    || value.expiresAt <= Date.now()) {
+    if (value) await chrome.storage.local.remove([EXTENSION_SESSION_KEY, LICENSE_STORAGE_KEY]);
+    return null;
+  }
+  return {
+    refreshToken: value.refreshToken,
+    userId: value.userId,
+    email: typeof value.email === 'string' ? value.email : null,
+    expiresAt: value.expiresAt,
+  };
+}
+
+async function storeLicense(body: LicenseResponse, session: ExtensionSession): Promise<VerifiedLicenseState> {
+  if (typeof body.token !== 'string' || typeof body.userId !== 'string' || body.userId !== session.userId) {
+    throw new Error('The license server returned an invalid account binding.');
+  }
+  const verified = await verifyLicenseToken(body.token, session.userId);
+  await chrome.storage.local.set({ [LICENSE_STORAGE_KEY]: verified });
+  return verified;
+}
+
 async function e2eStoredStatus(): Promise<AccountStatus | null> {
   if (!__ANIME4K_E2E__) return null;
   const stored = await chrome.storage.local.get([LICENSE_STORAGE_KEY]);
   const license = stored[LICENSE_STORAGE_KEY];
-  if (!isStoredLicenseActive(license)) return null;
+  if (!isStoredLicenseActive(license)) return freeStatus();
   const verified = license as VerifiedLicenseState;
   return {
     signedIn: true,
@@ -64,57 +140,114 @@ async function e2eStoredStatus(): Promise<AccountStatus | null> {
   };
 }
 
+async function extensionFetch(path: string, init: RequestInit = {}): Promise<LicenseResponse> {
+  const response = await fetch(`${apiUrl}${path}`, {
+    ...init,
+    cache: 'no-store',
+    headers: {
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...init.headers,
+    },
+  });
+  const body = await response.json().catch(() => ({})) as LicenseResponse;
+  if (!response.ok) {
+    throw new AccountServerError(
+      response.status,
+      body.error || 'The account server is unavailable.',
+      body.code,
+    );
+  }
+  return body;
+}
+
 async function refreshLicenseNow(): Promise<AccountStatus> {
   const e2eStatus = await e2eStoredStatus();
   if (e2eStatus) return e2eStatus;
-  const user = await sessionUser();
-  if (!user) {
+  const session = await storedSession();
+  if (!session) {
     await chrome.storage.local.remove(LICENSE_STORAGE_KEY);
     return freeStatus();
   }
-
   try {
-    const token = await authToken();
-    const response = await fetch(`${apiUrl}/api/license`, {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: 'no-store',
+    const body = await extensionFetch('/api/extension-auth/license', {
+      headers: { Authorization: `Bearer ${session.refreshToken}` },
     });
-    const body = await response.json().catch(() => ({})) as {
-      token?: string;
-      error?: string;
+    const updatedSession = {
+      ...session,
+      email: typeof body.email === 'string' ? body.email : session.email,
     };
-    if (!response.ok || typeof body.token !== 'string') {
-      throw new Error(body.error || 'The license server is unavailable.');
-    }
-    const { payload } = await jwtVerify(body.token, licenseJwks, {
-      algorithms: ['ES256'],
-      issuer: apiUrl,
-      audience: 'aniwebscale-extension',
-      subject: user.id,
-    });
-    const plan = payload.plan === 'pro' || payload.plan === 'lifetime' ? payload.plan : 'free';
-    const status = payload.status === 'active' || payload.status === 'trialing'
-      ? payload.status
-      : 'inactive';
-    const features = Array.isArray(payload.features)
-      ? payload.features.filter((value): value is string => typeof value === 'string')
-      : ['anime4k', 'webgpu'];
-    if (typeof payload.exp !== 'number') throw new Error('The signed license has no expiration.');
-
-    const verified: VerifiedLicenseState = {
-      token: body.token,
-      userId: user.id,
-      plan,
-      status,
-      features,
-      expiresAt: payload.exp * 1000,
-    };
-    await chrome.storage.local.set({ [LICENSE_STORAGE_KEY]: verified });
-    return { signedIn: true, email: user.email, plan, status, features };
+    const verified = await storeLicense(body, updatedSession);
+    await chrome.storage.local.set({ [EXTENSION_SESSION_KEY]: updatedSession });
+    return statusFromLicense(verified, updatedSession);
   } catch (error) {
-    await chrome.storage.local.remove(LICENSE_STORAGE_KEY);
-    return freeStatus(user.email, true, message(error, 'License refresh failed. Free mode remains active.'));
+    if (error instanceof AccountServerError && (error.status === 401 || error.status === 403)) {
+      await chrome.storage.local.remove([EXTENSION_SESSION_KEY, LICENSE_STORAGE_KEY]);
+      return freeStatus(null, false, message(error, 'The account session expired. Please sign in again.'));
+    }
+    const statusMessage = message(error, 'License refresh failed. Your account remains connected.');
+    const cachedLicense = await verifiedStoredLicense();
+    return cachedLicense
+      ? statusFromLicense(cachedLicense, session, statusMessage)
+      : freeStatus(session.email, true, statusMessage);
   }
+}
+
+function launchWebAuthFlow(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    chrome.identity.launchWebAuthFlow({ url, interactive: true }, responseUrl => {
+      const error = chrome.runtime.lastError;
+      if (error) reject(new Error(error.message));
+      else if (!responseUrl) reject(new Error('The account authorization was canceled.'));
+      else resolve(responseUrl);
+    });
+  });
+}
+
+async function authorize(mode: 'signin' | 'signup'): Promise<AccountStatus> {
+  const redirectUri = chrome.identity.getRedirectURL('aniwebscale');
+  const codeVerifier = randomSecret();
+  const codeChallenge = await sha256(codeVerifier);
+  const state = randomSecret();
+  const authorizationUrl = new URL(`${apiUrl}/account`);
+  authorizationUrl.searchParams.set('extension_authorize', '1');
+  authorizationUrl.searchParams.set('redirect_uri', redirectUri);
+  authorizationUrl.searchParams.set('code_challenge', codeChallenge);
+  authorizationUrl.searchParams.set('state', state);
+  authorizationUrl.searchParams.set('device_name', 'AniWebScale browser extension');
+  if (mode === 'signup') authorizationUrl.searchParams.set('mode', 'signup');
+
+  const responseUrl = new URL(await launchWebAuthFlow(authorizationUrl.toString()));
+  const expectedRedirect = new URL(redirectUri);
+  if (responseUrl.origin !== expectedRedirect.origin
+    || responseUrl.pathname !== expectedRedirect.pathname
+    || responseUrl.searchParams.get('state') !== state) {
+    throw new Error('The account authorization response was invalid.');
+  }
+  const code = responseUrl.searchParams.get('code') || '';
+  if (!PKCE_PATTERN.test(code)) throw new Error('The account authorization code was invalid.');
+
+  const body = await extensionFetch('/api/extension-auth/token', {
+    method: 'POST',
+    body: JSON.stringify({ code, codeVerifier, redirectUri }),
+  });
+  if (typeof body.refreshToken !== 'string'
+    || !PKCE_PATTERN.test(body.refreshToken)
+    || typeof body.userId !== 'string'
+    || typeof body.sessionExpiresAt !== 'string') {
+    throw new Error('The account server returned an invalid extension session.');
+  }
+  const session: ExtensionSession = {
+    refreshToken: body.refreshToken,
+    userId: body.userId,
+    email: typeof body.email === 'string' ? body.email : null,
+    expiresAt: Date.parse(body.sessionExpiresAt),
+  };
+  if (!Number.isFinite(session.expiresAt) || session.expiresAt <= Date.now()) {
+    throw new Error('The account server returned an expired extension session.');
+  }
+  const verified = await storeLicense(body, session);
+  await chrome.storage.local.set({ [EXTENSION_SESSION_KEY]: session });
+  return statusFromLicense(verified, session, 'Extension connected securely.');
 }
 
 export async function refreshAccountStatus(): Promise<AccountStatus> {
@@ -127,42 +260,31 @@ export async function refreshAccountStatus(): Promise<AccountStatus> {
 export async function getAccountStatus(refresh = true): Promise<AccountStatus> {
   const e2eStatus = await e2eStoredStatus();
   if (e2eStatus) return e2eStatus;
+  const session = await storedSession();
+  if (!session) return freeStatus();
   if (refresh) return refreshAccountStatus();
-  const user = await sessionUser();
-  if (!user) return freeStatus();
-  const stored = await chrome.storage.local.get([LICENSE_STORAGE_KEY]);
-  const license = stored[LICENSE_STORAGE_KEY] as Partial<VerifiedLicenseState> | undefined;
-  if (license && typeof license.expiresAt === 'number' && license.expiresAt > Date.now()) {
-    return {
-      signedIn: true,
-      email: user.email,
-      plan: license.plan === 'pro' || license.plan === 'lifetime' ? license.plan : 'free',
-      status: typeof license.status === 'string' ? license.status : 'inactive',
-      features: Array.isArray(license.features) ? license.features : ['anime4k', 'webgpu'],
-    };
-  }
-  return refreshAccountStatus();
+  const license = await verifiedStoredLicense();
+  return license ? statusFromLicense(license, session) : refreshAccountStatus();
 }
 
-export async function signIn(email: string, password: string): Promise<AccountStatus> {
-  const result = await authClient.signIn.email({ email, password });
-  if (result?.error) throw new Error(message(result.error, 'Sign in failed.'));
-  return refreshAccountStatus();
+export async function signIn(): Promise<AccountStatus> {
+  return authorize('signin');
 }
 
-export async function signUp(email: string, password: string): Promise<AccountStatus> {
-  const result = await authClient.signUp.email({
-    email,
-    password,
-    name: email.split('@')[0] || 'AniWebScale user',
-  });
-  if (result?.error) throw new Error(message(result.error, 'Account creation failed.'));
-  return refreshAccountStatus();
+export async function signUp(): Promise<AccountStatus> {
+  return authorize('signup');
 }
 
 export async function signOut(): Promise<AccountStatus> {
-  await authClient.signOut();
-  await chrome.storage.local.remove(LICENSE_STORAGE_KEY);
+  const session = await storedSession();
+  if (session) {
+    await extensionFetch('/api/extension-auth/revoke', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.refreshToken}` },
+      body: '{}',
+    }).catch(() => undefined);
+  }
+  await chrome.storage.local.remove([EXTENSION_SESSION_KEY, LICENSE_STORAGE_KEY]);
   return freeStatus();
 }
 

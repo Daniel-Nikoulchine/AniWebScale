@@ -37,8 +37,15 @@ export function createNeonAuthClient(baseUrl) {
     signIn: {
       email: value => request('sign-in/email', { method: 'POST', body: JSON.stringify(value) }),
     },
-    signUp: {
-      email: value => request('sign-up/email', { method: 'POST', body: JSON.stringify(value) }),
+    emailOtp: {
+      verifyEmail: value => request('email-otp/verify-email', {
+        method: 'POST',
+        body: JSON.stringify(value),
+      }),
+      sendVerificationOtp: value => request('email-otp/send-verification-otp', {
+        method: 'POST',
+        body: JSON.stringify(value),
+      }),
     },
     signOut: () => request('sign-out', { method: 'POST', body: '{}' }),
   };

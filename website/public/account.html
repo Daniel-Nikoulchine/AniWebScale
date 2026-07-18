@@ -10,11 +10,12 @@
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/account.css">
   <script src="/account.js" defer></script>
+  <script src="/site-localize.js" defer></script>
 </head>
 <body class="account-page">
   <header class="site-header">
     <a class="brand" href="/" aria-label="AniWebScale home"><img src="/assets/logo-v2.png" alt="" width="40" height="40"><span>AniWebScale</span></a>
-    <div class="header-actions"><a class="button button-ghost account-home" href="/">Back to home</a></div>
+    <div class="header-actions"><a class="button button-ghost account-home" href="/" data-i18n="backToHome">Back to home</a></div>
   </header>
   <main class="account-main">
     <section class="account-hero">
@@ -26,11 +27,24 @@
       <h2 id="auth-title">Sign in</h2>
       <p>Sign in before buying Pro so the payment can be linked to your extension.</p>
       <form id="auth-form" class="auth-form">
-        <label><span>Email</span><input id="email" type="email" autocomplete="email" required></label>
-        <label><span>Password</span><input id="password" type="password" autocomplete="current-password" minlength="8" required></label>
-        <button id="auth-submit" class="button button-primary" type="submit">Sign in</button>
+        <label><span>Email</span><input id="email" type="email" autocomplete="email" required disabled></label>
+        <label><span>Password</span><input id="password" type="password" autocomplete="current-password" minlength="8" required disabled></label>
+        <button id="auth-submit" class="button button-primary" type="submit" disabled>Sign in</button>
       </form>
-      <button id="auth-switch" class="text-button" type="button">New here? Create an account</button>
+      <button id="auth-switch" class="text-button" type="button" disabled>New here? Create an account</button>
+      <button id="show-verification" class="text-button" type="button" disabled>I already have a verification code</button>
+    </section>
+
+    <section id="verification" class="account-card" hidden>
+      <h2>Verify your email</h2>
+      <p id="verification-copy">Enter the numeric code from your email. Verification starts automatically after all 6 digits. Codes expire after 15 minutes.</p>
+      <form id="verification-form" class="auth-form">
+        <label><span>Email</span><input id="verification-email" type="email" autocomplete="email" required></label>
+        <label><span>Verification code</span><input id="verification-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" autocapitalize="off" spellcheck="false" required></label>
+        <button id="verification-submit" class="button button-primary" type="submit">Verify email</button>
+      </form>
+      <button id="resend-verification" class="text-button" type="button">Send a new code</button>
+      <button id="back-to-auth" class="text-button" type="button">Back to sign in</button>
     </section>
 
     <section id="signed-in" class="account-card" hidden>
@@ -44,15 +58,74 @@
       </div>
       <div class="account-actions">
         <button id="manage-billing" class="button button-ghost" type="button">Manage billing</button>
+        <button id="download-account-data" class="button button-ghost" type="button">Download my data</button>
+      </div>
+      <section class="account-security" aria-labelledby="account-security-title">
+        <div class="account-security-heading">
+          <div>
+            <p class="eyebrow">SECURITY</p>
+            <h2 id="account-security-title">Sessions and account</h2>
+          </div>
+          <button id="revoke-all-sessions" class="button button-ghost" type="button">Sign out everywhere</button>
+        </div>
+        <dl class="security-facts">
+          <div><dt>Account created</dt><dd id="account-created">Checking…</dd></div>
+          <div><dt>Browser sessions</dt><dd id="browser-session-count">Checking…</dd></div>
+          <div><dt>Extension sessions</dt><dd id="extension-session-count">Checking…</dd></div>
+        </dl>
+        <h3 class="session-list-title">Active sessions</h3>
+        <ul id="session-list" class="session-list" aria-label="Active account sessions"></ul>
+        <p id="security-message" class="account-message" role="status" aria-live="polite"></p>
+      </section>
+      <div id="extension-authorization" class="extension-authorization" hidden>
+        <div>
+          <p class="eyebrow">EXTENSION SIGN-IN</p>
+          <h2>Connect AniWebScale</h2>
+          <p>This grants the extension a revocable license session. Your website password is never shared with the extension.</p>
+          <label class="device-name-label"><span>Device name</span><input id="extension-device-name" type="text" minlength="1" maxlength="80" autocomplete="off" value="AniWebScale browser extension"></label>
+        </div>
+        <button id="authorize-extension" class="button button-primary" type="button">Connect extension</button>
       </div>
       <div class="account-plans">
         <article><p>PRO MONTHLY</p><strong>$4.99</strong><span>per month</span><button class="button button-primary" type="button" data-account-plan="pro_monthly">Choose monthly</button></article>
         <article><p>PRO YEARLY</p><strong>$41.99</strong><span>per year</span><button class="button button-primary" type="button" data-account-plan="pro_yearly">Choose yearly</button></article>
         <article><p>LIFETIME PRO</p><strong>$59.99</strong><span>one time</span><button class="button button-primary" type="button" data-account-plan="lifetime">Choose lifetime</button></article>
       </div>
+      <fieldset class="checkout-confirmations">
+        <legend>Before checkout</legend>
+        <label><input id="accept-legal" type="checkbox"> <span>I accept the <a href="/terms" target="_blank">Terms</a> and confirm that I received the <a href="/privacy" target="_blank">Privacy Policy</a>, <a href="/withdrawal" target="_blank">Withdrawal Notice</a> and <a href="/refund" target="_blank">Refund Policy</a>.</span></label>
+        <label><input id="request-performance" type="checkbox"> <span>I expressly request immediate access before the withdrawal period ends and acknowledge the information about when a withdrawal right for digital content may expire.</span></label>
+        <p id="tax-notice">The final total and any applicable VAT are shown before you pay in Stripe Checkout.</p>
+      </fieldset>
       <p id="checkout-message" class="account-message" role="status"></p>
+
+      <section class="danger-zone" aria-labelledby="danger-zone-title">
+        <div>
+          <p class="eyebrow">DANGER ZONE</p>
+          <h2 id="danger-zone-title">Delete account</h2>
+          <p>Permanently remove your login, license and connected extension sessions.</p>
+        </div>
+        <button id="open-delete-account" class="button button-danger" type="button">Delete account</button>
+      </section>
     </section>
     <p id="account-message" class="account-message" role="status" aria-live="polite"></p>
   </main>
+
+  <dialog id="delete-account-dialog" class="account-dialog" aria-labelledby="delete-account-title" aria-describedby="delete-account-warning">
+    <form id="delete-account-form">
+      <p class="eyebrow">PERMANENT ACTION</p>
+      <h2 id="delete-account-title">Delete your account?</h2>
+      <p id="delete-account-warning">This immediately ends active subscriptions and permanently removes Pro or Lifetime access. Connected extensions will be signed out. Payment records that must be retained for legal reasons may remain at Stripe.</p>
+      <label><span>Account email</span><input id="delete-confirmation-email" type="email" autocomplete="email" required></label>
+      <label><span>Current password</span><input id="delete-password" type="password" autocomplete="current-password" minlength="8" maxlength="128" required></label>
+      <label class="delete-acknowledgement"><input id="delete-acknowledgement" type="checkbox" required> <span>I understand that this cannot be undone and that paid access ends immediately.</span></label>
+      <p id="delete-account-message" class="account-message" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button id="cancel-delete-account" class="button button-ghost" type="button">Keep account</button>
+        <button id="confirm-delete-account" class="button button-danger" type="submit">Delete permanently</button>
+      </div>
+    </form>
+  </dialog>
+  <footer class="account-legal"><a href="/imprint" data-i18n="imprint">Imprint</a><a href="/privacy" data-i18n="privacy">Privacy</a><a href="/terms" data-i18n="terms">Terms</a><a href="/withdrawal" data-i18n="withdrawal">Withdrawal</a><a href="/refund" data-i18n="refunds">Refunds</a><a href="/support" data-i18n="support">Support</a></footer>
 </body>
 </html>

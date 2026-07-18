@@ -5,12 +5,12 @@
 
 export type ThemeMode = 'light' | 'dark' | 'auto';
 
-export class ThemeManager {
+class ThemeManager {
   private static instance: ThemeManager;
   private currentTheme: ThemeMode = 'auto';
 
   private constructor() {
-    this.loadTheme();
+    void this.loadTheme();
     this.setupSystemThemeListener();
   }
 
@@ -27,7 +27,7 @@ export class ThemeManager {
   public setTheme(theme: ThemeMode): void {
     this.currentTheme = theme;
     this.applyTheme();
-    this.saveTheme();
+    void this.saveTheme();
   }
 
   /**
@@ -65,7 +65,7 @@ export class ThemeManager {
    */
   private async loadTheme(): Promise<void> {
     try {
-      const result = await chrome.storage.sync.get(['theme']);
+      const result = await chrome.storage.local.get(['theme']);
       if (result.theme && ['light', 'dark', 'auto'].includes(result.theme)) {
         this.currentTheme = result.theme as ThemeMode;
       }
@@ -81,7 +81,7 @@ export class ThemeManager {
    */
   private async saveTheme(): Promise<void> {
     try {
-      await chrome.storage.sync.set({ theme: this.currentTheme });
+      await chrome.storage.local.set({ theme: this.currentTheme });
     } catch (error) {
       console.warn('Failed to save theme to storage:', error);
     }

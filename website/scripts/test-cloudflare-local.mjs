@@ -1,17 +1,34 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parse as parseDotenv } from 'dotenv';
+import pg from 'pg';
 import Stripe from 'stripe';
 import { isStripeWebhookSecret } from '../lib/config.mjs';
 
 const port = 8788;
 const origin = `http://127.0.0.1:${port}`;
 const wrangler = resolve('node_modules/wrangler/bin/wrangler.js');
-const localValues = parseDotenv(await readFile('.env'));
+let hasLocalEnv = process.env.CLOUDFLARE_LOCAL_IGNORE_ENV !== '1';
+const localValues = parseDotenv(hasLocalEnv ? await readFile('.env').catch(error => {
+  if (error?.code !== 'ENOENT') throw error;
+  hasLocalEnv = false;
+  return '';
+}) : '');
+if (!hasLocalEnv) {
+  const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  Object.assign(localValues, {
+    PUBLIC_URL: origin,
+    LICENSE_PRIVATE_KEY_PKCS8_B64: Buffer.from(
+      privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    ).toString('base64'),
+    PAID_ENTITLEMENTS_ENABLED: 'false',
+  });
+}
 const output = [];
-const child = spawn(process.execPath, [
+const wranglerArguments = [
   wrangler,
   'pages',
   'dev',
@@ -19,12 +36,20 @@ const child = spawn(process.execPath, [
   `--port=${port}`,
   '--log-level=error',
   '--show-interactive-dev-session=false',
-], {
+];
+if (!hasLocalEnv) {
+  for (const [key, value] of Object.entries(localValues)) {
+    wranglerArguments.push('--binding', `${key}=${value}`);
+  }
+}
+const child = spawn(process.execPath, wranglerArguments, {
   cwd: process.cwd(),
   env: {
     ...process.env,
     WRANGLER_SEND_METRICS: 'false',
-    ...(localValues.DATABASE_URL
+    ...(!hasLocalEnv
+      ? { CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: 'postgresql://postgres:postgres@127.0.0.1:5432/postgres' }
+      : localValues.DATABASE_URL
       ? { CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: localValues.DATABASE_URL }
       : {}),
   },
@@ -66,15 +91,24 @@ function stopServer() {
 try {
   const healthResponse = await waitForServer();
   const health = await healthResponse.json();
-  assert.equal(health.runtime, 'cloudflare-pages-functions');
-  assert.equal(typeof health.fulfillmentReady, 'boolean');
-  if (health.fulfillmentReady) {
-    assert.equal(health.stripeConfigured, true);
-    assert.equal(health.databaseConfigured, true);
-    assert.equal(health.authConfigured, true);
-    assert.equal(health.webhookConfigured, true);
-    assert.equal(health.licenseKeyConfigured, true);
-    assert.equal(health.portalConfigured, true);
+  assert.deepEqual(health, { ok: true });
+  let readiness;
+  const operationsToken = String(localValues.OPERATIONS_MONITOR_TOKEN || '').trim();
+  if (operationsToken.length >= 32) {
+    const response = await fetch(`${origin}/api/operations/status`, {
+      headers: { Authorization: `Bearer ${operationsToken}` },
+    });
+    assert.ok(response.status === 200 || response.status === 503);
+    readiness = (await response.json()).readiness;
+    assert.equal(readiness?.runtime, 'cloudflare-pages-functions');
+  }
+  if (readiness?.fulfillmentReady) {
+    assert.equal(readiness.stripeConfigured, true);
+    assert.equal(readiness.databaseConfigured, true);
+    assert.equal(readiness.authConfigured, true);
+    assert.equal(readiness.webhookConfigured, true);
+    assert.equal(readiness.licenseKeyConfigured, true);
+    assert.equal(readiness.portalConfigured, true);
   }
 
   const pageResponse = await fetch(`${origin}/`);
@@ -95,7 +129,48 @@ try {
   assert.equal(jwks.keys?.[0]?.alg, 'ES256');
   assert.equal(jwks.keys?.[0]?.kty, 'EC');
 
-  if (health.stripeConfigured && health.databaseConfigured && health.webhookConfigured) {
+  if (readiness?.databaseConfigured && readiness.authConfigured && localValues.DATABASE_URL) {
+    const email = `cloudflare-local-signup-${Date.now()}@example.invalid`;
+    const signupResponse = await fetch(`${origin}/api/auth/sign-up`, {
+      method: 'POST',
+      headers: {
+        Origin: localValues.PUBLIC_URL || 'https://aniwebscale.pages.dev',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email,
+        password: 'correct horse battery staple',
+        name: 'Cloudflare local signup test',
+      }),
+    });
+    const signup = await signupResponse.json();
+    if (!readiness.dataProtectionApproved) {
+      assert.equal(signupResponse.status, 503);
+      assert.equal(signup.code, 'DATA_PROTECTION_APPROVAL_REQUIRED');
+      console.log('Cloudflare signup is fail-closed until data-protection approval.');
+    } else {
+      assert.equal(
+        signupResponse.status,
+        200,
+        `Cloudflare signup failed: ${JSON.stringify(signup)}\n${output.join('')}`,
+      );
+      assert.equal(signup.success, true);
+      const client = new pg.Client({ connectionString: localValues.DATABASE_URL });
+      await client.connect();
+      try {
+        const user = await client.query(
+          `SELECT id FROM neon_auth."user" WHERE email = $1`,
+          [email],
+        );
+        assert.equal(user.rowCount, 1);
+        await client.query(`DELETE FROM neon_auth."user" WHERE id = $1`, [user.rows[0].id]);
+      } finally {
+        await client.end();
+      }
+    }
+  }
+
+  if (readiness?.stripeConfigured && readiness.databaseConfigured && readiness.webhookConfigured) {
     const webhookResponse = await fetch(`${origin}/api/stripe-webhook`, {
       method: 'POST',
       headers: {

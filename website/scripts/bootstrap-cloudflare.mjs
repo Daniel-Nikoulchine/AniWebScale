@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { parse as parseDotenv } from 'dotenv';
 import {
   isAuthUrl,
+  isBase64Key,
   isDatabaseUrl,
   isPkcs8PrivateKey,
   isStripePortalConfigurationId,
@@ -56,7 +57,8 @@ function runWrangler(args, options) {
 }
 
 function parseJsonOutput(output) {
-  const clean = output.replace(/\u001b\[[0-9;]*m/g, '');
+  const ansiColor = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+  const clean = output.replace(ansiColor, '');
   const start = clean.indexOf('[');
   const end = clean.lastIndexOf(']');
   if (start < 0 || end < start) throw new Error('Wrangler returned no JSON project list.');
@@ -64,6 +66,10 @@ function parseJsonOutput(output) {
 }
 
 function validatePaidConfiguration(values) {
+  const retentionDays = value => {
+    const days = Number.parseInt(value || '', 10);
+    return Number.isInteger(days) && days >= 0 && days <= 3_650;
+  };
   const checks = {
     STRIPE_SECRET_KEY: isStripeSecretKey(values.STRIPE_SECRET_KEY),
     STRIPE_PRICE_PRO_MONTHLY: isStripePriceId(values.STRIPE_PRICE_PRO_MONTHLY),
@@ -74,7 +80,18 @@ function validatePaidConfiguration(values) {
     ),
     DATABASE_URL: isDatabaseUrl(values.DATABASE_URL),
     NEON_AUTH_URL: isAuthUrl(values.NEON_AUTH_URL),
+    PRIVACY_HASH_KEY_B64: isBase64Key(values.PRIVACY_HASH_KEY_B64),
+    OPERATIONS_MONITOR_TOKEN: String(values.OPERATIONS_MONITOR_TOKEN || '').trim().length >= 32,
     LICENSE_PRIVATE_KEY_PKCS8_B64: isPkcs8PrivateKey(values.LICENSE_PRIVATE_KEY_PKCS8_B64),
+    LEGAL_REVIEW_APPROVED: values.LEGAL_REVIEW_APPROVED === 'true',
+    TAX_CONFIGURATION_APPROVED: values.TAX_CONFIGURATION_APPROVED === 'true',
+    DATA_PROTECTION_APPROVED: values.DATA_PROTECTION_APPROVED === 'true',
+    PRIVACY_CLOUDFLARE_LOG_RETENTION_DAYS: retentionDays(values.PRIVACY_CLOUDFLARE_LOG_RETENTION_DAYS),
+    PRIVACY_NEON_PITR_RETENTION_DAYS: retentionDays(values.PRIVACY_NEON_PITR_RETENTION_DAYS),
+    PRIVACY_AUTH_SESSION_RETENTION_DAYS: retentionDays(values.PRIVACY_AUTH_SESSION_RETENTION_DAYS),
+    PRIVACY_VENDOR_REVIEW_DATE: /^\d{4}-\d{2}-\d{2}$/.test(values.PRIVACY_VENDOR_REVIEW_DATE || ''),
+    PRIVACY_TRANSFER_SAFEGUARDS: String(values.PRIVACY_TRANSFER_SAFEGUARDS || '').trim().length >= 10,
+    LEGAL_TAX_NOTICE: Boolean(values.LEGAL_TAX_NOTICE?.trim()),
   };
   if (uploadWebhookSecret) {
     checks.STRIPE_WEBHOOK_SECRET = isStripeWebhookSecret(values.STRIPE_WEBHOOK_SECRET);
@@ -113,6 +130,8 @@ const uploadKeys = [
   'PAID_ENTITLEMENTS_ENABLED',
   'DATABASE_URL',
   'NEON_AUTH_URL',
+  'PRIVACY_HASH_KEY_B64',
+  'OPERATIONS_MONITOR_TOKEN',
   'LICENSE_PRIVATE_KEY_PKCS8_B64',
   'LICENSE_AUDIENCE',
   'PUBLIC_PRICE_MONTHLY',
@@ -127,6 +146,19 @@ const uploadKeys = [
   'LEGAL_ADDRESS',
   'LEGAL_REPRESENTATIVES',
   'LEGAL_VAT_ID',
+  'LEGAL_PHONE',
+  'LEGAL_REGISTER_COURT',
+  'LEGAL_REGISTER_NUMBER',
+  'LEGAL_TAX_NOTICE',
+  'LEGAL_VERSION',
+  'LEGAL_REVIEW_APPROVED',
+  'TAX_CONFIGURATION_APPROVED',
+  'DATA_PROTECTION_APPROVED',
+  'PRIVACY_CLOUDFLARE_LOG_RETENTION_DAYS',
+  'PRIVACY_NEON_PITR_RETENTION_DAYS',
+  'PRIVACY_AUTH_SESSION_RETENTION_DAYS',
+  'PRIVACY_VENDOR_REVIEW_DATE',
+  'PRIVACY_TRANSFER_SAFEGUARDS',
 ];
 if (uploadWebhookSecret) uploadKeys.push('STRIPE_WEBHOOK_SECRET');
 
@@ -193,12 +225,28 @@ async function waitForHealth() {
 }
 
 const health = await waitForHealth();
-if (health.runtime !== 'cloudflare-pages-functions') {
-  throw new Error('The deployment did not return the Cloudflare Pages Functions runtime marker.');
+if (health.ok !== true || Object.keys(health).length !== 1) {
+  throw new Error('The deployment did not return the minimal liveness response.');
 }
-if (enablePaid && !health.fulfillmentReady) {
-  throw new Error('Cloudflare deployed, but paid fulfillment is not ready.');
+
+let readiness;
+const operationsToken = String(values.OPERATIONS_MONITOR_TOKEN || '').trim();
+if (operationsToken.length >= 32) {
+  const response = await fetch(`${publicUrl}/api/operations/status`, {
+    cache: 'no-store',
+    headers: { Authorization: `Bearer ${operationsToken}` },
+  });
+  if (response.status !== 200 && response.status !== 503) {
+    throw new Error(`Protected Cloudflare readiness returned ${response.status}.`);
+  }
+  readiness = (await response.json()).readiness;
+  if (readiness?.runtime !== 'cloudflare-pages-functions') {
+    throw new Error('The protected status did not return the Cloudflare Pages Functions runtime marker.');
+  }
+}
+if (enablePaid && !readiness?.fulfillmentReady) {
+  throw new Error('Cloudflare deployed, but protected readiness reports paid fulfillment unavailable.');
 }
 
 console.log(`Cloudflare Pages deployment ready at ${publicUrl}`);
-console.log(`Paid fulfillment: ${health.fulfillmentReady ? 'ready' : 'disabled (fail-closed)'}`);
+console.log(`Paid fulfillment: ${readiness?.fulfillmentReady ? 'ready' : 'disabled (fail-closed)'}`);

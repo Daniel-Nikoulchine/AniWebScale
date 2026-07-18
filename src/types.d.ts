@@ -8,12 +8,8 @@ import type {
 declare global {
   /** Compile-time gate; false in every distributable build. */
   const __ANIME4K_E2E__: boolean;
-  /** Compile-time gate for browser builds that package the ONNX WebGPU runtime. */
-  const __ANIME4K_BROWSER_ONNX__: boolean;
   /** Account/licensing API origin embedded at build time. */
   const __ANIME4K_ACCOUNT_API_URL__: string;
-  /** Public Neon Auth endpoint embedded at build time. */
-  const __ANIME4K_NEON_AUTH_URL__: string;
 }
 
 /** Canonical identifiers shared by storage, UI, WebGPU, and native messaging. */
@@ -22,8 +18,7 @@ type AiUpscaleMode =
   | 'CNNX2'
   | 'ARTCNN'
   | 'ACNET'
-  | 'ARNET'
-  | 'ANIMEJANAI';
+  | 'ARNET';
 type EnhancementMode = 'OFF' | Anime4KMode | AiUpscaleMode;
 type QualityTier = GeneratedQualityTier;
 type RenderBackend = 'auto' | 'webgpu' | 'native';

@@ -1,5 +1,13 @@
 import { handleCloudflareApiRequest } from '../../lib/cloudflare-api.mjs';
 
-export function onRequest({ request, env }) {
-  return handleCloudflareApiRequest(request, env);
+export function createPagesRequestHandler(handleRequest = handleCloudflareApiRequest) {
+  return function pagesRequestHandler(context) {
+    return handleRequest(
+      context.request,
+      context.env,
+      promise => context.waitUntil(promise),
+    );
+  };
 }
+
+export const onRequest = createPagesRequestHandler();

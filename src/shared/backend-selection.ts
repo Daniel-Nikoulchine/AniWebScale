@@ -10,13 +10,10 @@ export function selectInitialBackend(options: {
   requested: RenderBackend;
   protectedPlayback: boolean;
   webgpuAvailable: boolean;
-  webgpuCompatible: boolean;
-  preferNative?: boolean;
 }): SelectedBackend {
   if (options.requested === 'native') return 'native';
-  const webgpuUsable = options.webgpuAvailable && options.webgpuCompatible;
-  if (options.requested === 'webgpu') return webgpuUsable ? 'webgpu' : 'unavailable';
-  return options.protectedPlayback || options.preferNative || !webgpuUsable ? 'native' : 'webgpu';
+  if (options.requested === 'webgpu') return options.webgpuAvailable ? 'webgpu' : 'unavailable';
+  return options.protectedPlayback || !options.webgpuAvailable ? 'native' : 'webgpu';
 }
 
 export function allowsNativeFallback(requested: RenderBackend): boolean {

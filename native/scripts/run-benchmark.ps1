@@ -70,11 +70,36 @@ if ($PSCmdlet.ShouldProcess($report, $description)) {
         throw 'Benchmark completed without creating its JSON report.'
     }
     $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+    if ($result.schemaVersion -ne 2) {
+        throw "Benchmark report schema $($result.schemaVersion) is stale; rebuild Anime4K.Benchmark.exe and rerun."
+    }
+    $presets = @($result.presets)
+    if ($presets.Count -eq 0 -or @($presets | Where-Object {
+        $_.releaseTarget -isnot [bool]
+    }).Count -ne 0) {
+        throw 'Benchmark report is missing the per-profile releaseTarget classification.'
+    }
+    $releaseMisses = @($presets | Where-Object {
+        $_.releaseTarget -eq $true -and $_.budgetMisses -gt 0
+    })
+    $allMisses = @($presets | Where-Object { $_.budgetMisses -gt 0 })
+    $expectedAcceptance = $result.complete -eq $true -and $releaseMisses.Count -eq 0
+    $expectedAllPresets = $result.complete -eq $true -and $allMisses.Count -eq 0
+    if ($result.acceptancePassed -ne $expectedAcceptance -or
+        $result.allPresetsWithinFrameBudget -ne $expectedAllPresets) {
+        throw 'Benchmark report summary does not match its per-profile measurements.'
+    }
     if ($result.acceptancePassed -ne $true -and -not $AllowBudgetMisses) {
-        $overBudget = @($result.presets | Where-Object { $_.budgetMisses -gt 0 } | ForEach-Object {
+        $overBudget = @($releaseMisses | ForEach-Object {
             "$($_.mode)/$($_.quality)"
         }) -join ', '
         throw "The 24 FPS acceptance target failed for: $overBudget. The JSON report remains at $report."
+    }
+    $highLoadMisses = @($presets | Where-Object {
+        $_.releaseTarget -eq $false -and $_.budgetMisses -gt 0
+    } | ForEach-Object { "$($_.mode)/$($_.quality)" }) -join ', '
+    if ($highLoadMisses) {
+        Write-Warning "High-load profiles outside the release baseline exceeded 24 FPS: $highLoadMisses"
     }
     Write-Host "Benchmark report: $report"
 }

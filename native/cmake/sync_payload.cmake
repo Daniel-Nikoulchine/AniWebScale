@@ -17,12 +17,16 @@ if(payload_count LESS 1)
   message(FATAL_ERROR "The native payload manifest is empty.")
 endif()
 
+set(payload_contains_models FALSE)
 math(EXPR payload_last "${payload_count} - 1")
 foreach(payload_index RANGE 0 ${payload_last})
   string(JSON payload_source_relative
     GET "${payload_manifest_json}" files ${payload_index} source)
   string(JSON payload_destination_relative
     GET "${payload_manifest_json}" files ${payload_index} destination)
+  if(payload_destination_relative MATCHES "^models(/|$)")
+    set(payload_contains_models TRUE)
+  endif()
 
   cmake_path(ABSOLUTE_PATH payload_source_relative
     BASE_DIRECTORY "${SOURCE_ROOT}" NORMALIZE
@@ -60,3 +64,7 @@ foreach(payload_index RANGE 0 ${payload_last})
     endif()
   endif()
 endforeach()
+
+if(NOT VERIFY_ONLY AND NOT payload_contains_models)
+  file(REMOVE_RECURSE "${DESTINATION_ROOT}/models")
+endif()

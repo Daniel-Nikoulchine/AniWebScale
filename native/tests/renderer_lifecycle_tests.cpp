@@ -39,33 +39,6 @@ void test_capture_close_generation() {
       "the uninitialized generation is never a valid close notification");
 }
 
-void test_neural_completion_generation() {
-  const anime4k::capture::NeuralGenerationSnapshot current{7, 3, 11};
-  expect(anime4k::capture::should_present_neural_completion(true, true, false, current, current),
-      "the current neural completion may be presented");
-  expect(!anime4k::capture::should_present_neural_completion(false, true, false, current, current),
-      "a completion cannot present after capture shutdown");
-  expect(!anime4k::capture::should_present_neural_completion(true, false, false, current, current),
-      "a completion cannot present after switching away from neural mode");
-  expect(!anime4k::capture::should_present_neural_completion(true, true, true, current, current),
-      "a completion cannot present while a frame-pool resize is pending");
-  expect(!anime4k::capture::should_present_neural_completion(
-      true, true, false, {7, 3, 11}, {8, 3, 11}),
-      "a completion from an older capture cannot reach a new session");
-  expect(!anime4k::capture::should_present_neural_completion(
-      true, true, false, {7, 3, 11}, {7, 4, 11}),
-      "a completion from an older configuration is discarded");
-  expect(!anime4k::capture::should_present_neural_completion(
-      true, true, false, {7, 3, 11}, {7, 3, 12}),
-      "a completion from the previous capture extent is discarded");
-  expect(!anime4k::capture::should_process_neural_frame(
-      true, true, true, false, current, current),
-      "a cancelled worker does not start stale neural processing");
-  expect(!anime4k::capture::should_process_neural_frame(
-      false, true, true, false, {7, 2, 11}, current),
-      "a worker rechecks its configuration snapshot after taking the D3D lock");
-}
-
 void test_capture_window_dispatch_generation() {
   expect(anime4k::capture::should_dispatch_capture_window_message(true, 9, 9, true),
       "a current callback may post while its output-window lease is held");
@@ -91,7 +64,6 @@ void test_capture_window_dispatch_generation() {
 int main() {
   test_device_status();
   test_capture_close_generation();
-  test_neural_completion_generation();
   test_capture_window_dispatch_generation();
   if (failures != 0) {
     std::cerr << failures << " test(s) failed\n";

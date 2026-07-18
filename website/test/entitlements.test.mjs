@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { processStripeEvent } from '../lib/entitlements.mjs';
 
-function fakeDatabase({ duplicate = false } = {}) {
+function fakeDatabase({ duplicate = false, userExists = true } = {}) {
   const calls = [];
   return {
     calls,
@@ -11,6 +11,9 @@ function fakeDatabase({ duplicate = false } = {}) {
         calls.push({ sql, values });
         if (sql.includes('INSERT INTO app.stripe_events')) {
           return { rowCount: duplicate ? 0 : 1, rows: [] };
+        }
+        if (sql.includes('SELECT id::text FROM neon_auth."user"')) {
+          return { rowCount: userExists ? 1 : 0, rows: userExists ? [{ id: values[0] }] : [] };
         }
         return { rowCount: 1, rows: [] };
       });
@@ -74,6 +77,24 @@ describe('Stripe entitlement fulfillment', () => {
           id: 'cs_test_unpaid',
           client_reference_id: '3e48666a-ff39-4b8f-843d-b0cf72c490cb',
           payment_status: 'unpaid',
+          metadata: { plan: 'lifetime' },
+        },
+      },
+    }, priceIds);
+    assert.deepEqual(result, { duplicate: false, handled: false });
+    assert.equal(database.calls.some(call => call.sql.includes('lifetime_purchase_id')), false);
+  });
+
+  it('ignores delayed fulfillment after an account was deleted', async () => {
+    const database = fakeDatabase({ userExists: false });
+    const result = await processStripeEvent(database, {
+      id: 'evt_deleted_account',
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: 'cs_test_deleted_account',
+          client_reference_id: '3e48666a-ff39-4b8f-843d-b0cf72c490cb',
+          payment_status: 'paid',
           metadata: { plan: 'lifetime' },
         },
       },

@@ -6,14 +6,27 @@ import {
   legacyTierToQuality,
 } from '../shared/presets';
 
-const CURRENT_CONFIG_VERSION = 9;
+const CURRENT_CONFIG_VERSION = 10;
+
+const PREFERENCE_KEYS = [
+  'extensionEnabled',
+  'mode',
+  'quality',
+  'output',
+  'backend',
+  'statsEnabled',
+  'autoFullscreenEnabled',
+  'frameGenerationEnabled',
+  'theme',
+  '_configVersion',
+];
 
 function isBackend(value: unknown): value is RenderBackend {
   return value === 'auto' || value === 'webgpu' || value === 'native';
 }
 
-export async function needsMigration(): Promise<boolean> {
-  const data = await chrome.storage.sync.get(['_configVersion']);
+async function needsMigration(): Promise<boolean> {
+  const data = await chrome.storage.local.get(['_configVersion']);
   return (data._configVersion ?? 0) < CURRENT_CONFIG_VERSION;
 }
 
@@ -47,7 +60,7 @@ export function normalizeLegacySettings(
     quality,
     output: 'auto',
     backend: isBackend(syncData.backend) ? syncData.backend : 'auto',
-    statsEnabled: typeof syncData.statsEnabled === 'boolean' ? syncData.statsEnabled : true,
+    statsEnabled: typeof syncData.statsEnabled === 'boolean' ? syncData.statsEnabled : false,
     autoFullscreenEnabled: typeof syncData.autoFullscreenEnabled === 'boolean'
       ? syncData.autoFullscreenEnabled
       : true,
@@ -64,7 +77,7 @@ export function normalizeLegacySettings(
  * Upgrade every legacy layout to the fixed official-preset model. This also
  * permanently disables the former CORS-header and source-reload workaround.
  */
-export async function migrateV1ToV2(): Promise<void> {
+async function migrateV1ToV2(): Promise<void> {
   const [syncData, localData] = await Promise.all([
     chrome.storage.sync.get([
       'extensionEnabled',
@@ -75,31 +88,39 @@ export async function migrateV1ToV2(): Promise<void> {
       'autoFullscreenEnabled',
       'frameGenerationEnabled',
       'selectedModeId',
+      'theme',
+      '_configVersion',
     ]),
-    chrome.storage.local.get(['performanceTier', 'hasCompletedOnboarding']),
+    chrome.storage.local.get([
+      ...PREFERENCE_KEYS,
+      'performanceTier',
+      'hasCompletedOnboarding',
+    ]),
   ]);
 
-  const normalized = normalizeLegacySettings(syncData, localData);
+  const sourceData = { ...syncData, ...localData };
+  const normalized = normalizeLegacySettings(sourceData, localData);
+  const theme = ['light', 'dark', 'auto'].includes(String(sourceData.theme))
+    ? sourceData.theme
+    : 'auto';
 
-  await Promise.all([
-    chrome.storage.sync.set({
-      extensionEnabled: normalized.extensionEnabled,
-      mode: normalized.mode,
-      quality: normalized.quality,
-      output: 'auto',
-      backend: normalized.backend,
-      statsEnabled: normalized.statsEnabled,
-      autoFullscreenEnabled: normalized.autoFullscreenEnabled,
-      frameGenerationEnabled: normalized.frameGenerationEnabled,
-      _configVersion: CURRENT_CONFIG_VERSION,
-    }),
-    chrome.storage.local.set({
-      hasCompletedOnboarding: normalized.hasCompletedOnboarding,
-    }),
-  ]);
+  await chrome.storage.local.set({
+    extensionEnabled: normalized.extensionEnabled,
+    mode: normalized.mode,
+    quality: normalized.quality,
+    output: 'auto',
+    backend: normalized.backend,
+    statsEnabled: normalized.statsEnabled,
+    autoFullscreenEnabled: normalized.autoFullscreenEnabled,
+    frameGenerationEnabled: normalized.frameGenerationEnabled,
+    theme,
+    hasCompletedOnboarding: normalized.hasCompletedOnboarding,
+    _configVersion: CURRENT_CONFIG_VERSION,
+  });
 
   await Promise.all([
     chrome.storage.sync.remove([
+      ...PREFERENCE_KEYS,
       'selectedModeId',
       'targetResolutionSetting',
       'whitelistEnabled',

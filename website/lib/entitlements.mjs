@@ -1,4 +1,5 @@
 const ACTIVE_STATUSES = new Set(['active', 'trialing']);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SUBSCRIPTION_STATUSES = new Set([
   'active',
   'trialing',
@@ -38,6 +39,15 @@ async function userIdForCustomer(query, customerId) {
     [customerId],
   );
   return result.rows[0]?.user_id ?? null;
+}
+
+async function existingUserId(query, userId) {
+  if (typeof userId !== 'string' || !UUID_PATTERN.test(userId)) return null;
+  const result = await query(
+    'SELECT id::text FROM neon_auth."user" WHERE id = $1',
+    [userId],
+  );
+  return result.rows[0]?.id ?? null;
 }
 
 async function upsertSubscription(query, {
@@ -142,7 +152,10 @@ export async function processStripeEvent(database, event, priceIds) {
 
     if (event.type === 'checkout.session.completed'
       || event.type === 'checkout.session.async_payment_succeeded') {
-      const userId = object.client_reference_id || object.metadata?.user_id;
+      const userId = await existingUserId(
+        query,
+        object.client_reference_id || object.metadata?.user_id,
+      );
       const customerId = stripeId(object.customer);
       const plan = object.metadata?.plan;
       const paid = object.payment_status === 'paid' || object.payment_status === 'no_payment_required';
@@ -178,7 +191,10 @@ export async function processStripeEvent(database, event, priceIds) {
       || event.type === 'customer.subscription.updated'
       || event.type === 'customer.subscription.deleted') {
       const customerId = stripeId(object.customer);
-      const userId = object.metadata?.user_id || await userIdForCustomer(query, customerId);
+      const userId = await existingUserId(
+        query,
+        object.metadata?.user_id || await userIdForCustomer(query, customerId),
+      );
       const plan = subscriptionPlan(object, priceIds);
       if (!userId || !plan) return { duplicate: false, handled: false };
       const rawStatus = event.type === 'customer.subscription.deleted' ? 'canceled' : object.status;

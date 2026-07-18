@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import {
   isAuthUrl,
+  isBase64Key,
   isDatabaseUrl,
   isPkcs8PrivateKey,
   isStripePortalConfigurationId,
@@ -32,6 +33,12 @@ describe('runtime configuration validation', () => {
     assert.equal(isAuthUrl('https://example.neonauth.example/neondb/auth'), true);
     assert.equal(isAuthUrl('http://example.com/auth'), false);
     assert.equal(isAuthUrl('http://localhost:3000/auth'), true);
+  });
+
+  it('requires an exact 32-byte privacy HMAC key', () => {
+    assert.equal(isBase64Key(Buffer.alloc(32, 7).toString('base64')), true);
+    assert.equal(isBase64Key(Buffer.alloc(16, 7).toString('base64')), false);
+    assert.equal(isBase64Key('replace_me'), false);
   });
 
   it('accepts only an EC P-256 PKCS8 signing key', () => {

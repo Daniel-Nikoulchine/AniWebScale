@@ -14,8 +14,6 @@ import {
   isProcessingEnabled,
   modeUsesQuality,
   qualityToLegacyTier,
-  supportsOnnxWebGpuRuntime,
-  supportsWebGpuConfiguration,
 } from '../src/shared/presets';
 import {
   scheduleEffectsForTarget,
@@ -110,15 +108,12 @@ describe('official Anime4K presets', () => {
     expect(belowThreshold).not.toBe(first);
   });
 
-  it('exposes CNN, GLSL, and ONNX anime upscalers at fixed scales', () => {
+  it('exposes CNN and GLSL anime upscalers at fixed scales', () => {
     expect(AI_UPSCALE_MODES).toEqual([
-      'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'ANIMEJANAI',
+      'CNNX2', 'ARTCNN', 'ACNET', 'ARNET',
     ]);
     expect(resolveEnhancementGraph('CNNX2', 'VL')[0]).toMatchObject({
       className: 'CNNx2VL', upscaleFactor: 2, alwaysApply: true,
-    });
-    expect(resolveEnhancementGraph('ANIMEJANAI', 'M')[0]).toMatchObject({
-      className: 'AnimeJaNaiX2', upscaleFactor: 2, alwaysApply: true,
     });
     expect(resolveEnhancementGraph('ARTCNN', 'M')[0]).toMatchObject({
       className: 'ArtCNNX2', upscaleFactor: 2, alwaysApply: true,
@@ -138,14 +133,6 @@ describe('official Anime4K presets', () => {
     expect(isProcessingEnabled('OFF', false)).toBe(false);
     expect(isProcessingEnabled('OFF', true)).toBe(true);
     expect(ID_TO_MODE[MODE_TO_ID.OFF]).toBe('OFF');
-  });
-
-  it('marks only Firefox as unsupported for browser ONNX WebGPU runtimes', () => {
-    expect(supportsOnnxWebGpuRuntime('Mozilla/5.0 Firefox/147.0')).toBe(false);
-    expect(supportsOnnxWebGpuRuntime('Mozilla/5.0 Chrome/149.0.0.0 Safari/537.36')).toBe(true);
-    expect(supportsWebGpuConfiguration('ANIMEJANAI', 'Mozilla/5.0 Firefox/147.0')).toBe(false);
-    expect(supportsWebGpuConfiguration('ANIMEJANAI', 'Mozilla/5.0 Chrome/149.0.0.0 Safari/537.36')).toBe(true);
-    expect(supportsWebGpuConfiguration('ARTCNN', 'Mozilla/5.0 Firefox/147.0')).toBe(true);
   });
 
   it('targets physical player pixels and preserves source aspect ratio', () => {

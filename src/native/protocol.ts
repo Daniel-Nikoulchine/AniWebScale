@@ -18,7 +18,7 @@ export const NATIVE_PROTOCOL_VERSION = 3 as const;
 
 export type NativeEnhancementMode = EnhancementMode;
 export type NativeQuality = QualityTier;
-export type NativeSessionState =
+type NativeSessionState =
   | 'starting'
   | 'capturing'
   | 'stopping'
@@ -34,15 +34,15 @@ interface NativeSessionRequestBase extends NativeRequestBase {
   sessionId: string;
 }
 
-export interface NativeHelloRequest extends NativeRequestBase {
+interface NativeHelloRequest extends NativeRequestBase {
   type: 'hello';
 }
 
-export interface NativeCapabilitiesRequest extends NativeRequestBase {
+interface NativeCapabilitiesRequest extends NativeRequestBase {
   type: 'capabilities';
 }
 
-export interface NativeStartRequest extends NativeSessionRequestBase {
+interface NativeStartRequest extends NativeSessionRequestBase {
   type: 'start';
   windowNonce: string;
   mode: NativeEnhancementMode;
@@ -56,18 +56,18 @@ export interface NativeStartRequest extends NativeSessionRequestBase {
   captureHeight?: number;
 }
 
-export interface NativeUpdateConfigurationRequest extends NativeSessionRequestBase {
+interface NativeUpdateConfigurationRequest extends NativeSessionRequestBase {
   type: 'updateConfiguration';
   mode: NativeEnhancementMode;
   quality: NativeQuality;
   frameGenerationEnabled: boolean;
 }
 
-export interface NativeStopRequest extends NativeSessionRequestBase {
+interface NativeStopRequest extends NativeSessionRequestBase {
   type: 'stop';
 }
 
-export interface NativeStatusRequest extends NativeSessionRequestBase {
+interface NativeStatusRequest extends NativeSessionRequestBase {
   type: 'status';
   playbackActive?: boolean;
   mediaTime?: number;
@@ -83,13 +83,13 @@ export type NativeMediaCommandName =
   | 'toggleFullscreen'
   | 'exitFullscreen';
 
-export interface NativeMediaCommandRequest extends NativeSessionRequestBase {
+interface NativeMediaCommandRequest extends NativeSessionRequestBase {
   type: 'mediaCommand';
   command: NativeMediaCommandName;
   value?: number;
 }
 
-export interface NativePointerRequest extends NativeSessionRequestBase {
+interface NativePointerRequest extends NativeSessionRequestBase {
   type: 'pointer';
   event: 'move' | 'down' | 'up' | 'wheel';
   x: number;
@@ -113,7 +113,7 @@ export type NativeRequest =
   | NativeMediaCommandRequest
   | NativePointerRequest;
 
-export interface NativeReadyEvent {
+interface NativeReadyEvent {
   type: 'ready';
   protocolVersion: number;
   requestId: string;
@@ -158,7 +158,7 @@ export interface NativeErrorEvent {
   recoverable: boolean;
 }
 
-export interface NativeStoppedEvent {
+interface NativeStoppedEvent {
   type: 'stopped';
   protocolVersion: number;
   requestId?: string;

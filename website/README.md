@@ -17,7 +17,7 @@ The `website` folder is a standalone marketing site and Node server. It includes
 - Checkout success and cancellation pages;
 - Stripe customer portal link support;
 - privacy, terms and imprint starter pages;
-- attributed comparison imagery from the official Anime4K repository;
+- owned procedurally authored comparison imagery (SVG, no third-party artwork);
 - no analytics, advertising scripts, remote fonts or third-party runtime code.
 
 ## Local setup
@@ -84,7 +84,7 @@ The container image includes a non-root runtime user, a health check, configurat
 - Use a stable `LICENSE_PRIVATE_KEY_PKCS8_B64`, then set `PAID_ENTITLEMENTS_ENABLED=true` only after a signed webhook has been tested end to end.
 - Run `npm run migrate:database` before deployment, confirm the protected operations endpoint reports the expected schema version, then build the extension with `ANIME4K_ACCOUNT_API_URL=https://your-domain.example`.
 - Set the Stripe Dashboard branding to match the pastel palette and upload `public/assets/logo-v2.png`.
-- Replace the upstream anime demonstration frames with owned or commercially licensed material before a paid public launch. See `public/assets/anime4k/UPSTREAM_NOTICE.txt`.
+- The upstream anime demonstration frames have been replaced with owned procedurally authored SVG artwork. See `public/assets/owned/comparison-plate.svg`.
 
 After deploying, run the final non-mutating gate from the repository root:
 

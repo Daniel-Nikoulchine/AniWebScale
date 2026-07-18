@@ -152,6 +152,7 @@ dist
 /.generated/
 /native/build*/
 /.tmp/
+/.hermes/desktop-attachments/
 **/__pycache__/
 *.pyc
 /experiment

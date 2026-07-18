@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 800" width="1800" height="800" role="img" aria-label="AniWebScale illustrative preview: soft geometric artwork on the left, crisp enhanced version on the right">
+  <title>AniWebScale illustrative comparison preview</title>
+  <desc>Abstract procedurally authored geometric and celestial line art demonstrating the visual difference between a soft source and a crisp enhanced render. Left side is deliberately soft; right side is deliberately crisp.</desc>
+
+  <metadata>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+             xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <rdf:Description>
+        <dc:title>AniWebScale Comparison Plate - Original Artwork</dc:title>
+        <dc:creator>AniWebScale / Korrespont</dc:creator>
+        <dc:subject>Procedurally authored geometric and celestial line art for illustrative comparison preview</dc:subject>
+        <dc:rights>Copyright (c) AniWebScale / Korrespont. All rights reserved. Original procedurally authored artwork. Not derived from any third-party source.</dc:rights>
+        <dc:description>Abstract geometric and celestial shapes created procedurally. No third-party characters, logos, or derivative content. Intended as an illustrative preview, not an empirical benchmark.</dc:description>
+      </rdf:Description>
+    </rdf:RDF>
+  </metadata>
+
+  <defs>
+    <filter id="soft">
+      <feGaussianBlur stdDeviation="4.5"/>
+      <feColorMatrix type="saturate" values="0.85"/>
+    </filter>
+    <clipPath id="left-half"><rect x="0" y="0" width="900" height="800"/></clipPath>
+    <clipPath id="right-half"><rect x="900" y="0" width="900" height="800"/></clipPath>
+  </defs>
+
+  <!-- Background gradient -->
+  <rect width="1800" height="800" fill="#1e2640"/>
+
+  <!-- Left side: soft/blurred version -->
+  <g filter="url(#soft)" clip-path="url(#left-half)">
+    <!-- Gradient sky -->
+    <defs>
+      <linearGradient id="skyL" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#2a3a5c"/>
+        <stop offset="100%" stop-color="#1a2038"/>
+      </linearGradient>
+    </defs>
+    <rect width="1800" height="800" fill="url(#skyL)"/>
+
+    <!-- Abstract celestial shapes - left (soft) -->
+    <!-- Large crescent moon -->
+    <circle cx="220" cy="160" r="80" fill="#f4dda0" opacity="0.7"/>
+    <circle cx="250" cy="145" r="72" fill="#2a3a5c"/>
+
+    <!-- Geometric star cluster -->
+    <polygon points="500,120 510,155 548,155 518,175 528,210 500,190 472,210 482,175 452,155 490,155" fill="#c8b9e8" opacity="0.6"/>
+    <polygon points="380,240 386,258 405,258 390,268 396,286 380,275 364,286 370,268 355,258 374,258" fill="#a9cee9" opacity="0.5"/>
+
+    <!-- Concentric rings -->
+    <circle cx="650" cy="300" r="60" fill="none" stroke="#8066ad" stroke-width="2" opacity="0.5"/>
+    <circle cx="650" cy="300" r="42" fill="none" stroke="#8066ad" stroke-width="1.5" opacity="0.4"/>
+    <circle cx="650" cy="300" r="24" fill="none" stroke="#8066ad" stroke-width="1" opacity="0.3"/>
+
+    <!-- Abstract wave pattern -->
+    <path d="M0,450 Q120,400 240,430 T480,420 T720,440 T960,430" fill="none" stroke="#efb9c7" stroke-width="2.5" opacity="0.6"/>
+    <path d="M0,480 Q120,430 240,460 T480,450 T720,470 T960,460" fill="none" stroke="#acd9cd" stroke-width="2" opacity="0.5"/>
+    <path d="M0,510 Q120,460 240,490 T480,480 T720,500 T960,490" fill="none" stroke="#a9cee9" stroke-width="1.5" opacity="0.4"/>
+
+    <!-- Geometric diamonds -->
+    <polygon points="150,600 200,560 250,600 200,640" fill="none" stroke="#f4dda0" stroke-width="2" opacity="0.5"/>
+    <polygon points="400,650 440,620 480,650 440,680" fill="none" stroke="#c8b9e8" stroke-width="1.5" opacity="0.4"/>
+    <polygon points="700,580 730,555 760,580 730,605" fill="none" stroke="#efb9c7" stroke-width="2" opacity="0.5"/>
+
+    <!-- Scattered dots/stars -->
+    <circle cx="100" cy="100" r="3" fill="#fff" opacity="0.5"/>
+    <circle cx="320" cy="80" r="2" fill="#fff" opacity="0.4"/>
+    <circle cx="560" cy="200" r="2.5" fill="#fff" opacity="0.45"/>
+    <circle cx="780" cy="150" r="2" fill="#fff" opacity="0.4"/>
+    <circle cx="850" cy="350" r="3" fill="#fff" opacity="0.5"/>
+    <circle cx="200" cy="350" r="2" fill="#fff" opacity="0.4"/>
+    <circle cx="450" cy="380" r="2.5" fill="#fff" opacity="0.45"/>
+    <circle cx="600" cy="100" r="2" fill="#fff" opacity="0.4"/>
+
+    <!-- Grid lines -->
+    <line x1="0" y1="350" x2="900" y2="350" stroke="#4a5065" stroke-width="0.5" opacity="0.3"/>
+    <line x1="450" y1="0" x2="450" y2="800" stroke="#4a5065" stroke-width="0.5" opacity="0.3"/>
+
+    <!-- Abstract arc constellation -->
+    <path d="M100,700 Q300,620 500,680" fill="none" stroke="#8066ad" stroke-width="1.5" opacity="0.4"/>
+    <circle cx="100" cy="700" r="4" fill="#8066ad" opacity="0.5"/>
+    <circle cx="500" cy="680" r="4" fill="#8066ad" opacity="0.5"/>
+
+    <!-- Vertical accent lines -->
+    <line x1="300" y1="50" x2="300" y2="750" stroke="#65434e" stroke-width="0.5" opacity="0.2"/>
+    <line x1="600" y1="50" x2="600" y2="750" stroke="#65434e" stroke-width="0.5" opacity="0.2"/>
+  </g>
+
+  <!-- Right side: crisp version -->
+  <g clip-path="url(#right-half)">
+    <defs>
+      <linearGradient id="skyR" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#2a3a5c"/>
+        <stop offset="100%" stop-color="#1a2038"/>
+      </linearGradient>
+    </defs>
+    <rect x="900" width="1800" height="800" fill="url(#skyR)"/>
+
+    <!-- Abstract celestial shapes - right (crisp) -->
+    <!-- Large crescent moon -->
+    <circle cx="1120" cy="160" r="80" fill="#f4dda0"/>
+    <circle cx="1150" cy="145" r="72" fill="#2a3a5c"/>
+
+    <!-- Geometric star cluster -->
+    <polygon points="1400,120 1410,155 1448,155 1418,175 1428,210 1400,190 1372,210 1382,175 1352,155 1390,155" fill="#c8b9e8"/>
+    <polygon points="1280,240 1286,258 1305,258 1290,268 1296,286 1280,275 1264,286 1270,268 1255,258 1274,258" fill="#a9cee9"/>
+
+    <!-- Concentric rings -->
+    <circle cx="1550" cy="300" r="60" fill="none" stroke="#8066ad" stroke-width="2"/>
+    <circle cx="1550" cy="300" r="42" fill="none" stroke="#8066ad" stroke-width="1.5"/>
+    <circle cx="1550" cy="300" r="24" fill="none" stroke="#8066ad" stroke-width="1"/>
+
+    <!-- Abstract wave pattern -->
+    <path d="M900,450 Q1020,400 1140,430 T1380,420 T1620,440 T1860,430" fill="none" stroke="#efb9c7" stroke-width="2.5"/>
+    <path d="M900,480 Q1020,430 1140,460 T1380,450 T1620,470 T1860,460" fill="none" stroke="#acd9cd" stroke-width="2"/>
+    <path d="M900,510 Q1020,460 1140,490 T1380,480 T1620,500 T1860,490" fill="none" stroke="#a9cee9" stroke-width="1.5"/>
+
+    <!-- Geometric diamonds -->
+    <polygon points="1050,600 1100,560 1150,600 1100,640" fill="none" stroke="#f4dda0" stroke-width="2"/>
+    <polygon points="1300,650 1340,620 1380,650 1340,680" fill="none" stroke="#c8b9e8" stroke-width="1.5"/>
+    <polygon points="1600,580 1630,555 1660,580 1630,605" fill="none" stroke="#efb9c7" stroke-width="2"/>
+
+    <!-- Scattered dots/stars -->
+    <circle cx="1000" cy="100" r="3" fill="#fff"/>
+    <circle cx="1220" cy="80" r="2" fill="#fff"/>
+    <circle cx="1460" cy="200" r="2.5" fill="#fff"/>
+    <circle cx="1680" cy="150" r="2" fill="#fff"/>
+    <circle cx="1750" cy="350" r="3" fill="#fff"/>
+    <circle cx="1100" cy="350" r="2" fill="#fff"/>
+    <circle cx="1350" cy="380" r="2.5" fill="#fff"/>
+    <circle cx="1500" cy="100" r="2" fill="#fff"/>
+
+    <!-- Grid lines -->
+    <line x1="900" y1="350" x2="1800" y2="350" stroke="#4a5065" stroke-width="0.5"/>
+    <line x1="1350" y1="0" x2="1350" y2="800" stroke="#4a5065" stroke-width="0.5"/>
+
+    <!-- Abstract arc constellation -->
+    <path d="M1000,700 Q1200,620 1400,680" fill="none" stroke="#8066ad" stroke-width="1.5"/>
+    <circle cx="1000" cy="700" r="4" fill="#8066ad"/>
+    <circle cx="1400" cy="680" r="4" fill="#8066ad"/>
+
+    <!-- Vertical accent lines -->
+    <line x1="1200" y1="50" x2="1200" y2="750" stroke="#65434e" stroke-width="0.5"/>
+    <line x1="1500" y1="50" x2="1500" y2="750" stroke="#65434e" stroke-width="0.5"/>
+  </g>
+
+  <!-- Center divider line -->
+  <line x1="900" y1="0" x2="900" y2="800" stroke="#fff" stroke-width="2" opacity="0.9"/>
+  <circle cx="900" cy="400" r="16" fill="#263557" stroke="#fff" stroke-width="2"/>
+  <text x="900" y="405" text-anchor="middle" fill="#fff" font-family="system-ui" font-size="12" font-weight="700">&#8596;</text>
+
+  <!-- Labels -->
+  <rect x="40" y="28" width="180" height="30" rx="8" fill="rgba(32,38,58,0.72)"/>
+  <text x="50" y="48" fill="#fff" font-family="system-ui" font-size="11" font-weight="800" letter-spacing="0.05em">ORIGINAL</text>
+
+  <rect x="1580" y="28" width="180" height="30" rx="8" fill="rgba(32,38,58,0.72)"/>
+  <text x="1590" y="48" fill="#fff" font-family="system-ui" font-size="11" font-weight="800" letter-spacing="0.05em">ENHANCED</text>
+</svg>

@@ -10,17 +10,6 @@
       "id": "e9e1cffc5d164db5990f7ff1ba66bf32"
     }
   ],
-  "observability": {
-    "enabled": true,
-    "logs": {
-      "enabled": true,
-      "head_sampling_rate": 1
-    },
-    "traces": {
-      "enabled": true,
-      "head_sampling_rate": 0.01
-    }
-  },
   "send_metrics": false,
   "upload_source_maps": true
 }

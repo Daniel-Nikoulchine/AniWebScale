@@ -24,7 +24,7 @@ function preferredTheme() {
 function setTheme(theme, persist = false) {
   root.dataset.theme = theme;
   if (persist) localStorage.setItem('aniwebscale-theme', theme);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#20263a' : '#fffaf3');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#0d0a17' : '#f6f5f1');
   document.querySelector('.theme-button')?.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
 }
 

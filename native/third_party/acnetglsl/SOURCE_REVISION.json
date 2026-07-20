@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/TianZerL/ACNetGLSL",
+  "tag": "v3.2.0",
+  "commit": "c7d2d8dbb5364c550e5bfb738860fc9bcc0ea424",
+  "models": {
+    "glsl/acnet/acnet_f8b4.glsl": "f987441a0d05ed4b09639f750f6f160741e8927ee5a88dd3957ec3c8a7861a31",
+    "glsl/arnet/arnet_f8b8.glsl": "5bfdb98817116b17d3e00452939ce23c95ef0efeb4cef4a24aec74e1027d13b1"
+  }
+}

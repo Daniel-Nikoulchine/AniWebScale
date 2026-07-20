@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "source": "third_party/artcnn/LICENSE",
+      "destination": "licenses/ArtCNN.LICENSE.txt"
+    },
+    {
+      "source": "third_party/acnetglsl/LICENSE",
+      "destination": "licenses/ACNetGLSL.LICENSE.txt"
+    }
+  ]
+}

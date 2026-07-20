@@ -1,104 +1,91 @@
-import { EnhancementEffect } from '../types';
+import type { AiUpscaleMode, EnhancementEffect, QualityTier } from '../types';
+
+const restore = (quality: QualityTier): EnhancementEffect => ({
+  id: `anime4k/Restore/CNN${quality}`,
+  name: `Restore CNN (${quality})`,
+  className: `CNN${quality}`,
+});
+
+const restoreSoft = (quality: QualityTier): EnhancementEffect => ({
+  id: `anime4k/Restore/CNNSoft${quality}`,
+  name: `Restore CNN Soft (${quality})`,
+  className: `CNNSoft${quality}`,
+  webgpuAvailable: true,
+});
+
+const upscale = (quality: QualityTier): EnhancementEffect => ({
+  id: `anime4k/Upscale/CNNx2${quality}`,
+  name: `Upscale CNN x2 (${quality})`,
+  className: `CNNx2${quality}`,
+  upscaleFactor: 2,
+});
+
+const denoiseUpscale = (quality: QualityTier): EnhancementEffect => ({
+  id: `anime4k/Upscale/DenoiseCNNx2${quality}`,
+  name: `Upscale and denoise CNN x2 (${quality})`,
+  className: `DenoiseCNNx2${quality}`,
+  upscaleFactor: 2,
+  webgpuAvailable: true,
+});
 
 /**
- * 所有可用的增强效果清单。
- * 这是系统中所有效果的唯一“真相来源”。
- * id: 唯一标识符，用于存储和识别。
- * name: 显示在UI上的用户友好名称。
- * className: 对应于 `anime4k-webgpu` 库中导出的类名，用于动态实例化。
+ * Complete official effect catalogue used by the 6 x 3 preset matrix.
+ * The three classes absent from anime4k-webgpu 1.0.0 are provided by generated
+ * local pipelines, so every entry in the matrix is an exact quality variant.
  */
-export const AVAILABLE_EFFECTS: EnhancementEffect[] = [
-  // Deblur Effects
-  {
-    id: 'anime4k/Deblur/DoG',
-    name: 'Deblur (DoG)',
-    className: 'DoG',
-    // params: { strength: 4 } // 示例：未来可支持参数配置
-  },
-
-  // Denoise Effects
-  {
-    id: 'anime4k/Denoise/BilateralMean',
-    name: 'Denoise (Bilateral Mean)',
-    className: 'BilateralMean',
-  },
-
-  // Restore Effects
-  {
-    id: 'anime4k/Restore/CNNM',
-    name: 'Restore CNN (M)',
-    className: 'CNNM',
-  },
-  {
-    id: 'anime4k/Restore/CNNSoftM',
-    name: 'Restore CNN Soft (M)',
-    className: 'CNNSoftM',
-  },
-  {
-    id: 'anime4k/Restore/CNNSoftVL',
-    name: 'Restore CNN Soft (VL)',
-    className: 'CNNSoftVL',
-  },
-  {
-    id: 'anime4k/Restore/CNNVL',
-    name: 'Restore CNN (VL)',
-    className: 'CNNVL',
-  },
-  {
-    id: 'anime4k/Restore/CNNUL',
-    name: 'Restore CNN (UL)',
-    className: 'CNNUL',
-  },
-  {
-    id: 'anime4k/Restore/GANUUL',
-    name: 'Restore GAN (UUL)',
-    className: 'GANUUL',
-  },
-
-  // Upscale Effects
-  {
-    id: 'anime4k/Upscale/CNNx2M',
-    name: 'Upscale CNN x2 (M)',
-    className: 'CNNx2M',
-    upscaleFactor: 2,
-  },
-  {
-    id: 'anime4k/Upscale/CNNx2VL',
-    name: 'Upscale CNN x2 (VL)',
-    className: 'CNNx2VL',
-    upscaleFactor: 2,
-  },
-  {
-    id: 'anime4k/Upscale/DenoiseCNNx2VL',
-    name: 'Upscale & Denoise CNN x2 (VL)',
-    className: 'DenoiseCNNx2VL',
-    upscaleFactor: 2,
-  },
-  {
-    id: 'anime4k/Upscale/CNNx2UL',
-    name: 'Upscale CNN x2 (UL)',
-    className: 'CNNx2UL',
-    upscaleFactor: 2,
-  },
-  {
-    id: 'anime4k/Upscale/GANx3L',
-    name: 'Upscale GAN x3 (L)',
-    className: 'GANx3L',
-    upscaleFactor: 3,
-  },
-  {
-    id: 'anime4k/Upscale/GANx4UUL',
-    name: 'Upscale GAN x4 (UUL)',
-    className: 'GANx4UUL',
-    upscaleFactor: 4,
-  },
-
-  // Helper Effects
-  // 注意：`Downscale` 将由扩展根据分辨率自动处理，不作为用户可选效果。
-  // `ClampHighlights` 可由用户选择。
+const AVAILABLE_EFFECTS: EnhancementEffect[] = [
   {
     id: 'anime4k/Helper/ClampHighlights',
     name: 'Clamp Highlights',
     className: 'ClampHighlights',
   },
+  ...(['M', 'VL', 'UL'] as const).flatMap(quality => [
+    restore(quality),
+    restoreSoft(quality),
+    upscale(quality),
+    denoiseUpscale(quality),
+  ]),
 ];
+
+export function findEffect(className: string): EnhancementEffect {
+  const effect = AVAILABLE_EFFECTS.find(candidate => candidate.className === className);
+  if (!effect) throw new Error(`Unknown Anime4K effect: ${className}`);
+  return effect;
+}
+
+export function resolveAiUpscaleEffect(mode: AiUpscaleMode, quality: QualityTier): EnhancementEffect {
+  if (mode === 'CNNX2') {
+    return { ...findEffect(`CNNx2${quality}`), alwaysApply: true };
+  }
+  if (mode === 'ARTCNN') {
+    return {
+      id: 'artcnn/C4F16/x2',
+      name: 'ArtCNN C4F16 x2',
+      className: 'ArtCNNX2',
+      upscaleFactor: 2,
+      alwaysApply: true,
+      webgpuAvailable: true,
+    };
+  }
+  if (mode === 'ACNET') {
+    return {
+      id: 'acnet/F8B4/x2',
+      name: 'ACNet F8B4 x2',
+      className: 'ACNetX2',
+      upscaleFactor: 2,
+      alwaysApply: true,
+      webgpuAvailable: true,
+    };
+  }
+  if (mode === 'ARNET') {
+    return {
+      id: 'arnet/F8B8/x2',
+      name: 'ARNet F8B8 x2',
+      className: 'ARNetX2',
+      upscaleFactor: 2,
+      alwaysApply: true,
+      webgpuAvailable: true,
+    };
+  }
+  throw new Error(`Unknown AI upscale mode: ${mode satisfies never}`);
+}

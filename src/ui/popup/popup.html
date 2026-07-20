@@ -1,105 +1,80 @@
-<!DOCTYPE html>
-<html lang="__MSG_@@ui_locale__">
-
+<!doctype html>
+<html lang="en">
 <head>
-  <title data-i18n="extensionName"></title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AniWebScale</title>
 </head>
-
 <body>
-  <div class="card">
-    <div class="card-header">
-      <h3 data-i18n="extensionName"></h3>
+  <main class="panel">
+    <header class="brand-header">
+      <div class="brand-mark" aria-hidden="true"><img src="icons/icon48.png" alt="" width="46" height="46"></div>
+      <div class="brand-copy">
+        <h1>AniWebScale~!!</h1>
+        <p data-i18n="realTimeVideoEnhancement">Real-time video enhancement</p>
+      </div>
+    </header>
+
+    <button id="account-plan" class="account-plan" type="button">
+      <span>Current plan</span><strong>Free</strong><em id="account-plan-action">Upgrade &#8594;</em>
+      <small id="account-plan-summary">Free: Anime4K + WebGPU · Pro: AI, Native + Frame Gen</small>
+    </button>
+
+    <section class="switch-card extension-switch-card" aria-label="Extension status">
+      <label class="check-row"><input id="extension-enabled" type="checkbox"><span class="check-control"></span><span><strong data-i18n="extensionEnabled">Extension enabled</strong><small data-i18n="processVideos">Process videos in this browser</small></span></label>
+    </section>
+
+    <section id="site-access-card" class="site-access-card" data-state="unavailable" aria-labelledby="site-access-title">
+      <div>
+        <strong id="site-access-title" data-i18n="websiteAccess">Website access</strong>
+        <small id="site-access-summary">Checking access for this site...</small>
+      </div>
+      <button id="site-access" class="secondary" type="button" disabled>Checking...</button>
+    </section>
+
+    <section class="settings-card" aria-labelledby="quick-setup-title">
+      <div class="section-heading">
+        <span class="heading-icon lavender" aria-hidden="true">&#10022;</span>
+        <div><h2 id="quick-setup-title" data-i18n="quickSetup">Quick setup</h2></div>
+      </div>
+
+      <label class="mode-select-field">
+          <span data-i18n="enhancementMode">Enhancement mode</span>
+          <select id="mode">
+            <option value="OFF">Off</option>
+            <optgroup label="Anime4K presets">
+              <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+              <option value="AA">A+A</option><option value="BB">B+B</option><option value="CA">C+A</option>
+            </optgroup>
+            <optgroup label="AI upscaling">
+              <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option>
+            </optgroup>
+          </select>
+      </label>
+      <p id="mode-description" class="mode-description" aria-live="polite"></p>
+      <div class="grid compact-fields">
+        <label>
+          <span data-i18n="quality">Quality</span>
+          <select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select>
+        </label>
+        <label><span data-i18n="backend">Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
+      </div>
+    </section>
+
+    <section class="switch-card" aria-label="Enhancement options">
+      <label class="check-row"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong data-i18n="frameGeneration">Frame generation</strong><small id="frame-generation-description">Motion-aware 2x</small></span></label>
+      <label class="check-row"><input id="auto-fullscreen" type="checkbox"><span class="check-control"></span><span><strong data-i18n="autoFullscreen">Auto fullscreen</strong><small>Enhance when a player expands</small></span></label>
+      <label class="check-row"><input id="statistics" type="checkbox"><span class="check-control"></span><span><strong data-i18n="liveStatistics">Live statistics</strong><small>FPS, timing and dropped frames</small></span></label>
+    </section>
+
+    <p class="hint native-warning"><span aria-hidden="true">!</span><span><strong>Streaming video stays black?</strong> Turn off hardware acceleration in your browser settings, then restart the browser.</span></p>
+
+    <div class="actions">
+      <button id="save" class="primary"><span data-i18n="saveApply">Save &amp; apply</span> <span aria-hidden="true">&#10022;</span></button>
+      <button id="open-options" class="secondary"><span data-i18n="advancedSettings">Advanced settings</span> <span aria-hidden="true">&#8594;</span></button>
     </div>
-
-    <div class="card-body">
-      <!-- 档位选择器 -->
-      <div class="setting-group">
-        <label data-i18n="performanceTierLabel">Performance Tier</label>
-        <div class="tier-selector">
-          <button class="tier-btn" data-tier="performance">
-            <span class="tier-icon">🚀</span>
-            <span class="tier-label" data-i18n="tierPerformance">Fast</span>
-          </button>
-          <button class="tier-btn" data-tier="balanced">
-            <span class="tier-icon">⚖️</span>
-            <span class="tier-label" data-i18n="tierBalanced">Balanced</span>
-          </button>
-          <button class="tier-btn" data-tier="quality">
-            <span class="tier-icon">🎨</span>
-            <span class="tier-label" data-i18n="tierQuality">Quality</span>
-          </button>
-          <button class="tier-btn" data-tier="ultra">
-            <span class="tier-icon">🔬</span>
-            <span class="tier-label" data-i18n="tierUltra">Ultra</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- 模式选择器 -->
-      <div class="setting-group">
-        <label id="mode-label" for="mode-select" data-i18n="enhancementModeLabel">Enhancement Mode</label>
-        <select id="mode-select" aria-labelledby="mode-label">
-          <!-- 模式选项将由 popup.ts 动态填充 -->
-        </select>
-      </div>
-
-      <!-- 分辨率选择器 -->
-      <div class="setting-group">
-        <label id="resolution-label" for="resolution-select" data-i18n="resolutionLabel">Resolution</label>
-        <select id="resolution-select" aria-labelledby="resolution-label">
-          <option value="x2">x2</option>
-          <option value="x4">x4</option>
-          <option value="x8">x8</option>
-          <option value="720p">720p</option>
-          <option value="1080p">1080p</option>
-          <option value="2k">2K (1440p)</option>
-          <option value="4k">4K (2160p)</option>
-          <option value="native" data-i18n="nativeResolution">Native</option>
-        </select>
-      </div>
-
-      <!-- 保存按钮 -->
-      <button id="save-settings" class="btn-primary" data-i18n="saveAndApply">Save and apply SR settings</button>
-
-      <!-- 白名单区域 -->
-      <div class="whitelist-section">
-        <div class="whitelist-toggle">
-          <label for="whitelist-toggle" data-i18n="whitelistEnable">Enable Whitelist</label>
-          <label class="switch">
-            <input type="checkbox" id="whitelist-toggle">
-            <span class="slider"></span>
-          </label>
-        </div>
-
-        <div class="whitelist-buttons">
-          <button id="add-current-page">
-            <span class="btn-icon">📄</span>
-            <span data-i18n="addCurrentPage">Page</span>
-          </button>
-          <button id="add-current-domain">
-            <span class="btn-icon">🌐</span>
-            <span data-i18n="addCurrentDomain">Domain</span>
-          </button>
-          <button id="add-parent-path">
-            <span class="btn-icon">📁</span>
-            <span data-i18n="addParentPath">Path</span>
-          </button>
-        </div>
-      </div>
-
-      <button id="open-settings" data-i18n="openSettings">Settings</button>
-    </div>
-  </div>
-
-  <footer id="extension-footer">
-    <a href="https://github.com/chenmozhijin/Anime4K-WebExtension" target="_blank" rel="noopener">Anime4K
-      WebExtension</a>
-    <span> • </span>
-    <span id="version-info"></span>
-  </footer>
-
+    <div id="status" role="status" aria-live="polite"></div>
+  </main>
+  <footer><span>AniWebScale</span><i></i><span id="version"></span></footer>
 </body>
-
 </html>

@@ -1,372 +1,293 @@
-import { ANIME4K_BUTTON_CLASS } from '../constants';
+import type { RenderStats } from '../types';
+import { fullscreenContainsVideo, getFullscreenElement } from '../shared/fullscreen-video';
+import { choosePlayerSurface } from '../shared/player-surface';
 
-/**
- * OverlayManager
- * 唯一负责创建、管理和销毁所有与特定视频关联的UI元素的模块。
- * 这包括UI覆盖层 (Host + Shadow DOM + Button) 和渲染目标 Canvas。
- */
+const MIN_VIDEO_WIDTH = 240;
+const MIN_VIDEO_HEIGHT = 135;
+
 export class OverlayManager {
   private video: HTMLVideoElement;
-  private host: HTMLElement;
-  private shadowRoot: ShadowRoot;
-  private button: HTMLButtonElement;
+  private readonly host: HTMLDivElement;
+  private readonly shadowRoot: ShadowRoot;
+  private readonly statsPanel: HTMLDivElement;
+  private readonly warningPanel: HTMLDivElement;
   private canvas?: HTMLCanvasElement;
-  private hideButtonTimeout?: number;
+  private canvasVisible = false;
+  private originalOpacity = '';
+  private originalOpacityPriority = '';
+  private appliedOpacity = '';
+  private appliedOpacityPriority = '';
+  private opacityManaged = false;
+  private destroyed = false;
+  private positionUpdateFrame: number | null = null;
 
-  private attachmentStrategy: 'sibling' | 'body' = 'sibling';
-  private boundUpdatePosition?: () => void;
-  private boundHandleFullscreenChange?: () => void;
+  private readonly resizeObserver: ResizeObserver;
+  private readonly mutationObserver: MutationObserver;
+  private readonly updateBound = () => this.schedulePositionUpdate();
+  private readonly fullscreenBound = () => this.handleFullscreenChange();
 
-  private resizeObserver: ResizeObserver;
-  private mutationObserver: MutationObserver;
+  private static readonly HOST_MARKER = 'data-anime4k-overlay-host';
 
-  // 用于标识 overlay host 元素的属性名
-  private static readonly HOST_MARKER_ATTR = 'data-anime4k-overlay-host';
-
-  /**
-   * 创建并返回一个 OverlayManager 实例。
-   * 包含防御性检查，防止同一视频出现重复的 overlay。
-   * @param video 目标视频元素
-   */
   public static create(video: HTMLVideoElement): OverlayManager {
-    // 防御性检查：清理可能存在的旧 overlay host
-    const parent = video.parentElement;
-    if (parent) {
-      const existingHosts = parent.querySelectorAll(`[${OverlayManager.HOST_MARKER_ATTR}]`);
-      existingHosts.forEach(host => {
-        console.warn('[Anime4KWebExt] Detected orphaned overlay host, removing:', host);
-        host.remove();
-      });
+    const videoId = video.dataset.anime4kVideoId;
+    if (videoId) {
+      document.querySelectorAll<HTMLElement>(`[${OverlayManager.HOST_MARKER}="${CSS.escape(videoId)}"]`)
+        .forEach(host => host.remove());
     }
-    // 同时检查 body 上可能残留的使用 'body' 策略的 host
-    document.querySelectorAll(`body > [${OverlayManager.HOST_MARKER_ATTR}]`).forEach(host => {
-      console.warn('[Anime4KWebExt] Detected orphaned overlay host on body, removing:', host);
-      host.remove();
-    });
-
     return new OverlayManager(video);
   }
 
   private constructor(video: HTMLVideoElement) {
     this.video = video;
-
-    // 1. 创建 Host 元素并插入为视频的兄弟节点
     this.host = document.createElement('div');
-    this.host.setAttribute(OverlayManager.HOST_MARKER_ATTR, ''); // 添加标记属性用于防御性检查
-    this.host.style.position = 'absolute';
-    this.host.style.pointerEvents = 'none'; // 默认不拦截事件
-    this.host.style.zIndex = '2147483646'; // 略低于按钮
-    this.video.parentElement?.insertBefore(this.host, this.video);
+    this.host.setAttribute(OverlayManager.HOST_MARKER, video.dataset.anime4kVideoId ?? '');
+    Object.assign(this.host.style, {
+      position: 'absolute',
+      pointerEvents: 'none',
+      zIndex: '2147483646',
+      display: 'none',
+    });
+    document.body.appendChild(this.host);
 
-    // 2. 创建 Shadow DOM
     this.shadowRoot = this.host.attachShadow({ mode: 'closed' });
-
-    // 3. 在 Shadow DOM 内创建按钮和样式
-    this.button = this.createButtonInShadow();
     this.injectStyles();
 
-    // 4. 初始化监听器
-    this.resizeObserver = new ResizeObserver(() => this.updatePosition());
-    this.resizeObserver.observe(this.video);
+    this.statsPanel = document.createElement('div');
+    this.statsPanel.className = 'stats';
+    this.statsPanel.hidden = true;
+    this.shadowRoot.appendChild(this.statsPanel);
 
-    // 监听样式变化
-    this.mutationObserver = new MutationObserver(() => this.updatePosition());
-    this.mutationObserver.observe(this.video, {
-      attributes: true,
-      attributeFilter: ['style', 'class'],
-    });
+    this.warningPanel = document.createElement('div');
+    this.warningPanel.className = 'warning';
+    this.warningPanel.hidden = true;
+    this.shadowRoot.appendChild(this.warningPanel);
 
-    // 立即执行一次以确定初始位置
+    this.resizeObserver = new ResizeObserver(this.updateBound);
+    this.mutationObserver = new MutationObserver(this.updateBound);
+    this.observeVideo();
+    window.addEventListener('resize', this.updateBound);
+    window.addEventListener('scroll', this.updateBound, { capture: true, passive: true });
+    document.addEventListener('fullscreenchange', this.fullscreenBound);
     this.updatePosition();
-
-    // 延迟检测，确保初始渲染完成
-    setTimeout(() => this.detectAndSwitchStrategy(), 100);
   }
 
-  /**
-   * 统一更新 Host 和 Canvas 的位置
-   */
+  private observeVideo(): void {
+    this.resizeObserver.observe(this.video);
+    this.mutationObserver.observe(this.video, {
+      attributes: true,
+      attributeFilter: ['style', 'class', 'hidden'],
+    });
+    this.video.addEventListener('play', this.updateBound, { passive: true });
+    this.video.addEventListener('loadedmetadata', this.updateBound, { passive: true });
+  }
+
+  private unobserveVideo(): void {
+    this.resizeObserver.disconnect();
+    this.mutationObserver.disconnect();
+    this.video.removeEventListener('play', this.updateBound);
+    this.video.removeEventListener('loadedmetadata', this.updateBound);
+    this.cancelPositionUpdate();
+  }
+
+  private schedulePositionUpdate(): void {
+    if (this.destroyed || this.positionUpdateFrame !== null) return;
+    this.positionUpdateFrame = window.requestAnimationFrame(() => {
+      this.positionUpdateFrame = null;
+      this.updatePosition();
+    });
+  }
+
+  private cancelPositionUpdate(): void {
+    if (this.positionUpdateFrame === null) return;
+    window.cancelAnimationFrame(this.positionUpdateFrame);
+    this.positionUpdateFrame = null;
+  }
+
   private updatePosition(): void {
-    // 当视频从 DOM 中移除或不可见时，隐藏覆盖层
-    if (!this.video.isConnected || (this.video.offsetWidth === 0 && this.video.offsetHeight === 0)) {
+    if (this.destroyed || !this.video.isConnected) {
       this.host.style.display = 'none';
       return;
     }
-    this.host.style.display = ''; // 确保可见
 
-    const videoStyle = window.getComputedStyle(this.video);
-    let hostStyles: any;
+    const rect = this.video.getBoundingClientRect();
+    const computed = getComputedStyle(this.video);
+    const visible = rect.width >= MIN_VIDEO_WIDTH
+      && rect.height >= MIN_VIDEO_HEIGHT
+      && rect.bottom > 0
+      && rect.right > 0
+      && rect.top < window.innerHeight
+      && rect.left < window.innerWidth
+      && computed.display !== 'none'
+      && computed.visibility !== 'hidden'
+      && (this.canvasVisible || Number.parseFloat(computed.opacity || '1') > 0);
+    this.host.style.display = visible ? 'block' : 'none';
+    if (!visible) return;
 
-    if (this.attachmentStrategy === 'body') {
-      // Body 策略：使用 getBoundingClientRect 获取相对于视口的位置
-      const rect = this.video.getBoundingClientRect();
-      hostStyles = {
-        top: `${rect.top + window.scrollY}px`,
-        left: `${rect.left + window.scrollX}px`,
-        width: `${rect.width}px`,
-        height: `${rect.height}px`,
-        transform: videoStyle.transform,
-        transformOrigin: videoStyle.transformOrigin,
-      };
-    } else {
-      // Sibling 策略：使用 offsetTop/Left 获取相对于父元素的位置
-      hostStyles = {
-        top: `${this.video.offsetTop}px`,
-        left: `${this.video.offsetLeft}px`,
-        width: `${this.video.offsetWidth}px`,
-        height: `${this.video.offsetHeight}px`,
-        transform: videoStyle.transform,
-        transformOrigin: videoStyle.transformOrigin,
-      };
-    }
+    const parent = this.host.parentElement;
+    const parentRect = parent && parent !== document.body
+      ? parent.getBoundingClientRect()
+      : { top: -window.scrollY, left: -window.scrollX };
+    Object.assign(this.host.style, {
+      top: `${rect.top - parentRect.top}px`,
+      left: `${rect.left - parentRect.left}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+    });
 
-    // 更新 Host
-    Object.assign(this.host.style, hostStyles);
-
-    // 如果 Canvas 存在，同步更新
     if (this.canvas) {
-      // Canvas 总是视频的兄弟节点，所以其定位方式不变
       Object.assign(this.canvas.style, {
+        position: 'absolute',
         top: `${this.video.offsetTop}px`,
         left: `${this.video.offsetLeft}px`,
         width: `${this.video.offsetWidth}px`,
         height: `${this.video.offsetHeight}px`,
-        transform: videoStyle.transform,
-        transformOrigin: videoStyle.transformOrigin,
-        position: 'absolute',
-        objectFit: videoStyle.objectFit,
-        objectPosition: videoStyle.objectPosition,
-        zIndex: videoStyle.zIndex,
+        transform: computed.transform,
+        transformOrigin: computed.transformOrigin,
+        objectFit: computed.objectFit,
+        objectPosition: computed.objectPosition,
+        zIndex: computed.zIndex,
+        pointerEvents: 'none',
       });
-    }
-
-    // 每次位置更新时，都短暂显示按钮
-    if (this.hideButtonTimeout) {
-      clearTimeout(this.hideButtonTimeout);
-    }
-    this.button.classList.add('show-initially');
-    this.hideButtonTimeout = window.setTimeout(() => {
-      this.button.classList.remove('show-initially');
-    }, 3000);
-  }
-
-  /**
-   * 检测按钮是否被遮挡，并根据结果决定是否切换到 'body' 附加策略。
-   */
-  private detectAndSwitchStrategy(): void {
-    // 确保按钮是可见的才能进行检测
-    const initialOpacity = this.button.style.opacity;
-    this.button.style.opacity = '1';
-
-    const rect = this.button.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    const elementAtPoint = document.elementFromPoint(centerX, centerY);
-
-    // 恢复原始透明度
-    this.button.style.opacity = initialOpacity;
-
-    const isButtonOrChild = this.button.contains(elementAtPoint) || this.button === elementAtPoint;
-
-    if (!isButtonOrChild) {
-      console.log('Anime4K button is obscured. Switching to body attachment strategy.');
-      this.attachmentStrategy = 'body';
-
-      // 切换 Host 到 body
-      document.body.appendChild(this.host);
-
-      // 绑定上下文并添加全局事件监听器
-      this.boundUpdatePosition = this.updatePosition.bind(this);
-      this.boundHandleFullscreenChange = this.handleFullscreenChange.bind(this);
-      window.addEventListener('resize', this.boundUpdatePosition);
-      window.addEventListener('scroll', this.boundUpdatePosition, true);
-      document.addEventListener('fullscreenchange', this.boundHandleFullscreenChange);
-
-      // 立即重新计算位置
-      this.updatePosition();
     }
   }
 
   private handleFullscreenChange(): void {
-    const fullscreenElement = document.fullscreenElement;
-    // 当视频进入全屏时，将 Host 移动到全屏元素内以确保其可见
-    if (fullscreenElement && fullscreenElement.contains(this.video)) {
-      fullscreenElement.appendChild(this.host);
-    } else {
-      // 退出全屏或视频不再全屏时，将 Host 移回 body
-      // 仅当策略为 'body' 时才移回 body
-      if (this.attachmentStrategy === 'body' && this.host.parentElement !== document.body) {
-        document.body.appendChild(this.host);
-      }
+    const fullscreen = getFullscreenElement();
+    if (fullscreenContainsVideo(fullscreen, this.video)) {
+      choosePlayerSurface(this.video, fullscreen).appendChild(this.host);
     }
-    // DOM 结构变化后，立即更新位置
+    else if (this.host.parentElement !== document.body) document.body.appendChild(this.host);
     this.updatePosition();
   }
 
-  /**
-   * 返回 Shadow DOM 中的按钮元素
-   */
-  public getButton(): HTMLButtonElement {
-    return this.button;
-  }
-
-  /**
-   * 创建（如果不存在）并返回 Canvas 元素，但不将其附加到 DOM。
-   * @returns {HTMLCanvasElement}
-   */
   public getCanvas(): HTMLCanvasElement {
-    if (this.canvas) {
-      return this.canvas;
+    if (!this.canvas) {
+      this.canvas = document.createElement('canvas');
+      this.canvas.setAttribute('aria-hidden', 'true');
+      this.canvas.style.visibility = 'hidden';
     }
-
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = this.video.videoWidth;
-    this.canvas.height = this.video.videoHeight;
-    this.canvas.style.pointerEvents = 'none';
-    // 初始时不可见，由 showCanvas 负责显示
-    this.canvas.style.visibility = 'hidden';
     return this.canvas;
   }
 
-  /**
-   * 将已创建的 Canvas 附加到 DOM 并使其可见。
-   */
   public showCanvas(): void {
-    if (!this.canvas) {
-      // 理论上 getCanvas 应该先被调用，但作为安全措施我们在这里也创建它
-      this.getCanvas();
+    const canvas = this.getCanvas();
+    if (canvas.parentNode !== this.video.parentNode) {
+      this.video.parentNode?.insertBefore(canvas, this.video);
     }
-
-    // 确保 canvas 在 DOM 中
-    if (!this.canvas!.parentElement) {
-      this.video.parentElement?.insertBefore(this.canvas!, this.video);
-    }
-
-    this.updatePosition(); // 更新位置和尺寸
-    this.canvas!.style.visibility = 'visible'; // 设为可见
-    this.video.style.opacity = '0'; // 隐藏原视频
-  }
-
-  /**
-   * 隐藏并销毁 Canvas。
-   */
-  public hideCanvas(): void {
-    this.canvas?.remove();
-    this.canvas = undefined;
-    this.video.style.opacity = ''; // 恢复原视频
-  }
-
-  /**
-   * 分离UI
-   * 从 DOM 中移除所有UI元素，但保留其实例以便后续 reattach。
-   * 这样可以防止 body 策略下 host 残留导致多个 overlay 的问题。
-   */
-  public detach(): void {
-    this.host.remove();
-    if (this.canvas) {
-      this.canvas.remove();
-    }
-  }
-
-  /**
-   * 重新附加到新的视频元素
-   * @param newVideo 新的视频元素
-   */
-  public reattach(newVideo: HTMLVideoElement): void {
-    this.resizeObserver.disconnect();
-    this.mutationObserver.disconnect();
-
-    this.video = newVideo;
-
-    // 根据附加策略重新插入 host（detach 时已从 DOM 移除）
-    if (this.attachmentStrategy === 'sibling') {
-      newVideo.parentElement?.insertBefore(this.host, newVideo);
-    } else {
-      // body 策略：重新附加到 body
-      document.body.appendChild(this.host);
-    }
-
-    if (this.canvas) {
-      newVideo.parentElement?.insertBefore(this.canvas, this.video);
-    }
-
-    this.resizeObserver.observe(newVideo);
-    this.mutationObserver.observe(newVideo, {
-      attributes: true,
-      attributeFilter: ['style', 'class'],
-    });
-
+    if (!this.canvasVisible) this.hideVideoForCanvas();
+    canvas.style.visibility = 'visible';
+    this.canvasVisible = true;
     this.updatePosition();
   }
 
-  /**
-   * 销毁实例，清理所有资源。
-   */
-  public destroy(): void {
-    this.resizeObserver.disconnect();
-    this.mutationObserver.disconnect();
-    this.host.remove();
-    this.hideCanvas();
-
-    // 如果切换到了 body 策略，移除额外的监听器
-    if (this.attachmentStrategy === 'body') {
-      window.removeEventListener('resize', this.boundUpdatePosition!);
-      window.removeEventListener('scroll', this.boundUpdatePosition!, true);
-      document.removeEventListener('fullscreenchange', this.boundHandleFullscreenChange!);
-    }
-
-    if (this.hideButtonTimeout) {
-      clearTimeout(this.hideButtonTimeout);
-    }
+  public hideCanvas(): void {
+    if (this.canvasVisible) this.restoreVideoOpacity();
+    this.canvas?.remove();
+    this.canvas = undefined;
+    this.canvasVisible = false;
+    this.setStats(null);
+    this.setWarning(null);
   }
 
-  // --- 私有辅助方法 ---
+  public setStats(stats: RenderStats | null): void {
+    if (!stats) {
+      this.statsPanel.hidden = true;
+      return;
+    }
+    this.statsPanel.textContent = `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
+    this.statsPanel.hidden = false;
+    this.statsPanel.classList.toggle('overloaded', stats.warning);
+  }
 
-  private createButtonInShadow(): HTMLButtonElement {
-    const button = document.createElement('button');
-    button.innerText = chrome.i18n.getMessage('enhanceButton');
-    button.classList.add(ANIME4K_BUTTON_CLASS);
-    button.part = 'button'; // 暴露给外部样式 (如果需要)
-    this.shadowRoot.appendChild(button);
-    return button;
+  public setWarning(message: string | null): void {
+    this.warningPanel.textContent = message ?? '';
+    this.warningPanel.hidden = !message;
+  }
+
+  public detach(): void {
+    this.unobserveVideo();
+    this.host.style.display = 'none';
+    this.host.remove();
+    this.canvas?.remove();
+    if (this.canvasVisible) this.restoreVideoOpacity();
+  }
+
+  public reattach(newVideo: HTMLVideoElement): void {
+    const wasVisible = this.canvasVisible;
+    const canvasWasAttached = Boolean(this.canvas?.parentNode);
+    if (wasVisible) this.restoreVideoOpacity();
+    this.video = newVideo;
+    this.video.dataset.anime4kVideoId = this.host.getAttribute(OverlayManager.HOST_MARKER) ?? '';
+    document.body.appendChild(this.host);
+    if (this.canvas && canvasWasAttached) {
+      newVideo.parentNode?.insertBefore(this.canvas, newVideo);
+    }
+    if (this.canvas && wasVisible) {
+      // The renderer still contains the previous video's pixels until its
+      // asynchronous source switch completes. Keep the new video visible in
+      // the meantime; onFirstFrameRendered will reveal this canvas again.
+      this.canvas.style.visibility = 'hidden';
+      this.canvasVisible = false;
+    }
+    this.observeVideo();
+    this.updatePosition();
+  }
+
+  public destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.unobserveVideo();
+    window.removeEventListener('resize', this.updateBound);
+    window.removeEventListener('scroll', this.updateBound, true);
+    document.removeEventListener('fullscreenchange', this.fullscreenBound);
+    this.hideCanvas();
+    this.host.remove();
+  }
+
+  private hideVideoForCanvas(): void {
+    this.originalOpacity = this.video.style.getPropertyValue('opacity');
+    this.originalOpacityPriority = this.video.style.getPropertyPriority('opacity');
+    this.video.style.setProperty('opacity', '0', 'important');
+    this.appliedOpacity = this.video.style.getPropertyValue('opacity');
+    this.appliedOpacityPriority = this.video.style.getPropertyPriority('opacity');
+    this.opacityManaged = true;
+  }
+
+  private restoreVideoOpacity(): void {
+    if (!this.opacityManaged) return;
+    if (this.video.style.getPropertyValue('opacity') === this.appliedOpacity
+        && this.video.style.getPropertyPriority('opacity') === this.appliedOpacityPriority) {
+      if (!this.originalOpacity && !this.originalOpacityPriority) this.video.style.removeProperty('opacity');
+      else this.video.style.setProperty('opacity', this.originalOpacity, this.originalOpacityPriority);
+    }
+    this.opacityManaged = false;
   }
 
   private injectStyles(): void {
     const style = document.createElement('style');
     style.textContent = `
-      :host {
-        pointer-events: none;
-      }
-      
-      .${ANIME4K_BUTTON_CLASS} {
+      :host { pointer-events: none; font-family: system-ui, sans-serif; }
+      .stats, .warning {
         position: absolute;
-        top: 50%;
-        left: 10px;
-        transform: translateY(-50%);
-        z-index: 2147483647;
-        padding: 8px 12px;
-        opacity: 0;
-        transition: opacity 0.3s ease-in-out;
-        background-color: #6A0DAD;
-        color: white;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 14px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-        pointer-events: auto; /* 使按钮可点击 */
-        isolation: isolate;
+        left: 12px;
+        bottom: 12px;
+        max-width: calc(100% - 24px);
+        box-sizing: border-box;
+        padding: 6px 9px;
+        border-radius: 7px;
+        background: rgba(8, 8, 10, .78);
+        color: #fff;
+        font: 500 11px/1.35 ui-monospace, monospace;
       }
-
-      .${ANIME4K_BUTTON_CLASS}.show-initially {
-        opacity: 1;
+      .stats.overloaded { color: #ffd17a; }
+      .warning {
+        bottom: 42px;
+        background: rgba(111, 48, 0, .92);
+        color: #fff2dc;
+        font-family: system-ui, sans-serif;
       }
-
-      .${ANIME4K_BUTTON_CLASS}:hover {
-        opacity: 1 !important;
-      }
+      [hidden] { display: none !important; }
     `;
     this.shadowRoot.appendChild(style);
   }
-
 }

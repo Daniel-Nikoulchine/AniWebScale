@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "modes": {
+    "A": ["ClampHighlights", "Restore", "Upscale"],
+    "B": ["ClampHighlights", "RestoreSoft", "Upscale"],
+    "C": ["ClampHighlights", "DenoiseUpscale"],
+    "AA": ["ClampHighlights", "Restore", "Upscale", "Restore", "Upscale"],
+    "BB": ["ClampHighlights", "RestoreSoft", "Upscale", "RestoreSoft", "Upscale"],
+    "CA": ["ClampHighlights", "DenoiseUpscale", "Restore", "Upscale"]
+  },
+  "qualities": ["M", "VL", "UL"]
+}

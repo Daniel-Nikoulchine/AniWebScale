@@ -1,7 +1,7 @@
 /**
  * 基础渲染器错误类，所有与渲染器相关的特定错误都应继承自此类。
  */
-export class RendererError extends Error {
+class RendererError extends Error {
   public cause?: Error;
 
   constructor(message: string, options?: ErrorOptions) {

@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Anime4K WebExtension",
+  "name": "__MSG_extensionName__",
   "description": "__MSG_description__",
-  "version": "0.4.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7/QBCSx1Jb4tZw70g6/O9SVeevG/1uO8ZePp+j+BQsoa4xw4FeadS4FakMb4bqrcu69tEhmlkd2XbWS7W5s80Z2B9Qe+HCqrn/ZUgbFBB+CKMKUVVH93JTZXu6PxYWkD6k7hjad1K6oKHWZ929r+u8PHjqAk4XyoKYKDH59/7oNkFsEVvtT+PwfqAhRSFRxrR8Ef8SDDVnbaiQfaAHbxXStCG7GnunMaDt5AWU3oRJumbi5HfrQVf3ktraF4BWICqoX97OWOSch2oeYImVxFQK4jI3cdcYPrvQiaWtRaH7wpXrxQnWlFzCQrgRUodt3oLt/ouHXkbXszFwMG+bR0NQIDAQAB",
+  "version": "1.0.0",
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -16,37 +17,17 @@
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ],
   "permissions": [
     "storage",
-    "tabs",
-    "scripting",
-    "declarativeNetRequest",
-    "declarativeNetRequestWithHostAccess"
+    "activeTab",
+    "identity",
+    "nativeMessaging",
+    "scripting"
   ],
-  "host_permissions": [
-    "<all_urls>"
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "ruleset_1",
-        "enabled": false,
-        "path": "rules.json"
-      }
-    ]
-  },
   "default_locale": "en",
   "icons": {
     "16": "icons/icon16.png",
@@ -57,10 +38,11 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "*.js"
+        "chunks/*.js"
       ],
       "matches": [
-        "<all_urls>"
+        "http://*/*",
+        "https://*/*"
       ]
     }
   ]

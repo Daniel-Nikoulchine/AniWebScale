@@ -1,0 +1,6 @@
+{
+  "allowedCallers": [
+    "chrome-extension://dlomjcbmgkfaebhplgoihbjfclaagike/",
+    "aniwebscale@korrespont.com"
+  ]
+}

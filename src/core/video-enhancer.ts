@@ -1,289 +1,714 @@
-import { getSettings, getEffectsForMode } from '../utils/settings';
-import { Renderer } from './renderer';
-import { ANIME4K_APPLIED_ATTR } from '../constants';
-import { Dimensions, Anime4KWebExtSettings, EnhancementMode } from '../types';
+import { ANIME4K_APPLIED_ATTR, ANIME4K_FULLSCREEN_AUTO_ATTR } from '../constants';
+import type {
+  Anime4KWebExtSettings,
+  Dimensions,
+  RenderStats,
+} from '../types';
+import {
+  calculateAutoTargetDimensions,
+  isDoubleMode,
+  isProcessingEnabled,
+  MODE_TO_ID,
+} from '../shared/presets';
+import {
+  allowsNativeFallback,
+  isKnownProtectedPlaybackHost,
+  selectInitialBackend,
+} from '../shared/backend-selection';
+import type { SelectedBackend } from '../shared/backend-selection';
+import type { NativeFallbackReason } from '../shared/native-fallback-request';
+import { blocksNativeRetry } from '../shared/native-retry';
+import { matchesExpectedNativeEvent } from '../shared/session-recovery';
+import { getEffectsForPreset, getSettings } from '../utils/settings';
+import {
+  getFullscreenElement,
+  hasFullscreenContext,
+  isVideoInFullscreenContext,
+} from '../shared/fullscreen-video';
 import { OverlayManager } from './overlay-manager';
+import { FullscreenLayoutManager } from './fullscreen-layout-manager';
+import type { Renderer } from './renderer';
 
-/**
- * 视频增强器类，封装Anime4K处理逻辑
- * 负责管理单个视频元素的增强状态、渲染实例和资源清理
- */
+interface NativeFallbackResponse {
+  ok: boolean;
+  status?: 'started' | 'unavailable' | 'denied';
+  message?: string;
+  sessionId?: string;
+}
+
 export class VideoEnhancer {
+  private static activeEnhancer: VideoEnhancer | null = null;
+  private static readonly managedEnhancers = new Set<VideoEnhancer>();
+
   private renderer: Renderer | null = null;
+  private nativeActive = false;
+  private nativeSessionId: string | null = null;
   private currentModeId: string | null = null;
-  private overlay: OverlayManager;
-  private button: HTMLButtonElement;
+  private currentSettings: Anime4KWebExtSettings | null = null;
+  private readonly overlay: OverlayManager;
+  private readonly fullscreenLayout: FullscreenLayoutManager;
+  private readonly videoId: string;
+  private encryptedDetected = false;
+  private performanceWarning = false;
+  private oversharpenWarning = false;
+  private nativeOverloadedSince: number | null = null;
+  private lastNativeDroppedFrames = 0;
+  private lastRenderStats: RenderStats | null = null;
+  private destroyed = false;
+  private switchingFromNative = false;
+  private readonly targetResizeObserver: ResizeObserver;
+  private targetUpdateTimer?: number;
+  private nativePlaybackTimer?: number;
+  private fullscreenDebounceTimer?: number;
+  private fullscreenRevision = 0;
+  private fullscreenTransition: Promise<void> = Promise.resolve();
+  private transitionRevision = 0;
+  private startingRevision: number | null = null;
+  private readonly pendingNativeStarts = new Map<number, { stopRequested: boolean }>();
+  private settingsUpdateChain: Promise<void> = Promise.resolve();
+  private automaticSession = false;
+  private nativeRetryBlocked = false;
+
+  private readonly targetChangeHandler = () => {
+    this.scheduleAutoTargetUpdate();
+    this.scheduleFullscreenReconcile();
+  };
+  private readonly fullscreenChangeHandler = () => this.scheduleFullscreenReconcile();
+
+  private readonly nativeSessionHandler = (event: Event) => {
+    if (!this.nativeActive) return;
+    const detail = (event as CustomEvent<Record<string, unknown>>).detail;
+    if (!detail || typeof detail.type !== 'string') return;
+    if (!matchesExpectedNativeEvent(this.nativeSessionId, detail.sessionId)) return;
+    if (blocksNativeRetry(detail)) this.nativeRetryBlocked = true;
+    if (detail.type === 'metrics') {
+      const fps = Number(detail.fps) || 0;
+      const renderMs = Number(detail.frameTimeMs) || 0;
+      const droppedFrames = Number(detail.droppedFrames) || 0;
+      const budgetMs = 1000 / Math.max(24, fps || 24);
+      const overloaded = renderMs > budgetMs || droppedFrames > this.lastNativeDroppedFrames;
+      const now = performance.now();
+      if (overloaded) {
+        if (this.nativeOverloadedSince === null) this.nativeOverloadedSince = now;
+      } else {
+        this.nativeOverloadedSince = null;
+      }
+      this.lastNativeDroppedFrames = droppedFrames;
+      this.performanceWarning = this.nativeOverloadedSince !== null
+        && now - this.nativeOverloadedSince >= 2000;
+      const stats: RenderStats = {
+        fps,
+        renderMs,
+        droppedFrames,
+        warning: this.performanceWarning,
+      };
+      this.lastRenderStats = stats;
+      if (this.currentSettings?.statsEnabled) this.overlay.setStats(stats);
+      else this.overlay.setStats(null);
+      this.updateWarningDisplay();
+      return;
+    }
+    const state = detail.state;
+    const ended = detail.type === 'stopped'
+      || detail.type === 'error'
+      || detail.type === 'status' && (state === 'stopped' || state === 'failed');
+    if (!ended) return;
+    const retryCaptureAfterFailedExit = detail.type === 'stopped'
+      && detail.reason === 'capture_window_closed'
+      && Boolean(this.currentSettings?.autoFullscreenEnabled)
+      && isVideoInFullscreenContext(this.video);
+    if (this.switchingFromNative) {
+      this.nativeActive = false;
+      this.nativeSessionId = null;
+      this.stopNativePlaybackHeartbeat();
+      return;
+    }
+    this.nativeActive = false;
+    this.nativeSessionId = null;
+    this.stopNativePlaybackHeartbeat();
+    this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
+    this.currentModeId = null;
+    this.performanceWarning = false;
+    this.nativeOverloadedSince = null;
+    this.lastNativeDroppedFrames = 0;
+    this.lastRenderStats = null;
+    this.overlay.setStats(null);
+    this.updateWarningDisplay();
+    this.automaticSession = false;
+    this.fullscreenLayout.exit();
+    if (VideoEnhancer.activeEnhancer === this) VideoEnhancer.activeEnhancer = null;
+    void chrome.runtime.sendMessage({ type: 'ENHANCEMENT_RELEASE', videoId: this.videoId }).catch(() => undefined);
+    if ((detail.type === 'error' || state === 'failed') && typeof detail.message === 'string') {
+      this.showNotification(detail.message);
+    }
+    if (retryCaptureAfterFailedExit) this.scheduleFullscreenReconcile(250);
+  };
+
+  private readonly encryptedHandler = () => {
+    this.encryptedDetected = true;
+    void this.handleEncryptedPlayback();
+  };
 
   private constructor(private video: HTMLVideoElement) {
+    this.videoId = crypto.randomUUID?.() ?? `anime4k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    this.video.dataset.anime4kVideoId = this.videoId;
+    VideoEnhancer.managedEnhancers.add(this);
+    this.video.addEventListener('encrypted', this.encryptedHandler);
     this.overlay = OverlayManager.create(this.video);
-    this.button = this.overlay.getButton();
-    this.initUI();
+    this.fullscreenLayout = new FullscreenLayoutManager(this.video);
+    this.targetResizeObserver = new ResizeObserver(this.targetChangeHandler);
+    this.targetResizeObserver.observe(this.video);
+    window.addEventListener('resize', this.targetChangeHandler);
+    document.addEventListener('fullscreenchange', this.fullscreenChangeHandler);
+    document.addEventListener('webkitfullscreenchange', this.fullscreenChangeHandler);
+    window.addEventListener('anime4k-native-session', this.nativeSessionHandler);
+    void getSettings().then(settings => {
+      if (this.destroyed) return;
+      this.currentSettings = settings;
+      this.applyFullscreenMarker(
+        settings.autoFullscreenEnabled && isProcessingEnabled(settings.mode, settings.frameGenerationEnabled),
+      );
+      this.scheduleFullscreenReconcile(0);
+    }).catch(error => {
+      console.info('[Anime4K] Could not initialize fullscreen automation:', error instanceof Error ? error.message : String(error));
+    });
   }
 
-  /**
-   * 创建并初始化一个新的 VideoEnhancer 实例。
-   * 这是推荐的实例化方法。
-   */
   public static create(video: HTMLVideoElement): VideoEnhancer {
     return new VideoEnhancer(video);
   }
 
-  /**
-   * 初始化UI组件和事件监听
-   */
-  private initUI(): void {
-    this.button.onclick = (e) => {
-      e.stopPropagation();
-      this.toggleEnhancement();
-    };
+  private beginTransition(): number {
+    this.transitionRevision += 1;
+    return this.transitionRevision;
   }
 
-  private fixAttempted = false;
+  private isTransitionCurrent(revision: number): boolean {
+    return !this.destroyed && revision === this.transitionRevision;
+  }
 
-  /**
-   * 检查并修复视频的跨域问题。
-   * @param isFallback - 是否作为错误后的兜底方案调用
-   * @returns {Promise<void>}
-   */
-  private async fixCrossOrigin(isFallback = false): Promise<void> {
-    console.log(`[Anime4KWebExt] Executing cross-origin fix. Is fallback: ${isFallback}`);
-    this.fixAttempted = true;
-    this.video.crossOrigin = 'anonymous';
+  private isProtectedPlayback(): boolean {
+    return this.encryptedDetected
+      || Boolean(this.video.mediaKeys)
+      || isKnownProtectedPlaybackHost(location.hostname);
+  }
 
-    const currentTime = this.video.currentTime;
-    const originalSrc = this.video.src;
-    const isPaused = this.video.paused;
-
-    return new Promise<void>((resolve, reject) => {
-      const cleanup = () => {
-        this.video.oncanplay = null;
-        this.video.onerror = null;
-      };
-
-      this.video.oncanplay = () => {
-        cleanup();
-        this.video.currentTime = currentTime;
-        if (!isPaused) {
-          this.video.play().catch(e => console.warn('[Anime4KWebExt] Autoplay after reload was blocked.', e));
-        }
-        console.log('[Anime4KWebExt] Video reloaded successfully with crossOrigin attribute.');
-        resolve();
-      };
-
-      this.video.onerror = (e) => {
-        cleanup();
-        console.error('[Anime4KWebExt] Failed to reload video after setting crossOrigin.', e);
-        reject(new Error('Failed to reload video with cross-origin attribute.'));
-      };
-
-      this.video.src = '';
-      this.video.src = originalSrc;
-      this.video.load();
+  private selectBackend(settings: Anime4KWebExtSettings): SelectedBackend {
+    return selectInitialBackend({
+      requested: settings.backend,
+      protectedPlayback: this.isProtectedPlayback(),
+      webgpuAvailable: Boolean(navigator.gpu),
     });
   }
 
-  /**
-   * 切换视频增强的开关状态
-   */
-  async toggleEnhancement(): Promise<void> {
-    if (this.renderer) {
-      console.log('[Anime4KWebExt] Disabling video enhancement.');
-      this.disableEnhancement();
+  private async startEnhancement(settings?: Anime4KWebExtSettings): Promise<void> {
+    if (this.renderer || this.nativeActive || this.destroyed || this.startingRevision !== null) return;
+    const revision = this.beginTransition();
+    this.startingRevision = revision;
+    try {
+      settings ??= this.currentSettings ?? await getSettings();
+      if (!this.isTransitionCurrent(revision)) return;
+      if (!isProcessingEnabled(settings.mode, settings.frameGenerationEnabled)) {
+        this.currentSettings = settings;
+        this.currentModeId = null;
+        this.applyFullscreenMarker(false);
+        return;
+      }
+      const selectedBackend = this.selectBackend(settings);
+      this.assertBackendCompatibility(selectedBackend);
+      this.currentSettings = settings;
+      const claim = await chrome.runtime.sendMessage({
+        type: 'ENHANCEMENT_CLAIM',
+        videoId: this.videoId,
+      }) as { ok?: boolean; message?: string } | undefined;
+      if (!this.isTransitionCurrent(revision)) return;
+      if (!claim?.ok) throw new Error(claim?.message || 'Another Anime4K instance could not be stopped.');
+      if (VideoEnhancer.activeEnhancer && VideoEnhancer.activeEnhancer !== this) {
+        await VideoEnhancer.activeEnhancer.stopEnhancement(true, false);
+        if (!this.isTransitionCurrent(revision)) return;
+      }
+
+      if (selectedBackend === 'native') {
+        const reason: NativeFallbackReason = settings.backend === 'native'
+          ? 'native-selected'
+          : this.isProtectedPlayback() ? 'eme' : 'webgpu-unavailable';
+        try {
+          if (!await this.requestNativeFallback(reason, settings, revision)) return;
+        } catch (error) {
+          if (!this.isTransitionCurrent(revision)) return;
+          throw error;
+        }
+      } else if (selectedBackend === 'webgpu') {
+        if (!await this.initRenderer(settings, revision)) return;
+      }
+      if (!this.isTransitionCurrent(revision)) return;
+      VideoEnhancer.activeEnhancer = this;
+      this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+    } catch (error) {
+      if (!this.isTransitionCurrent(revision)) return;
+      // Renderer/backend failures are operational errors and are shown in the
+      // page notification. Avoid turning an expected fallback failure into a
+      // misleading red extension error entry in chrome://extensions.
+      console.info('[Anime4K] Enhancement could not be started:', error instanceof Error ? error.message : String(error));
+      await this.stopEnhancement(false);
+      if (!this.destroyed) {
+        this.showNotification(error instanceof Error ? error.message : 'Anime4K could not be started.');
+      }
+    } finally {
+      if (this.startingRevision === revision) this.startingRevision = null;
+    }
+  }
+
+  private async initRenderer(settings: Anime4KWebExtSettings, revision: number): Promise<boolean> {
+    if (this.video.readyState < this.video.HAVE_METADATA) {
+      const video = this.video;
+      await new Promise<void>((resolve, reject) => {
+        const loaded = () => { cleanup(); resolve(); };
+        const failed = () => { cleanup(); reject(new Error('The video metadata could not be loaded.')); };
+        const cleanup = () => {
+          video.removeEventListener('loadedmetadata', loaded);
+          video.removeEventListener('error', failed);
+        };
+        video.addEventListener('loadedmetadata', loaded, { once: true });
+        video.addEventListener('error', failed, { once: true });
+      });
+    }
+    if (!this.isTransitionCurrent(revision)) return false;
+
+    let rendererVideo = this.video;
+    let rendererTargetDimensions = calculateAutoTargetDimensions(rendererVideo);
+    const canvas = this.overlay.getCanvas();
+    canvas.width = rendererTargetDimensions.width;
+    canvas.height = rendererTargetDimensions.height;
+    const effects = getEffectsForPreset(settings.mode, settings.quality);
+    this.currentModeId = MODE_TO_ID[settings.mode];
+    this.updateOversharpenWarning(settings, rendererTargetDimensions);
+
+    let createdRenderer: Renderer | null = null;
+    try {
+      const { Renderer: WebGPURenderer } = await import('./renderer');
+      if (!this.isTransitionCurrent(revision)) return false;
+      const ownsRenderer = (source?: HTMLVideoElement) => !this.destroyed && (
+        this.isTransitionCurrent(revision)
+          && (!source || source === this.video)
+          && createdRenderer !== null
+          && this.renderer === createdRenderer
+      );
+      const renderer = await WebGPURenderer.create({
+        video: rendererVideo,
+        canvas,
+        effects,
+        targetDimensions: rendererTargetDimensions,
+        frameGenerationEnabled: settings.frameGenerationEnabled,
+        onFirstFrameRendered: source => {
+          if (ownsRenderer(source)) this.overlay.showCanvas();
+        },
+        onProgress: () => undefined,
+        onStats: stats => {
+          if (ownsRenderer()) this.handleStats(stats);
+        },
+        onError: error => {
+          if (ownsRenderer()) void this.handleRendererError(error);
+        },
+      });
+      createdRenderer = renderer;
+      if (!this.isTransitionCurrent(revision)) {
+        renderer.destroy();
+        return false;
+      }
+      // Player frameworks frequently replace the <video> node while shaders
+      // are still initializing. Align the completed renderer with the
+      // latest node before it can own callbacks or expose an applied marker.
+      while (rendererVideo !== this.video && this.isTransitionCurrent(revision)) {
+        const nextVideo = this.video;
+        await renderer.updateVideoSource(nextVideo);
+        rendererVideo = nextVideo;
+        const nextTarget = calculateAutoTargetDimensions(nextVideo);
+        if (nextTarget.width !== rendererTargetDimensions.width
+            || nextTarget.height !== rendererTargetDimensions.height) {
+          await renderer.updateConfiguration({
+            effects,
+            targetDimensions: nextTarget,
+            frameGenerationEnabled: settings.frameGenerationEnabled,
+          });
+          rendererTargetDimensions = nextTarget;
+          canvas.width = nextTarget.width;
+          canvas.height = nextTarget.height;
+          this.updateOversharpenWarning(settings, nextTarget);
+        }
+      }
+      if (!this.isTransitionCurrent(revision)) {
+        renderer.destroy();
+        return false;
+      }
+      this.renderer = renderer;
+      if (renderer.hasRenderedCurrentSource()) this.overlay.showCanvas();
+      return true;
+    } catch (error) {
+      if (createdRenderer && this.renderer !== createdRenderer) createdRenderer.destroy();
+      if (!this.isTransitionCurrent(revision)) return false;
+      if (!allowsNativeFallback(settings.backend)) throw error;
+      const reason = this.classifyFallbackReason(error);
+      return this.requestNativeFallback(reason, settings, revision);
+    }
+  }
+
+  private classifyFallbackReason(error: unknown): NativeFallbackReason {
+    let current: unknown = error;
+    while (current instanceof Error) {
+      if (current.name === 'SecurityError' || /cross-origin|tainted|protected content/i.test(current.message)) {
+        return 'security-error';
+      }
+      if (/WebGPU|adapter|kernel is unavailable/i.test(current.message)) return 'webgpu-unavailable';
+      current = (current as Error & { cause?: unknown }).cause;
+    }
+    return 'video-frame-import-failed';
+  }
+
+  private async requestNativeFallback(
+    reason: NativeFallbackReason,
+    settings: Anime4KWebExtSettings,
+    revision: number,
+  ): Promise<boolean> {
+    if (!this.isTransitionCurrent(revision)) return false;
+    if (!allowsNativeFallback(settings.backend)) {
+      throw new Error('The native fallback is disabled while Backend is forced to WebGPU.');
+    }
+    this.releaseWebGPUResources();
+    this.overlay.hideCanvas();
+    const rect = this.video.getBoundingClientRect();
+    const pending = { stopRequested: false };
+    this.pendingNativeStarts.set(revision, pending);
+    let response: NativeFallbackResponse | undefined;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: 'NATIVE_FALLBACK_REQUEST',
+        videoId: this.videoId,
+        reason,
+        configuration: {
+          mode: settings.mode,
+          quality: settings.quality,
+          frameGenerationEnabled: settings.frameGenerationEnabled,
+        },
+        output: 'auto',
+        videoRect: {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          devicePixelRatio: window.devicePixelRatio || 1,
+        },
+      }) as NativeFallbackResponse | undefined;
+    } catch (error) {
+      this.pendingNativeStarts.delete(revision);
+      if (!this.isTransitionCurrent(revision)) return false;
+      throw error;
+    }
+    this.pendingNativeStarts.delete(revision);
+    if (!this.isTransitionCurrent(revision)) {
+      if (response?.ok && !pending.stopRequested && typeof response.sessionId === 'string') {
+        await chrome.runtime.sendMessage({
+          type: 'NATIVE_STOP',
+          sessionId: response.sessionId,
+          videoId: this.videoId,
+        }).catch(() => undefined);
+      }
+      return false;
+    }
+    if (!response?.ok || typeof response.sessionId !== 'string') {
+      throw new Error(response?.message || 'The native Anime4K renderer is unavailable.');
+    }
+    this.nativeActive = true;
+    this.nativeSessionId = response.sessionId;
+    this.startNativePlaybackHeartbeat();
+    this.currentModeId = MODE_TO_ID[settings.mode];
+    return true;
+  }
+
+  private async handleEncryptedPlayback(): Promise<void> {
+    if (this.destroyed || (!this.renderer && !this.nativeActive)) return;
+    if (this.nativeActive) return;
+    const revision = this.beginTransition();
+    const settings = this.currentSettings ?? await getSettings();
+    if (!this.isTransitionCurrent(revision)) return;
+    this.releaseWebGPUResources();
+    this.overlay.hideCanvas();
+    if (!allowsNativeFallback(settings.backend)) {
+      await this.stopEnhancement(false);
+      if (!this.destroyed) {
+        this.showNotification('Protected playback cannot use the forced WebGPU backend. Select Auto or Native instead.');
+      }
+      return;
+    }
+    try {
+      await this.requestNativeFallback('eme', settings, revision);
+    } catch (error) {
+      if (!this.isTransitionCurrent(revision)) return;
+      await this.stopEnhancement(false);
+      if (!this.destroyed) {
+        this.showNotification(error instanceof Error ? error.message : 'Protected playback cannot be captured.');
+      }
+    }
+  }
+
+  private async handleRendererError(error: Error): Promise<void> {
+    if (this.destroyed) return;
+    // WebGPU unavailability is expected when hardware acceleration is disabled.
+    // Auto mode handles it by switching to Native, so do not surface it as an
+    // uncaught-looking extension error in the browser's extension manager.
+    console.info('[Anime4K] WebGPU stopped; attempting the configured fallback:', error.message);
+    const revision = this.beginTransition();
+    const settings = this.currentSettings ?? await getSettings();
+    if (!this.isTransitionCurrent(revision)) return;
+    const reason = this.classifyFallbackReason(error);
+    this.releaseWebGPUResources();
+    this.overlay.hideCanvas();
+    if (!allowsNativeFallback(settings.backend)) {
+      await this.stopEnhancement(false);
+      if (!this.destroyed) {
+        this.showNotification(error.message || 'The video frame cannot be processed with WebGPU.');
+      }
+      return;
+    }
+    try {
+      await this.requestNativeFallback(reason, settings, revision);
+    } catch (fallbackError) {
+      if (!this.isTransitionCurrent(revision)) return;
+      await this.stopEnhancement(false);
+      if (!this.destroyed) {
+        this.showNotification(
+          fallbackError instanceof Error ? fallbackError.message : 'Video frames cannot be processed on this site.',
+        );
+      }
+    }
+  }
+
+  private handleStats(stats: RenderStats): void {
+    this.lastRenderStats = stats;
+    this.performanceWarning = stats.warning;
+    if (this.currentSettings?.statsEnabled) this.overlay.setStats(stats);
+    else this.overlay.setStats(null);
+    this.updateWarningDisplay();
+  }
+
+  private updateOversharpenWarning(settings: Anime4KWebExtSettings, target: Dimensions): void {
+    const scale = Math.min(
+      target.width / Math.max(1, this.video.videoWidth),
+      target.height / Math.max(1, this.video.videoHeight),
+    );
+    this.oversharpenWarning = isDoubleMode(settings.mode) && scale < 2;
+    this.updateWarningDisplay();
+  }
+
+  private updateWarningDisplay(): void {
+    const messages: string[] = [];
+    if (this.oversharpenWarning) messages.push('A+A, B+B and C+A may oversharpen below 2x output.');
+    if (this.performanceWarning) {
+      const stats = this.lastRenderStats;
+      messages.push(stats
+        ? `Frame budget exceeded: ${stats.renderMs.toFixed(1)} ms, ${stats.fps.toFixed(1)} FPS, ${stats.droppedFrames} dropped.`
+        : 'The selected preset exceeds the frame budget; frames are being dropped.');
+    }
+    this.overlay.setWarning(messages.length > 0 ? messages.join(' ') : null);
+  }
+
+  private scheduleAutoTargetUpdate(): void {
+    if (!this.renderer || this.destroyed) return;
+    if (this.targetUpdateTimer) window.clearTimeout(this.targetUpdateTimer);
+    this.targetUpdateTimer = window.setTimeout(() => void this.refreshAutoTarget(), 150);
+  }
+
+  private async refreshAutoTarget(): Promise<void> {
+    if (!this.renderer || !this.currentSettings || this.destroyed) return;
+    const renderer = this.renderer;
+    const settings = this.currentSettings;
+    const targetDimensions = calculateAutoTargetDimensions(this.video);
+    const canvas = this.overlay.getCanvas();
+    if (canvas.width === targetDimensions.width && canvas.height === targetDimensions.height) return;
+    this.updateOversharpenWarning(settings, targetDimensions);
+    try {
+      await renderer.updateConfiguration({
+        effects: getEffectsForPreset(settings.mode, settings.quality),
+        targetDimensions,
+        frameGenerationEnabled: settings.frameGenerationEnabled,
+      });
+    } catch (error) {
+      if (!this.destroyed && this.renderer === renderer) await this.handleRendererError(error as Error);
+    }
+  }
+
+  public updateSettings(newSettings: Anime4KWebExtSettings): Promise<void> {
+    const result = this.settingsUpdateChain.then(
+      () => this.applySettings(newSettings),
+      () => this.applySettings(newSettings),
+    );
+    this.settingsUpdateChain = result.catch(() => undefined);
+    return result;
+  }
+
+  private async applySettings(newSettings: Anime4KWebExtSettings): Promise<void> {
+    if (this.destroyed) return;
+    const processingEnabled = isProcessingEnabled(newSettings.mode, newSettings.frameGenerationEnabled);
+    const selectedBackend = this.selectBackend(newSettings);
+    if (processingEnabled) this.assertBackendCompatibility(selectedBackend);
+    const previousSettings = this.currentSettings;
+    const previousModeId = this.currentModeId;
+    const previousOversharpenWarning = this.oversharpenWarning;
+    this.currentSettings = newSettings;
+    this.currentModeId = processingEnabled ? MODE_TO_ID[newSettings.mode] : null;
+    this.applyFullscreenMarker(newSettings.autoFullscreenEnabled && processingEnabled);
+
+    if (!processingEnabled) {
+      this.automaticSession = false;
+      if (this.renderer || this.nativeActive || this.startingRevision !== null
+          || this.pendingNativeStarts.size > 0) await this.stopEnhancement();
+      else {
+        this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
+        this.fullscreenLayout.exit();
+      }
       return;
     }
 
-    this.button.innerText = chrome.i18n.getMessage('enhancing');
-    this.button.disabled = true;
-    this.fixAttempted = false; // 重置修复尝试标志
-
-    const settings = await getSettings();
-
-    try {
-      if (settings.enableCrossOriginFix) {
-        // --- 第一道防线：前置检查 ---
-        const videoUrl = this.video.src;
-        if (videoUrl && videoUrl.startsWith('http') && !this.video.crossOrigin) {
-          try {
-            const videoOrigin = new URL(videoUrl).origin;
-            if (videoOrigin !== window.location.origin) {
-              console.log('[Anime4KWebExt] Proactive check: Cross-origin video detected. Applying fix...');
-              await this.fixCrossOrigin();
-            }
-          } catch (e) {
-            console.warn('[Anime4KWebExt] Could not parse video src URL for proactive check.', e);
-          }
-        }
+    if (!newSettings.autoFullscreenEnabled) {
+      this.automaticSession = false;
+      if (this.renderer || this.nativeActive || this.startingRevision !== null
+          || this.pendingNativeStarts.size > 0) await this.stopEnhancement();
+      return;
+    }
+    if (!this.renderer && !this.nativeActive) {
+      if (this.startingRevision !== null || this.pendingNativeStarts.size > 0) {
+        await this.stopEnhancement();
+        if (this.destroyed) return;
       }
+      this.scheduleFullscreenReconcile(0);
+      return;
+    }
 
-      // --- Core operation ---
-      await this.initRenderer();
-      this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
-      this.button.innerText = chrome.i18n.getMessage('cancelEnhance');
-
-    } catch (error) {
-      const err = error as Error;
-      const isCrossOriginError = err.name === 'SecurityError' && err.message.includes('tainted');
-
-      if (isCrossOriginError && settings.enableCrossOriginFix && !this.fixAttempted) {
-        // --- 第二道防线：错误兜底 ---
-        console.warn('[Anime4KWebExt] Fallback: Caught a SecurityError. Attempting to fix and retry...');
+    if (this.nativeActive) {
+      if (selectedBackend === 'native') {
+        const revision = this.transitionRevision;
         try {
-          await this.fixCrossOrigin();
-          await this.initRenderer(); // 重试
-          this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
-          this.button.innerText = chrome.i18n.getMessage('cancelEnhance');
-        } catch (retryError) {
-          console.error('[Anime4KWebExt] Enhancer failed even after retry:', retryError);
-          this.disableEnhancement();
-          this.showErrorModal((retryError as Error).message || chrome.i18n.getMessage('enhanceError'));
+          const response = await chrome.runtime.sendMessage({
+            type: 'NATIVE_UPDATE_CONFIGURATION',
+            ...(this.nativeSessionId ? { sessionId: this.nativeSessionId } : {}),
+            videoId: this.videoId,
+            configuration: {
+              mode: newSettings.mode,
+              quality: newSettings.quality,
+              frameGenerationEnabled: newSettings.frameGenerationEnabled,
+            },
+            output: 'auto',
+          }) as { ok?: boolean; message?: string } | undefined;
+          if (!this.isTransitionCurrent(revision)) return;
+          if (!response?.ok) {
+            throw new Error(response?.message || 'The native renderer could not apply the selected configuration.');
+          }
+        } catch (error) {
+          if (!this.isTransitionCurrent(revision)) return;
+          this.currentSettings = previousSettings;
+          this.currentModeId = previousModeId;
+          this.applyFullscreenMarker(Boolean(
+            previousSettings?.autoFullscreenEnabled
+              && isProcessingEnabled(previousSettings.mode, previousSettings.frameGenerationEnabled),
+          ));
+          throw error;
         }
-      } else if (isCrossOriginError && !settings.enableCrossOriginFix) {
-        // --- 用户提示 ---
-        console.warn('[Anime4KWebExt] Cross-origin error detected, but fix is disabled. Prompting user.');
-        this.disableEnhancement();
-        this.showErrorModal(chrome.i18n.getMessage('crossOriginHint') || 'Enhancement failed due to cross-origin restrictions. Please enable Compatibility Mode in the options.', true);
-      } else {
-        // --- 其他错误 ---
-        console.error('[Anime4KWebExt] Failed to initialize enhancer:', err);
-        this.disableEnhancement();
-        this.showErrorModal(err.message || chrome.i18n.getMessage('enhanceError'));
+        return;
       }
-    } finally {
-      this.button.disabled = false;
-    }
-  }
 
+      const revision = this.beginTransition();
+      this.switchingFromNative = true;
+      const nativeSessionId = this.nativeSessionId;
+      this.nativeActive = false;
+      this.nativeSessionId = null;
+      this.stopNativePlaybackHeartbeat();
+      this.nativeOverloadedSince = null;
+      this.lastNativeDroppedFrames = 0;
+      this.lastRenderStats = null;
+      this.overlay.setStats(null);
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'NATIVE_STOP',
+          ...(nativeSessionId ? { sessionId: nativeSessionId } : {}),
+          videoId: this.videoId,
+        });
+        if (!this.isTransitionCurrent(revision)) return;
 
-  /**
-   * 初始化渲染器，包括获取设置、加载模块和创建Renderer实例
-   */
-  private async initRenderer(): Promise<void> {
-    // 在初始化渲染器之前，确保元数据已加载
-    if (this.video.readyState < 1) { // HAVE_METADATA
-      this.button.innerText = chrome.i18n.getMessage('waitingVideoLoad') || '⏳ Waiting for video...';
-      await new Promise(resolve => {
-        this.video.addEventListener('loadedmetadata', resolve, { once: true });
-      });
-    }
-
-    if (!navigator.gpu) {
-      throw new Error('WebGPU is not supported on this browser.');
-    }
-
-    const settings = await getSettings();
-
-    const { selectedModeId, enhancementModes, targetResolutionSetting } = settings;
-    const selectedMode = enhancementModes.find((m: EnhancementMode) => m.id === selectedModeId) || enhancementModes.find((m: EnhancementMode) => m.isBuiltIn)!;
-    this.currentModeId = selectedMode.id;
-
-    const targetDimensions = this.calculateTargetDimensions(
-      this.video.videoWidth,
-      this.video.videoHeight,
-      targetResolutionSetting
-    );
-
-    const canvas = this.overlay.getCanvas();
-    canvas.width = targetDimensions.width;
-    canvas.height = targetDimensions.height;
-
-    // 根据模式和档位获取实际效果链
-    const effects = getEffectsForMode(selectedMode, settings.performanceTier);
-
-    this.renderer = await Renderer.create({
-      video: this.video,
-      canvas: canvas,
-      effects: effects,
-      targetDimensions,
-      onError: async (error: Error) => {
-        console.error('[Anime4KWebExt] Renderer runtime error:', error);
-        const isCrossOriginError = error.name === 'SecurityError' && error.message.includes('tainted');
-        const settings = await getSettings();
-
-        if (isCrossOriginError && !settings.enableCrossOriginFix) {
-          this.showErrorModal(chrome.i18n.getMessage('crossOriginHint') || 'Enhancement failed due to cross-origin restrictions. Please enable Compatibility Mode in the options.', true);
-        } else {
-          this.showErrorModal(chrome.i18n.getMessage('renderError') || 'A rendering error occurred.');
+        if (selectedBackend !== 'webgpu') {
+          throw new Error('WebGPU is unavailable. Select Auto or Native instead.');
         }
-        this.disableEnhancement();
-      },
-      onFirstFrameRendered: () => {
-        this.overlay.showCanvas();
-      },
-      onProgress: (stage: string | null) => {
-        if (stage === null) {
-          // 预热完成，恢复按钮文字
-          this.button.innerText = chrome.i18n.getMessage('cancelEnhance');
-        } else {
-          this.button.innerText = stage;
+
+        const claim = await chrome.runtime.sendMessage({
+          type: 'ENHANCEMENT_CLAIM',
+          videoId: this.videoId,
+        }) as { ok?: boolean; message?: string } | undefined;
+        if (!this.isTransitionCurrent(revision)) return;
+        if (!claim?.ok) throw new Error(claim?.message || 'Anime4K could not reclaim the active video.');
+        if (!await this.initRenderer(newSettings, revision)) return;
+        if (!this.isTransitionCurrent(revision)) return;
+        VideoEnhancer.activeEnhancer = this;
+        this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+        return;
+      } catch (error) {
+        if (!this.isTransitionCurrent(revision)) return;
+        await this.stopEnhancement(this.nativeActive);
+        if (!this.destroyed) {
+          this.showNotification(error instanceof Error ? error.message : 'The backend could not be changed.');
         }
-      },
-    });
-
-    console.log(`[Anime4KWebExt] Renderer initialized with mode: ${selectedMode.name}`);
-  }
-
-  /**
-   * 根据新设置更新渲染器。
-   * 这比完全重新初始化要高效得多。
-   * @param newSettings - 最新的设置对象
-   */
-  public async updateSettings(newSettings: Anime4KWebExtSettings): Promise<void> {
+        throw error;
+      } finally {
+        if (this.transitionRevision === revision) this.switchingFromNative = false;
+      }
+    }
     if (!this.renderer) return;
-
-    console.log('[Anime4KWebExt] Updating renderer with new settings...');
-    const { selectedModeId, enhancementModes, targetResolutionSetting } = newSettings;
-    const selectedMode = enhancementModes.find((m: EnhancementMode) => m.id === selectedModeId) || enhancementModes.find((m: EnhancementMode) => m.isBuiltIn)!;
-
-    const newTargetDimensions = this.calculateTargetDimensions(
-      this.video.videoWidth,
-      this.video.videoHeight,
-      targetResolutionSetting
-    );
-
-    // 如果目标尺寸变化，更新canvas的大小。这必须在调用渲染器更新之前完成。
-    const canvas = this.overlay.getCanvas();
-    if (newTargetDimensions.width !== canvas.width || newTargetDimensions.height !== canvas.height) {
-      console.log(`[Anime4KWebExt] Target resolution changed, resizing canvas to ${newTargetDimensions.width}x${newTargetDimensions.height}.`);
-      canvas.width = newTargetDimensions.width;
-      canvas.height = newTargetDimensions.height;
+    if (selectedBackend === 'native') {
+      const revision = this.beginTransition();
+      this.releaseWebGPUResources();
+      this.overlay.hideCanvas();
+      try {
+        if (!await this.requestNativeFallback('native-selected', newSettings, revision)) return;
+      } catch (error) {
+        if (!this.isTransitionCurrent(revision)) return;
+        await this.stopEnhancement(false);
+        if (!this.destroyed) {
+          this.showNotification(error instanceof Error ? error.message : 'The native renderer could not be started.');
+        }
+        throw error;
+      }
+      if (!this.isTransitionCurrent(revision)) return;
+      VideoEnhancer.activeEnhancer = this;
+      this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+      return;
     }
 
-    // 根据模式和档位获取实际效果链
-    const effects = getEffectsForMode(selectedMode, newSettings.performanceTier);
-
-    // 调用渲染器统一的配置更新方法，它会智能地处理变更
-    this.renderer.updateConfiguration({
-      effects: effects,
-      targetDimensions: newTargetDimensions
-    });
-
-    this.currentModeId = selectedMode.id;
-    console.log(`[Anime4KWebExt] Renderer updated to mode: ${selectedMode.name}`);
-  }
-
-  /**
-   * 计算目标渲染尺寸
-   */
-  private calculateTargetDimensions(videoWidth: number, videoHeight: number, resolutionSetting: string): Dimensions {
-    const multipliers: Record<string, number> = { 'x2': 2, 'x4': 4, 'x8': 8 };
-    const fixedResolutions: Record<string, Dimensions> = {
-      '720p': { width: 1280, height: 720 },
-      '1080p': { width: 1920, height: 1080 },
-      '2k': { width: 2560, height: 1440 },
-      '4k': { width: 3840, height: 2160 },
-    };
-
-    if (multipliers[resolutionSetting]) {
-      return { width: videoWidth * multipliers[resolutionSetting], height: videoHeight * multipliers[resolutionSetting] };
-    } else if (fixedResolutions[resolutionSetting]) {
-      return fixedResolutions[resolutionSetting];
+    const targetDimensions = calculateAutoTargetDimensions(this.video);
+    this.updateOversharpenWarning(newSettings, targetDimensions);
+    const renderer = this.renderer;
+    try {
+      await renderer.updateConfiguration({
+        effects: getEffectsForPreset(newSettings.mode, newSettings.quality),
+        targetDimensions,
+        frameGenerationEnabled: newSettings.frameGenerationEnabled,
+      });
+    } catch (error) {
+      this.currentSettings = previousSettings;
+      this.currentModeId = previousModeId;
+      this.oversharpenWarning = previousOversharpenWarning;
+      this.updateWarningDisplay();
+      this.applyFullscreenMarker(Boolean(
+        previousSettings?.autoFullscreenEnabled
+          && isProcessingEnabled(previousSettings.mode, previousSettings.frameGenerationEnabled),
+      ));
+      if (this.renderer === renderer && renderer.isDestroyed()) await this.stopEnhancement(false);
+      throw error;
     }
-    return { width: videoWidth, height: videoHeight };
   }
 
-  /**
-   * 获取当前正在使用的模式ID
-   */
+  private assertBackendCompatibility(selectedBackend: SelectedBackend): void {
+    if (selectedBackend !== 'unavailable') return;
+    throw new Error('WebGPU is unavailable and Backend is forced to WebGPU. Select Auto or Native instead.');
+  }
+
   public getCurrentModeId(): string | null {
     return this.currentModeId;
   }
@@ -292,113 +717,233 @@ export class VideoEnhancer {
     return this.video;
   }
 
-  /**
-   * 分离方法
-   */
   public detach(): void {
-    console.log('[Anime4KWebExt] Detaching enhancer from video.');
     this.overlay.detach();
-    // 移除属性，因为此刻它不再“应用”于任何DOM元素
     this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
+    this.video.removeAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR);
   }
 
-  /**
-   * 重附加方法
-   */
   public async reattach(newVideo: HTMLVideoElement): Promise<void> {
-    console.log('[Anime4KWebExt] Re-attaching enhancer to new video.');
+    if (this.destroyed) return;
+    this.video.removeEventListener('encrypted', this.encryptedHandler);
     this.video = newVideo;
+    this.fullscreenLayout.updateVideo(newVideo);
+    this.video.dataset.anime4kVideoId = this.videoId;
+    this.video.addEventListener('encrypted', this.encryptedHandler);
+    this.applyFullscreenMarker(Boolean(
+      this.currentSettings?.autoFullscreenEnabled
+        && isProcessingEnabled(this.currentSettings.mode, this.currentSettings.frameGenerationEnabled),
+    ));
+    this.targetResizeObserver.disconnect();
+    this.targetResizeObserver.observe(this.video);
     this.overlay.reattach(newVideo);
-
-
-
-    // 更新渲染器
-    if (this.renderer) {
-      this.renderer.updateVideoSource(newVideo);
-      // 重新应用属性
-      this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
-    } else {
-      this.disableEnhancement();
-    }
-  }
-
-  /**
-   * 销毁整个增强器实例（包括UI元素和内部资源）
-   */
-  public destroy(): void {
-    console.log('[Anime4KWebExt] Destroying enhancer instance:', this);
-    this.disableEnhancement();
-    this.overlay.destroy();
-    console.log('[Anime4KWebExt] Enhancer destroyed')
-  }
-
-  /**
-   * 禁用视频增强效果（释放资源并重置视频状态）
-   */
-  private disableEnhancement(): void {
-    console.log('[Anime4KWebExt] disableEnhancement called. Current renderer:', this.renderer);
-    console.log('[Anime4KWebExt] Video opacity before:', this.video.style.opacity);
-    this.releaseWebGPUResources();
-    this.overlay.hideCanvas();
-    console.log('[Anime4KWebExt] Video opacity after hideCanvas:', this.video.style.opacity);
-    this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
-    this.button.innerText = chrome.i18n.getMessage('enhanceButton');
-    this.currentModeId = null;
-    console.log('[Anime4KWebExt] disableEnhancement completed.');
-  }
-
-  /**
-   * 释放WebGPU相关资源
-   */
-  private releaseWebGPUResources(): void {
-    if (this.renderer) {
-      console.log('[Debug] Releasing WebGPU resources. Entering release block.');
+    window.dispatchEvent(new CustomEvent('anime4k-video-reattached', {
+      detail: { videoId: this.videoId, video: newVideo },
+    }));
+    const renderer = this.renderer;
+    if (renderer) {
       try {
-        this.renderer.destroy();
-        console.log('[Debug] renderer.destroy() completed.');
-      } catch (e) {
-        console.error('[Debug] Error caught during renderer.destroy():', e);
-      } finally {
-        this.renderer = null;
-        console.log('[Debug] renderer set to null.');
+        await renderer.updateVideoSource(newVideo);
+      } catch (error) {
+        if (this.destroyed || this.renderer !== renderer) return;
+        await this.handleRendererError(
+          error instanceof Error ? error : new Error('The replacement video frame could not be processed.'),
+        );
+      }
+    }
+    if (this.destroyed) return;
+    if (this.renderer || this.nativeActive) this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+    this.scheduleFullscreenReconcile(0);
+  }
+
+  public destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    VideoEnhancer.managedEnhancers.delete(this);
+    this.video.removeEventListener('encrypted', this.encryptedHandler);
+    this.targetResizeObserver.disconnect();
+    window.removeEventListener('resize', this.targetChangeHandler);
+    document.removeEventListener('fullscreenchange', this.fullscreenChangeHandler);
+    document.removeEventListener('webkitfullscreenchange', this.fullscreenChangeHandler);
+    window.removeEventListener('anime4k-native-session', this.nativeSessionHandler);
+    if (this.targetUpdateTimer) window.clearTimeout(this.targetUpdateTimer);
+    if (this.fullscreenDebounceTimer) window.clearTimeout(this.fullscreenDebounceTimer);
+    this.stopNativePlaybackHeartbeat();
+    void this.stopEnhancement().catch(error => {
+      console.warn('[Anime4K] Failed to finish enhancement cleanup:', error);
+    });
+    this.overlay.destroy();
+    this.fullscreenLayout.exit();
+    if (this.video.dataset.anime4kVideoId === this.videoId) delete this.video.dataset.anime4kVideoId;
+    this.video.removeAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR);
+  }
+
+  public async stopEnhancement(stopNative = true, releaseClaim = true): Promise<void> {
+    this.beginTransition();
+    this.startingRevision = null;
+    const wasNativeActive = this.nativeActive;
+    const nativeSessionId = this.nativeSessionId;
+    let pendingNativeStop = false;
+    for (const pending of this.pendingNativeStarts.values()) {
+      if (pending.stopRequested) continue;
+      pending.stopRequested = true;
+      pendingNativeStop = true;
+    }
+    this.releaseWebGPUResources();
+    this.nativeActive = false;
+    this.nativeSessionId = null;
+    this.switchingFromNative = false;
+    this.stopNativePlaybackHeartbeat();
+    this.overlay.hideCanvas();
+    this.fullscreenLayout.exit();
+    this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
+    this.currentModeId = null;
+    this.performanceWarning = false;
+    this.oversharpenWarning = false;
+    this.nativeOverloadedSince = null;
+    this.lastNativeDroppedFrames = 0;
+    this.lastRenderStats = null;
+    this.updateWarningDisplay();
+    this.automaticSession = false;
+    if (VideoEnhancer.activeEnhancer === this) VideoEnhancer.activeEnhancer = null;
+    if (releaseClaim) {
+      void chrome.runtime.sendMessage({ type: 'ENHANCEMENT_RELEASE', videoId: this.videoId }).catch(() => undefined);
+    }
+
+    if ((stopNative && wasNativeActive) || pendingNativeStop) {
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'NATIVE_STOP',
+          ...(nativeSessionId ? { sessionId: nativeSessionId } : {}),
+          videoId: this.videoId,
+        });
+      } catch (error) {
+        console.warn('[Anime4K] Failed to stop native renderer:', error);
       }
     }
   }
 
-  /**
-   * 显示错误提示框
-   */
-  private showErrorModal(message: string, showOptionsLink = false): void {
-    const notification = document.createElement('div');
-    Object.assign(notification.style, {
-      position: 'fixed', top: '20px', right: '20px',
-      backgroundColor: '#333', color: '#fff', padding: '15px 20px',
-      borderRadius: '4px', boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
-      zIndex: '10000', maxWidth: '350px', fontFamily: 'Arial, sans-serif',
-      fontSize: '14px', lineHeight: '1.5'
-    });
+  private releaseWebGPUResources(): void {
+    const renderer = this.renderer;
+    this.renderer = null;
+    renderer?.destroy();
+  }
 
-    const messageNode = document.createElement('p');
-    messageNode.textContent = `[Anime4K WebExtension] ${message}`;
-    messageNode.style.margin = '0';
-    notification.appendChild(messageNode);
+  private applyFullscreenMarker(enabled: boolean): void {
+    if (enabled && !this.destroyed) this.video.setAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR, 'true');
+    else this.video.removeAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR);
+  }
 
-    if (showOptionsLink) {
-      const link = document.createElement('a');
-      link.textContent = chrome.i18n.getMessage('goToOptions') || 'Go to Options';
-      link.href = '#';
-      link.style.color = '#8ab4f8';
-      link.style.marginTop = '8px';
-      link.style.display = 'block';
-      link.onclick = (e) => {
-        e.preventDefault();
-        chrome.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' });
-      };
-      notification.appendChild(link);
+  private scheduleFullscreenReconcile(delay = 90): void {
+    if (this.destroyed) return;
+    const revision = ++this.fullscreenRevision;
+    if (this.fullscreenDebounceTimer) window.clearTimeout(this.fullscreenDebounceTimer);
+    this.fullscreenDebounceTimer = window.setTimeout(() => {
+      this.fullscreenDebounceTimer = undefined;
+      this.fullscreenTransition = this.fullscreenTransition
+        .catch(() => undefined)
+        .then(() => this.reconcileFullscreen(revision));
+    }, delay);
+  }
+
+  private async reconcileFullscreen(revision: number): Promise<void> {
+    if (this.destroyed || revision !== this.fullscreenRevision) return;
+    const settings = this.currentSettings ?? await getSettings();
+    if (this.destroyed || revision !== this.fullscreenRevision) return;
+    this.currentSettings = settings;
+    const processingEnabled = isProcessingEnabled(settings.mode, settings.frameGenerationEnabled);
+    this.applyFullscreenMarker(settings.autoFullscreenEnabled && processingEnabled);
+    const preferredFullscreenVideo = this.isPreferredFullscreenVideo();
+    if (!hasFullscreenContext(
+      getFullscreenElement(),
+      { width: window.innerWidth, height: window.innerHeight },
+      {
+        width: screen.width,
+        height: screen.height,
+        availWidth: screen.availWidth,
+        availHeight: screen.availHeight,
+      },
+      window.top !== window,
+    )) this.nativeRetryBlocked = false;
+    const shouldRun = settings.autoFullscreenEnabled
+      && processingEnabled
+      && preferredFullscreenVideo
+      && !this.nativeRetryBlocked;
+
+    if (shouldRun) {
+      if (!this.renderer && !this.nativeActive && this.startingRevision === null
+          && this.pendingNativeStarts.size === 0) {
+        this.fullscreenLayout.enter();
+        this.automaticSession = true;
+        await this.startEnhancement(settings);
+        if (!this.renderer && !this.nativeActive) this.automaticSession = false;
+      }
+      return;
     }
 
-    document.body.appendChild(notification);
+    if (this.automaticSession || this.renderer || this.nativeActive
+        || this.startingRevision !== null || this.pendingNativeStarts.size > 0) {
+      this.automaticSession = false;
+      await this.stopEnhancement();
+    }
+  }
 
-    setTimeout(() => notification.remove(), 8000);
+  private isPreferredFullscreenVideo(): boolean {
+    if (!isVideoInFullscreenContext(this.video)) return false;
+    const ownRect = this.video.getBoundingClientRect();
+    const ownArea = ownRect.width * ownRect.height;
+    for (const enhancer of VideoEnhancer.managedEnhancers) {
+      if (enhancer === this || enhancer.destroyed
+          || !isVideoInFullscreenContext(enhancer.video)) continue;
+      const rect = enhancer.video.getBoundingClientRect();
+      const area = rect.width * rect.height;
+      if (area > ownArea || area === ownArea && enhancer.videoId < this.videoId) return false;
+    }
+    return true;
+  }
+
+  private startNativePlaybackHeartbeat(): void {
+    this.stopNativePlaybackHeartbeat();
+    if (!this.nativeActive || this.destroyed) return;
+    void this.sendNativePlaybackState();
+    this.nativePlaybackTimer = window.setInterval(() => void this.sendNativePlaybackState(), 1000);
+  }
+
+  private stopNativePlaybackHeartbeat(): void {
+    if (this.nativePlaybackTimer !== undefined) {
+      window.clearInterval(this.nativePlaybackTimer);
+      this.nativePlaybackTimer = undefined;
+    }
+  }
+
+  private async sendNativePlaybackState(): Promise<void> {
+    if (!this.nativeActive || this.destroyed) return;
+    await chrome.runtime.sendMessage({
+      type: 'NATIVE_PLAYBACK_STATE',
+      ...(this.nativeSessionId ? { sessionId: this.nativeSessionId } : {}),
+      videoId: this.videoId,
+      playbackActive: !this.video.paused && !this.video.ended,
+      mediaTime: Number.isFinite(this.video.currentTime) ? Math.max(0, this.video.currentTime) : 0,
+    }).catch(() => undefined);
+  }
+
+  private showNotification(message: string): void {
+    const notification = document.createElement('div');
+    notification.textContent = `Anime4K: ${message}`;
+    Object.assign(notification.style, {
+      position: 'fixed',
+      top: '20px',
+      right: '20px',
+      zIndex: '2147483647',
+      maxWidth: '360px',
+      padding: '12px 16px',
+      borderRadius: '8px',
+      background: '#2b2133',
+      color: '#fff',
+      boxShadow: '0 5px 24px rgba(0,0,0,.35)',
+      font: '14px/1.45 system-ui, sans-serif',
+    });
+    document.body.appendChild(notification);
+    window.setTimeout(() => notification.remove(), 8000);
   }
 }

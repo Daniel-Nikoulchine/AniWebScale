@@ -1,0 +1,107 @@
+name: Signed native release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-2022
+    environment: native-release-signing
+    env:
+      ANIME4K_ACCOUNT_API_URL: ${{ vars.ANIWEBSCALE_PUBLIC_URL }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            website/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - name: Verify release tag matches the extension version
+        if: github.ref_type == 'tag'
+        shell: powershell
+        run: |
+          $version = (Get-Content -LiteralPath manifest.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Release tag $env:GITHUB_REF_NAME does not match manifest version $version."
+          }
+      - name: Typecheck extension
+        run: npm run typecheck
+      - name: Lint extension
+        run: npm run lint
+      - name: Unit-test extension
+        run: npm test
+      - name: Install website dependencies
+        working-directory: website
+        run: npm ci
+      - name: Test website and Cloudflare bundle
+        working-directory: website
+        run: |
+          npm test
+          npm run check:types
+          npm run check:cloudflare
+          npm run test:cloudflare:local
+          npm run test:live:local
+          npm run test:database:restore
+      - name: Require the production deployment to be release-ready
+        working-directory: website
+        env:
+          LIVE_BASE_URL: ${{ vars.ANIWEBSCALE_PUBLIC_URL }}
+          LIVE_REQUIRE_LEGAL_APPROVAL: "1"
+          LIVE_REQUIRE_SCHEMA_STATUS: "1"
+          OPERATIONS_MONITOR_TOKEN: ${{ secrets.OPERATIONS_MONITOR_TOKEN }}
+        run: npm run check:live
+      - name: Install pinned browsers
+        run: npm run test:e2e:install
+      - name: Browser extension E2E
+        env:
+          ANIME4K_REQUIRE_E2E_CAPABILITIES: "1"
+        run: npm run test:e2e
+      - name: Build release browser bundles
+        run: npm run build:release:all
+      - name: Enforce lazy bundle budgets
+        run: npm run check:bundle-sizes
+      - name: Build and test native binaries
+        shell: powershell
+        run: ./native/scripts/build.ps1 -Configuration Release
+      - name: Materialize signing certificate
+        shell: powershell
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.ANIME4K_SIGNING_PFX_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64)) { throw 'ANIME4K_SIGNING_PFX_BASE64 is not configured.' }
+          $path = Join-Path $env:RUNNER_TEMP 'aniwebscale-signing.pfx'
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          "ANIME4K_SIGNING_PFX_PATH=$path" >> $env:GITHUB_ENV
+      - name: Sign and verify native release
+        shell: powershell
+        env:
+          ANIME4K_SIGNING_PFX_PASSWORD: ${{ secrets.ANIME4K_SIGNING_PFX_PASSWORD }}
+        run: ./native/scripts/sign-release.ps1 -BinaryDirectory native/build/bin/Release
+      - name: Remove signing certificate
+        if: always()
+        shell: powershell
+        run: |
+          if ($env:ANIME4K_SIGNING_PFX_PATH -and (Test-Path -LiteralPath $env:ANIME4K_SIGNING_PFX_PATH)) {
+            Remove-Item -LiteralPath $env:ANIME4K_SIGNING_PFX_PATH -Force
+          }
+      - name: Create verified packages
+        shell: powershell
+        run: ./scripts/package-local.ps1 -SkipBuild -Configuration Release -RequireNativeSignature
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aniwebscale-${{ github.ref_name }}
+          path: artifacts/aniwebscale-*
+          if-no-files-found: error
+          retention-days: 30

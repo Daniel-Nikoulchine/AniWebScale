@@ -1,244 +1,145 @@
-<!DOCTYPE html>
-<html lang="__MSG_@@ui_locale__">
-
+<!doctype html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title data-i18n="optionsTitle">Extension Options</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fffaf3">
+  <title>AniWebScale Settings</title>
 </head>
-
 <body>
-  <div class="container">
-    <aside class="sidebar" id="sidebar">
-      <h1 class="logo" data-i18n="extensionName">Anime4K</h1>
-      <nav class="menu">
-        <ul id="sidebar-menu">
-          <li>
-            <a class="menu-item active" data-section="general">
-              <svg xmlns="http://www.w3.org/2000/svg" class="menu-icon" width="20" height="20" viewBox="0 0 24 24"
-                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12.22 2h-4.44a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8.38" />
-                <path d="M16 2l4 4h-4V2z" />
-                <path d="M12.5 11.5a2.5 2.5 0 0 1 5 0Z" />
-                <path d="M12.5 19.5a2.5 2.5 0 0 1 5 0Z" />
-                <path d="M12.5 15.5a2.5 2.5 0 0 1 5 0Z" />
-              </svg>
-              <span data-i18n="generalSettings">General Settings</span>
-            </a>
-          </li>
-          <li>
-            <a class="menu-item" data-section="modes">
-              <svg xmlns="http://www.w3.org/2000/svg" class="menu-icon" width="20" height="20" viewBox="0 0 24 24"
-                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="4" y1="21" x2="4" y2="14"></line>
-                <line x1="4" y1="10" x2="4" y2="3"></line>
-                <line x1="12" y1="21" x2="12" y2="12"></line>
-                <line x1="12" y1="8" x2="12" y2="3"></line>
-                <line x1="20" y1="21" x2="20" y2="16"></line>
-                <line x1="20" y1="12" x2="20" y2="3"></line>
-                <line x1="1" y1="14" x2="7" y2="14"></line>
-                <line x1="9" y1="8" x2="15" y2="8"></line>
-                <line x1="17" y1="16" x2="23" y2="16"></line>
-              </svg>
-              <span data-i18n="enhancementModes">Enhancement Modes</span>
-            </a>
-          </li>
-          <li>
-            <a class="menu-item" data-section="whitelist">
-              <svg xmlns="http://www.w3.org/2000/svg" class="menu-icon" width="20" height="20" viewBox="0 0 24 24"
-                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                <path d="m9 12 2 2 4-4"></path>
-              </svg>
-              <span data-i18n="whitelistManagement">Whitelist Management</span>
-            </a>
-          </li>
-          <li>
-            <a class="menu-item" data-section="about">
-              <svg xmlns="http://www.w3.org/2000/svg" class="menu-icon" width="20" height="20" viewBox="0 0 24 24"
-                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="12" y1="16" x2="12" y2="12"></line>
-                <line x1="12" y1="8" x2="12.01" y2="8"></line>
-              </svg>
-              <span data-i18n="about">About</span>
-            </a>
-          </li>
-        </ul>
-      </nav>
-    </aside>
-    <div class="main-content-overlay" id="sidebar-overlay"></div>
-    <main class="main-content" id="main-content">
-      <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">
-        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="3" y1="12" x2="21" y2="12"></line>
-          <line x1="3" y1="6" x2="21" y2="6"></line>
-          <line x1="3" y1="18" x2="21" y2="18"></line>
-        </svg>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="AniWebScale settings home" data-i18n-aria-label="settingsHome"><img src="icons/icon128.png" alt="" width="40" height="40"><span>AniWebScale</span></a>
+    <button class="menu-button" type="button" aria-expanded="false" aria-controls="settings-nav"><span></span><span></span><span></span><span class="sr-only" data-i18n="openMenu">Open menu</span></button>
+    <nav id="settings-nav" aria-label="Settings navigation">
+      <a href="#account" data-i18n="account">Account</a>
+      <a class="active" href="#enhancement" data-i18n="enhancement">Enhancement</a>
+      <a href="#permissions" data-i18n="permissions">Permissions</a>
+      <a href="#appearance" data-i18n="appearance">Appearance</a>
+    </nav>
+    <div class="header-actions">
+      <button id="theme-toggle" class="theme-button" type="button" aria-label="Switch to dark theme">
+        <span class="sun icon-sun" aria-hidden="true">
+          <svg class="lucide lucide-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path>
+          </svg>
+        </span>
+        <span class="moon icon-moon" aria-hidden="true">
+          <svg class="lucide lucide-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path>
+          </svg>
+        </span>
       </button>
-      <section id="general-section" class="content-section active">
-        <div class="header">
-          <h1 data-i18n="generalSettings">General Settings</h1>
+    </div>
+  </header>
+
+  <main id="top">
+    <header class="hero">
+      <div class="hero-copy">
+        <h1>Make every frame<br><em>feel magical~!!</em></h1>
+        <p>Fine-tune real-time upscaling for crisp lines, softer gradients and smoother motion across the web.</p>
+        <div class="hero-chips"><span>WebGPU</span><span>Native fallback</span><span>No telemetry</span></div>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <span class="art-star one">&#10022;</span><span class="art-star two">&#10022;</span><span class="art-star three">&#10023;</span>
+        <img class="hero-logo" src="icons/icon400.png" alt="" width="250" height="250">
+      </div>
+    </header>
+
+    <div class="section-intro" id="account">
+      <span class="heading-icon mint" aria-hidden="true">&#9825;</span>
+      <h2 data-i18n="accountLicense">Account &amp; license</h2>
+    </div>
+    <section class="card account-card">
+      <div class="account-copy">
+        <p class="eyebrow">CURRENT PLAN</p>
+        <h3 id="account-plan">Free</h3>
+        <p id="account-details" class="note">Anime4K + WebGPU</p>
+        <strong id="account-email"></strong>
+      </div>
+      <div id="account-auth" class="account-auth">
+        <p class="note">Sign in on the AniWebScale website. Your password is never entered into or stored by the extension.</p>
+        <div class="account-buttons"><button id="account-sign-in" class="primary" type="button" data-i18n="signInSecurely">Sign in securely</button><button id="account-sign-up" class="outline" type="button" data-i18n="createAccount">Create account</button></div>
+      </div>
+      <div id="account-session" class="account-session" hidden>
+        <button id="account-refresh" class="outline" type="button" data-i18n="refreshLicense">Refresh license</button>
+        <button id="account-sign-out" class="outline" type="button" data-i18n="signOut">Sign out</button>
+      </div>
+      <button id="account-upgrade" class="outline" type="button" data-i18n="viewPlansBilling">View plans &amp; billing</button>
+      <p id="account-status" class="note" role="status" aria-live="polite"></p>
+    </section>
+
+    <div class="section-intro" id="enhancement">
+      <span class="heading-icon lavender" aria-hidden="true">&#10022;</span>
+      <h2 data-i18n="enhancement">Enhancement</h2>
+    </div>
+    <section class="card enhancement-card">
+      <div class="card-main">
+        <div class="settings-grid">
+          <label class="mode-select-field"><span data-i18n="enhancementMode">Enhancement mode</span>
+            <select id="mode">
+              <option value="OFF">Off</option>
+              <optgroup label="Anime4K presets">
+                <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+                <option value="AA">A+A</option><option value="BB">B+B</option><option value="CA">C+A</option>
+              </optgroup>
+              <optgroup label="AI upscaling">
+                <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option>
+              </optgroup>
+            </select>
+          </label>
+          <label><span data-i18n="quality">Quality</span><select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select></label>
+          <label><span data-i18n="backend">Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
         </div>
-        <div class="card">
-          <div class="card-header">
-            <h2 class="card-title" data-i18n="appearance">Appearance</h2>
-          </div>
-          <div class="setting-item">
-            <div class="setting-label">
-              <label for="theme-select" data-i18n="themeMode">Theme Mode</label>
-              <p class="setting-description" data-i18n="themeModeDesc">
-                Choose your preferred theme. Auto mode follows your system preference.
-              </p>
-            </div>
-            <div class="setting-control">
-              <select id="theme-select" class="theme-select">
-                <option value="auto" data-i18n="themeAuto">Auto (System)</option>
-                <option value="light" data-i18n="themeLight">Light</option>
-                <option value="dark" data-i18n="themeDark">Dark</option>
-              </select>
-            </div>
-          </div>
+        <div class="mode-summary">
+          <p id="mode-description"></p>
+          <span id="mode-profile" class="mode-profile"></span>
         </div>
 
-        <div class="card">
-          <div class="card-header">
-            <h2 class="card-title" data-i18n="compatibility">Compatibility</h2>
-          </div>
-          <div class="setting-item">
-            <div class="setting-label">
-              <label for="cross-origin-fix-toggle" data-i18n="crossOriginCompatMode">Cross-Origin Compatibility
-                Mode</label>
-              <p class="setting-description" data-i18n="crossOriginCompatModeDesc">
-                Enable this if video enhancement fails on certain websites. This mode attempts to fix cross-origin
-                loading issues but may have minor security implications.
-              </p>
-            </div>
-            <div class="setting-control">
-              <label class="switch">
-                <input type="checkbox" id="cross-origin-fix-toggle">
-                <span class="slider round"></span>
-              </label>
-            </div>
-          </div>
+        <div class="toggle-list">
+          <label class="check"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong>Frame generation</strong><small id="frame-generation-description">Generate a motion-aware intermediate frame for 2x frame rate.</small></span></label>
+          <label class="check"><input id="auto-fullscreen" type="checkbox"><span class="check-control"></span><span><strong>Automatic fullscreen</strong><small>Start enhancing as soon as a video player enters fullscreen.</small></span></label>
+          <label class="check"><input id="statistics" type="checkbox"><span class="check-control"></span><span><strong>Real-time statistics</strong><small>Show FPS, render time and dropped frames over the video.</small></span></label>
         </div>
+      </div>
+      <aside class="side-notes">
+        <div class="note-card mint-note"><span aria-hidden="true">&#10003;</span><p><strong>Smart by default</strong>Auto tries WebGPU first and requests native rendering only when needed.</p></div>
+        <div class="note-card pink-note"><span aria-hidden="true">!</span><p><strong>Streaming video stays black?</strong>Native capture may work after turning browser hardware acceleration off and restarting. WebGPU requires hardware acceleration.</p></div>
+        <p class="tiny-note">AniWebScale never bypasses DRM and keeps your selected quality when the frame budget is exceeded.</p>
+        <p class="note warning">A+A, B+B and C+A are intended for at least 2x output and may oversharpen at smaller scales.</p>
+        <p id="compatibility-hint" class="note warning ai-warning" hidden></p>
+      </aside>
+    </section>
 
-        <div class="card">
-          <div class="card-header">
-            <h2 class="card-title" data-i18n="performanceSettings">Performance Settings</h2>
-          </div>
+    <div class="section-intro" id="permissions">
+      <span class="heading-icon blue" aria-hidden="true">&#9671;</span>
+      <h2 data-i18n="sitePermissions">Website permissions</h2>
+    </div>
+    <section class="card permission-card">
+      <div><h3 data-i18n="websiteAccess">Website access</h3><p class="note" data-i18n="websiteAccessDescription">AniWebScale runs only on sites you explicitly allow from the popup.</p></div>
+      <div id="website-sites"></div>
+      <button id="clear-website-sites" class="outline" type="button" data-i18n="clearWebsiteAccess">Clear website access</button>
+    </section>
+    <section class="card permission-card">
+      <div><h3 data-i18n="nativeRendererPermissions">Native renderer permissions</h3><p class="note">Permission is requested once per site and stored only on this computer.</p></div>
+      <div id="native-sites"></div>
+      <button id="clear-native-sites" class="outline" type="button" data-i18n="clearPermissions">Clear all permissions</button>
+    </section>
 
-          <!-- GPU 测试结果 -->
-          <div class="setting-item">
-            <div class="setting-label">
-              <label data-i18n="gpuPerformance">GPU Performance</label>
-              <p class="setting-description" id="gpu-info-desc">
-                <span data-i18n="currentTier">Current tier:</span>
-                <span id="gpu-tier-display"></span>
-              </p>
-              <!-- 测试进度条 -->
-              <div id="benchmark-progress" class="benchmark-progress" style="display: none;">
-                <div class="progress-bar-container">
-                  <div class="progress-bar-fill" id="benchmark-progress-fill"></div>
-                </div>
-                <span class="progress-text" id="benchmark-progress-text" data-i18n="testing">Testing...</span>
-              </div>
-            </div>
-            <div class="setting-control">
-              <button id="run-benchmark-btn" class="btn btn-outline" data-i18n="runTest">Run Test</button>
-            </div>
-          </div>
-        </div>
-      </section>
-      <section id="modes-section" class="content-section">
-        <div class="header">
-          <h1 data-i18n="enhancementModes">Enhancement Modes</h1>
-          <div class="btn-group">
-            <button id="add-mode-btn" class="btn btn-primary" data-i18n="addMode">Add Mode</button>
-            <button id="import-modes-btn" class="btn btn-outline" data-i18n="import">Import</button>
-            <button id="export-modes-btn" class="btn btn-outline" data-i18n="export">Export</button>
-          </div>
-        </div>
-        <div id="modes-container" class="modes-container">
-          <!-- 模式卡片将动态添加到这里 -->
-        </div>
-      </section>
-      <section id="whitelist-section" class="content-section">
-        <div class="header">
-          <h1 data-i18n="whitelistManagement">Whitelist Management</h1>
-        </div>
-        <div class="card">
-          <div class="card-header">
-            <h2 class="card-title" data-i18n="rules">Rules</h2>
-            <div class="btn-group">
-              <button id="add-rule" class="btn btn-primary" data-i18n="addRule">Add Rule</button>
-              <button id="import-btn" class="btn btn-outline" data-i18n="import">Import</button>
-              <button id="export-btn" class="btn btn-outline" data-i18n="export">Export</button>
-            </div>
-          </div>
-          <div class="table-container">
-            <table class="whitelist-table">
-              <thead>
-                <tr>
-                  <th data-i18n="pattern">Pattern</th>
-                  <th data-i18n="enabled" class="cell-center">Enabled</th>
-                  <th data-i18n="actions">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="rules-container">
-                <!-- 规则将动态添加到这里 -->
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-      <section id="about-section" class="content-section">
-        <div class="header">
-          <h1 data-i18n="about">About</h1>
-        </div>
-        <div class="card">
-          <div class="about-container">
-            <div class="about-header">
-              <img src="/icons/icon128.png" alt="Extension Icon" class="extension-icon">
-              <div>
-                <h2 class="extension-name">Anime4K WebExtension</h2>
-                <p class="version-info">Version <span id="version-number"></span></p>
-              </div>
-            </div>
-            <div class="about-content">
-              <p data-i18n="extensionDescription">Real-time video super-resolution browser extension based on Anime4K.
-              </p>
-              <div class="info-grid">
-                <div class="info-item">
-                  <strong data-i18n="author">Author:</strong>
-                  <a href="https://github.com/chenmozhijin" target="_blank" rel="noopener noreferrer">沉默の金</a>
-                </div>
-                <div class="info-item">
-                  <strong data-i18n="license">License:</strong>
-                  <a href="https://github.com/chenmozhijin/Anime4K-WebExtension/blob/main/LICENSE" target="_blank"
-                    rel="noopener noreferrer">MIT</a>
-                </div>
-                <div class="info-item">
-                  <strong data-i18n="sourceCode">Source Code:</strong>
-                  <a href="https://github.com/chenmozhijin/Anime4K-WebExtension" target="_blank"
-                    rel="noopener noreferrer">GitHub</a>
-                </div>
-                <div class="info-item">
-                  <strong data-i18n="reportIssues">Report Issues:</strong>
-                  <a href="https://github.com/chenmozhijin/Anime4K-WebExtension/issues" target="_blank"
-                    rel="noopener noreferrer" data-i18n="issueTracker">Issue Tracker</a>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-    </main>
-  </div>
-  <div class="footer">
-    <p>Anime4K WebExtension</p>
-  </div>
+    <div class="section-intro" id="appearance">
+      <span class="heading-icon pink" aria-hidden="true">&#9788;</span>
+      <h2 data-i18n="appearance">Appearance</h2>
+    </div>
+    <section class="card appearance-card">
+      <div><h3 data-i18n="theme">Theme</h3><p class="note">Follow your system or choose your favorite atmosphere.</p></div>
+      <label class="theme-field"><span data-i18n="colorTheme">Color theme</span><select id="theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    </section>
+
+    <div class="actions">
+      <button id="save" class="primary" type="button"><span data-i18n="saveSettings">Save settings</span> <span aria-hidden="true">&#10022;</span></button>
+      <div id="status" role="status" aria-live="polite"></div>
+    </div>
+    <footer>AniWebScale <span id="version"></span><i></i>MIT-licensed shaders<i></i>No telemetry</footer>
+  </main>
 </body>
-
 </html>

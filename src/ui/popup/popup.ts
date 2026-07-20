@@ -1,281 +1,254 @@
-// popup.ts
 import './popup.css';
 import '../common-vars.css';
-import { getSettings, saveSettings, getLocalSettings, saveLocalSettings, BUILTIN_MODES } from '../../utils/settings';
-import { addWhitelistRule, setDefaultWhitelist } from '../../utils/whitelist';
+import type { Anime4KWebExtSettings, EnhancementMode, QualityTier, RenderBackend } from '../../types';
+import {
+  isProcessingEnabled,
+  modeUsesQuality,
+} from '../../shared/presets';
+import { getSettings, saveSettings } from '../../utils/settings';
+import { populateModeSelect, renderModeDescription } from '../mode-select';
 import { themeManager } from '../theme-manager';
-import type { PerformanceTier, EnhancementMode, CustomMode } from '../../types';
-
-// 当前档位状态
-let currentTier: PerformanceTier = 'balanced';
+import type { AccountStatus } from '../../account/entitlement';
+import { isProMode, requiresProConfiguration } from '../../account/entitlement';
+import { renderPlanAccessLabels } from '../plan-access';
+import { localizeDocument, message } from '../i18n';
+import {
+  hasSiteAccess,
+  injectSiteScripts,
+  removeSiteAccess,
+  requestSiteAccess,
+  sitePatternForUrl,
+} from '../../site-access';
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // 初始化主题
-  themeManager.getTheme(); // 这会自动应用保存的主题
+  localizeDocument();
+  themeManager.getTheme();
 
-  // 设置文档语言
-  document.documentElement.setAttribute('lang', chrome.i18n.getMessage('@@ui_locale') || 'en');
+  const mode = document.getElementById('mode') as HTMLSelectElement;
+  const modeDescription = document.getElementById('mode-description') as HTMLParagraphElement;
+  const extensionEnabled = document.getElementById('extension-enabled') as HTMLInputElement;
+  const quality = document.getElementById('quality') as HTMLSelectElement;
+  const backend = document.getElementById('backend') as HTMLSelectElement;
+  const statistics = document.getElementById('statistics') as HTMLInputElement;
+  const autoFullscreen = document.getElementById('auto-fullscreen') as HTMLInputElement;
+  const frameGeneration = document.getElementById('frame-generation') as HTMLInputElement;
+  const save = document.getElementById('save') as HTMLButtonElement;
+  const openOptions = document.getElementById('open-options') as HTMLButtonElement;
+  const status = document.getElementById('status') as HTMLDivElement;
+  const version = document.getElementById('version') as HTMLSpanElement;
+  const accountPlan = document.getElementById('account-plan') as HTMLButtonElement;
+  const accountPlanSummary = document.getElementById('account-plan-summary') as HTMLElement;
+  const accountPlanAction = document.getElementById('account-plan-action') as HTMLElement;
+  const frameGenerationDescription = document.getElementById('frame-generation-description') as HTMLElement;
+  const siteAccessCard = document.getElementById('site-access-card') as HTMLElement;
+  const siteAccessSummary = document.getElementById('site-access-summary') as HTMLElement;
+  const siteAccessButton = document.getElementById('site-access') as HTMLButtonElement;
+  let hasPro = false;
+  let activeSite: { tabId: number; url: string; granted: boolean } | null = null;
 
-  // 设置版本信息
-  const versionInfo = document.getElementById('version-info');
-  if (versionInfo) {
-    const manifest = chrome.runtime.getManifest();
-    versionInfo.textContent = manifest.version;
-  }
-
-  // 应用国际化
-  document.querySelectorAll<HTMLElement>('[data-i18n]').forEach(element => {
-    const key = element.getAttribute('data-i18n');
-    if (key) {
-      const message = chrome.i18n.getMessage(key);
-      if (message) {
-        element.textContent = message;
-      }
+  const synchronizeSiteAccess = async (): Promise<void> => {
+    const response = await chrome.runtime.sendMessage({ type: 'SITE_ACCESS_SYNC' }) as
+      { ok?: boolean; message?: string } | undefined;
+    if (response?.ok === false) {
+      throw new Error(response.message || message('siteAccessSyncFailed', 'Site access could not be applied.'));
     }
-  });
+  };
 
-  // 应用 title 国际化
-  document.querySelectorAll<HTMLElement>('[data-i18n-title]').forEach(element => {
-    const key = element.getAttribute('data-i18n-title');
-    if (key) {
-      const message = chrome.i18n.getMessage(key);
-      if (message) {
-        element.setAttribute('title', message);
-      }
+  const refreshSiteAccess = async (): Promise<void> => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const pattern = sitePatternForUrl(tab?.url);
+    if (tab?.id === undefined || !tab.url || !pattern) {
+      activeSite = null;
+      siteAccessCard.dataset.state = 'unavailable';
+      siteAccessSummary.textContent = message('siteAccessUnavailable', 'Site access is unavailable on this page.');
+      siteAccessButton.textContent = message('siteAccessUnavailableAction', 'Unavailable');
+      siteAccessButton.disabled = true;
+      return;
     }
-  });
 
-  // 获取 DOM 元素
-  const tierButtons = document.querySelectorAll<HTMLButtonElement>('.tier-btn');
-  const modeSelect = document.getElementById('mode-select') as HTMLSelectElement;
-  const resolutionSelect = document.getElementById('resolution-select') as HTMLSelectElement;
-  const saveButton = document.getElementById('save-settings') as HTMLButtonElement;
-  const whitelistToggle = document.getElementById('whitelist-toggle') as HTMLInputElement;
-  const addCurrentPageBtn = document.getElementById('add-current-page') as HTMLButtonElement;
-  const addCurrentDomainBtn = document.getElementById('add-current-domain') as HTMLButtonElement;
-  const addParentPathBtn = document.getElementById('add-parent-path') as HTMLButtonElement;
-  const openSettingsBtn = document.getElementById('open-settings') as HTMLButtonElement;
+    const granted = await hasSiteAccess(tab.url);
+    activeSite = { tabId: tab.id, url: tab.url, granted };
+    siteAccessCard.dataset.state = granted ? 'granted' : 'missing';
+    siteAccessSummary.textContent = granted
+      ? message('siteAccessGranted', 'AniWebScale can enhance videos on {site}.', { site: new URL(tab.url).host })
+      : message('siteAccessMissing', 'Allow access only for {site} to enhance its videos.', { site: new URL(tab.url).host });
+    siteAccessButton.textContent = granted
+      ? message('removeSiteAccess', 'Remove access')
+      : message('allowSiteAccess', 'Allow this site');
+    siteAccessButton.disabled = false;
+  };
 
-  if (!modeSelect || !resolutionSelect || !saveButton || !whitelistToggle ||
-    !addCurrentPageBtn || !addCurrentDomainBtn || !addParentPathBtn || !openSettingsBtn) {
-    console.error('Required elements not found');
-    return;
-  }
+  version.textContent = chrome.runtime.getManifest().version;
+  const settings = await getSettings();
+  extensionEnabled.checked = settings.extensionEnabled;
+  populateModeSelect(mode, settings.mode);
+  quality.value = settings.quality;
+  backend.value = settings.backend;
+  statistics.checked = settings.statsEnabled;
+  autoFullscreen.checked = settings.autoFullscreenEnabled;
+  frameGeneration.checked = settings.frameGenerationEnabled;
 
-  // 渲染模式下拉菜单
-  const renderModeSelect = (settings: { enhancementModes: EnhancementMode[], customModes: CustomMode[], selectedModeId: string }) => {
-    modeSelect.innerHTML = '';
-
-    // 内置模式组
-    const builtInGroup = document.createElement('optgroup');
-    builtInGroup.label = chrome.i18n.getMessage('builtInModes') || 'Built-in Modes';
-    BUILTIN_MODES.forEach(mode => {
-      const option = document.createElement('option');
-      option.value = mode.id;
-      option.textContent = mode.name;
-      builtInGroup.appendChild(option);
-    });
-    modeSelect.appendChild(builtInGroup);
-
-    // 自定义模式组（如果有）
-    if (settings.customModes && settings.customModes.length > 0) {
-      const customGroup = document.createElement('optgroup');
-      customGroup.label = chrome.i18n.getMessage('customModes') || 'Custom Modes';
-      settings.customModes.forEach(mode => {
-        const option = document.createElement('option');
-        option.value = mode.id;
-        option.textContent = mode.name;
-        customGroup.appendChild(option);
+  siteAccessButton.addEventListener('click', async () => {
+    if (!activeSite) return;
+    const selected = activeSite;
+    siteAccessButton.disabled = true;
+    status.textContent = selected.granted
+      ? message('removingSiteAccess', 'Removing site access...')
+      : message('requestingSiteAccess', 'Requesting site access...');
+    try {
+      const changed = selected.granted
+        ? await removeSiteAccess(selected.url)
+        : await requestSiteAccess(selected.url);
+      if (!changed) {
+        status.textContent = selected.granted
+          ? message('siteAccessRemoveFailed', 'Site access was not removed.')
+          : message('siteAccessNotGranted', 'Site access was not granted.');
+        return;
+      }
+      await synchronizeSiteAccess();
+      if (!selected.granted) await injectSiteScripts(selected.tabId);
+      status.textContent = selected.granted
+        ? message('siteAccessRemoved', 'Site access removed. Reload the page to finish cleanup.')
+        : message('siteAccessReady', 'Site access granted. AniWebScale is ready here.');
+    } catch (error) {
+      console.error('[AniWebScale] Could not change site access:', error);
+      status.textContent = error instanceof Error
+        ? error.message
+        : message('siteAccessChangeFailed', 'Could not change site access.');
+    } finally {
+      await refreshSiteAccess().catch(error => {
+        console.warn('[AniWebScale] Could not refresh site access state:', error);
+        siteAccessButton.disabled = false;
       });
-      modeSelect.appendChild(customGroup);
     }
+  });
 
-    modeSelect.value = settings.selectedModeId;
+  await refreshSiteAccess().catch(error => {
+    console.warn('[AniWebScale] Could not inspect site access:', error);
+    siteAccessCard.dataset.state = 'unavailable';
+    siteAccessSummary.textContent = message('siteAccessCheckFailed', 'Site access could not be checked.');
+    siteAccessButton.disabled = true;
+  });
+
+  const notifySettingsUpdated = async (update: Partial<Anime4KWebExtSettings>): Promise<void> => {
+    const response = await chrome.runtime.sendMessage({ type: 'SETTINGS_UPDATED', settings: update }) as
+      { ok?: boolean; message?: string } | undefined;
+    if (response?.ok === false) throw new Error(response.message || message('rendererRejectedSettings', 'The active renderer rejected the settings.'));
   };
 
-  // 更新档位按钮状态
-  const updateTierButtons = (tier: PerformanceTier) => {
-    tierButtons.forEach(btn => {
-      const btnTier = btn.getAttribute('data-tier') as PerformanceTier;
-      btn.classList.toggle('active', btnTier === tier);
+  extensionEnabled.addEventListener('change', async () => {
+    const enabled = extensionEnabled.checked;
+    extensionEnabled.disabled = true;
+    status.textContent = enabled
+      ? message('enablingExtension', 'Enabling extension...')
+      : message('disablingExtension', 'Disabling extension...');
+    let settingsSaved = false;
+    try {
+      const update = { extensionEnabled: enabled };
+      await saveSettings(update);
+      settingsSaved = true;
+      await notifySettingsUpdated(update);
+      status.textContent = enabled
+        ? message('extensionEnabledStatus', 'Extension enabled.')
+        : message('extensionDisabledStatus', 'Extension disabled.');
+    } catch (error) {
+      console.error('[AniWebScale] Could not change extension status:', error);
+      if (!settingsSaved) extensionEnabled.checked = !enabled;
+      status.textContent = settingsSaved
+        ? message('extensionStatusSavedNotApplied', 'Extension status saved, but could not be applied.')
+        : message('extensionStatusChangeFailed', 'Could not change extension status.');
+    } finally {
+      extensionEnabled.disabled = false;
+    }
+  });
+
+  const accountResponse = await chrome.runtime.sendMessage({ type: 'ACCOUNT_STATUS', refresh: false }) as
+    { ok?: boolean; account?: AccountStatus } | undefined;
+  const account = accountResponse?.account;
+  hasPro = Boolean(account
+    && (account.plan === 'pro' || account.plan === 'lifetime')
+    && (account.status === 'active' || account.status === 'trialing'));
+  const planLabel = account?.plan === 'lifetime'
+    ? message('lifetimePro', 'Lifetime Pro')
+    : hasPro ? message('pro', 'Pro') : message('free', 'Free');
+  const label = accountPlan.querySelector('strong');
+  if (label) label.textContent = planLabel;
+  accountPlanSummary.textContent = hasPro
+    ? message('planUnlockedSummary', 'All enhancement modes and renderers are unlocked.')
+    : message('planFreeSummary', 'Free: Anime4K + WebGPU · Pro: AI, Native + Frame Gen');
+  accountPlanAction.textContent = hasPro
+    ? message('manageArrow', 'Manage →')
+    : message('upgradeArrow', 'Upgrade →');
+  accountPlan.addEventListener('click', () => chrome.runtime.openOptionsPage());
+
+  const refreshModeUi = () => {
+    const selectedMode = mode.value as EnhancementMode;
+    const processingDisabled = !isProcessingEnabled(selectedMode, frameGeneration.checked);
+    renderPlanAccessLabels(
+      mode,
+      backend,
+      frameGeneration,
+      frameGenerationDescription,
+      hasPro,
+      message('frameMotion2x', 'Motion-aware 2x'),
+    );
+    mode.querySelectorAll('option').forEach(option => {
+      const value = (option as HTMLOptionElement).value as EnhancementMode;
+      if (isProMode(value)) {
+        (option as HTMLOptionElement).disabled = !hasPro;
+      }
     });
+    Array.from(backend.options).forEach(option => {
+      if (option.value !== 'webgpu') option.disabled = !hasPro;
+    });
+    if (!hasPro && backend.value !== 'webgpu') backend.value = 'webgpu';
+    frameGeneration.disabled = !hasPro;
+    if (!hasPro) frameGeneration.checked = false;
+    renderModeDescription(selectedMode, modeDescription);
+    quality.disabled = !modeUsesQuality(selectedMode);
+    backend.disabled = processingDisabled;
   };
+  mode.addEventListener('change', refreshModeUi);
+  frameGeneration.addEventListener('change', refreshModeUi);
+  backend.addEventListener('change', refreshModeUi);
+  refreshModeUi();
 
-  // 更新档位选择器的禁用状态（自定义模式时禁用）
-  const updateTierButtonsDisabled = (isCustomMode: boolean) => {
-    tierButtons.forEach(btn => {
-      btn.disabled = isCustomMode;
-      btn.classList.toggle('disabled', isCustomMode);
-    });
-  };
-
-  // 加载设置
-  let currentSettings;
-  let localSettings;
-  try {
-    [currentSettings, localSettings] = await Promise.all([
-      getSettings(),
-      getLocalSettings(),
-    ]);
-
-    currentTier = localSettings.performanceTier;
-    updateTierButtons(currentTier);
-    renderModeSelect(currentSettings);
-    resolutionSelect.value = currentSettings.targetResolutionSetting;
-    whitelistToggle.checked = currentSettings.whitelistEnabled;
-
-    // 检查是否选择了自定义模式
-    const isCustomMode = currentSettings.selectedModeId.startsWith('custom-');
-    updateTierButtonsDisabled(isCustomMode);
-
-    // 如果白名单为空，则设置默认规则
-    if (currentSettings.whitelist.length === 0) {
-      await setDefaultWhitelist();
-      currentSettings = await getSettings();
+  save.addEventListener('click', async () => {
+    if (!hasPro && requiresProConfiguration({
+      mode: mode.value as EnhancementMode,
+      backend: backend.value as RenderBackend,
+      frameGenerationEnabled: frameGeneration.checked,
+    })) {
+      status.textContent = message('proRequired', 'Native, AI models and frame generation require Pro.');
+      return;
     }
-  } catch (error) {
-    console.error('Error loading settings:', error);
-    modeSelect.value = 'builtin-mode-a';
-    resolutionSelect.value = 'x2';
-    whitelistToggle.checked = false;
-  }
-
-  // 档位按钮点击事件（只更新 UI 状态，保存在点击保存按钮时执行）
-  tierButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tier = btn.getAttribute('data-tier') as PerformanceTier;
-      if (tier && tier !== currentTier) {
-        currentTier = tier;
-        updateTierButtons(tier);
-        console.log('Performance tier selected:', tier);
-      }
-    });
-  });
-
-  // 模式选择变化时更新档位按钮状态
-  modeSelect.addEventListener('change', () => {
-    const isCustomMode = modeSelect.value.startsWith('custom-');
-    updateTierButtonsDisabled(isCustomMode);
-  });
-
-  // "保存"按钮点击事件
-  saveButton.addEventListener('click', async () => {
-    const selectedModeId = modeSelect.value;
-    const selectedResolution = resolutionSelect.value;
-
+    save.disabled = true;
+    status.textContent = message('saving', 'Saving...');
+    let settingsSaved = false;
+    const update = {
+      extensionEnabled: extensionEnabled.checked,
+      mode: mode.value as EnhancementMode,
+      quality: quality.value as QualityTier,
+      output: 'auto' as const,
+      backend: backend.value as RenderBackend,
+      statsEnabled: statistics.checked,
+      autoFullscreenEnabled: autoFullscreen.checked,
+      frameGenerationEnabled: frameGeneration.checked,
+    };
     try {
-      const updatedSettings = {
-        selectedModeId,
-        targetResolutionSetting: selectedResolution,
-      };
-      await saveSettings(updatedSettings);
-
-      // 保存档位
-      await saveLocalSettings({ performanceTier: currentTier });
-
-      console.log('Settings saved:', { ...updatedSettings, performanceTier: currentTier });
-
-      // 移除已存在的状态消息（避免叠加）
-      const existingStatus = document.querySelector('.save-status');
-      if (existingStatus) {
-        existingStatus.remove();
-      }
-
-      // 显示保存成功的状态消息
-      const status = document.createElement('div');
-      status.className = 'save-status';
-      status.textContent = chrome.i18n.getMessage('settingsSaved') || 'Settings saved!';
-      saveButton.parentElement?.appendChild(status);
-
-      // 通知当前活动标签页的内容脚本设置已更新
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
-          chrome.tabs.sendMessage(tabs[0].id, {
-            type: 'SETTINGS_UPDATED',
-            settings: {
-              selectedModeId,
-              targetResolution: selectedResolution,
-              performanceTier: currentTier,
-            }
-          }, (response) => {
-            if (chrome.runtime.lastError) {
-              console.warn('Message send error:', chrome.runtime.lastError.message);
-            } else {
-              console.log('Content script response:', response);
-            }
-          });
-        }
-      });
-
-      // 状态消息显示后关闭弹窗
-      setTimeout(() => {
-        status.remove();
-        window.close();
-      }, 1500);
-
+      await saveSettings(update);
+      settingsSaved = true;
+      await notifySettingsUpdated(update);
+      status.textContent = message('settingsSavedApplied', 'Settings saved and applied.');
     } catch (error) {
-      console.error('Error saving settings:', error);
-      alert('Failed to save settings');
+      console.error('[AniWebScale] Could not save popup settings:', error);
+      status.textContent = settingsSaved
+        ? message('settingsSavedNotApplied', 'Settings saved, but could not be applied.')
+        : message('settingsSaveFailed', 'Could not save settings.');
+    } finally {
+      save.disabled = false;
     }
   });
 
-  // 白名单启用/禁用开关的更改事件
-  whitelistToggle.addEventListener('change', async () => {
-    try {
-      await saveSettings({ whitelistEnabled: whitelistToggle.checked });
-      console.log('Whitelist enabled:', whitelistToggle.checked);
-    } catch (error) {
-      console.error('Error saving whitelist toggle:', error);
-    }
-  });
-
-  // "添加到白名单"按钮的事件处理
-  addCurrentPageBtn.addEventListener('click', async () => {
-    try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs.length > 0 && tabs[0].url) {
-        const url = new URL(tabs[0].url);
-        const cleanUrl = url.hostname + url.pathname;
-        await addWhitelistRule(cleanUrl);
-        alert(chrome.i18n.getMessage('pageAdded') || 'URL added to whitelist');
-      }
-    } catch (error) {
-      console.error('Error adding current URL:', error);
-      alert('Failed to add URL to whitelist');
-    }
-  });
-
-  addCurrentDomainBtn.addEventListener('click', async () => {
-    try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs.length > 0 && tabs[0].url) {
-        const url = new URL(tabs[0].url);
-        await addWhitelistRule(`${url.hostname}/*`);
-        alert(chrome.i18n.getMessage('domainAdded') || 'Domain added to whitelist');
-      }
-    } catch (error) {
-      console.error('Error adding current domain:', error);
-      alert('Failed to add domain to whitelist');
-    }
-  });
-
-  addParentPathBtn.addEventListener('click', async () => {
-    try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs.length > 0 && tabs[0].url) {
-        const url = new URL(tabs[0].url);
-        const pathParts = url.pathname.split('/').filter(p => p);
-        const parentPath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '';
-        await addWhitelistRule(`${url.hostname}/${parentPath}/*`);
-        alert(chrome.i18n.getMessage('parentPathAdded') || 'Parent path added to whitelist');
-      }
-    } catch (error) {
-      console.error('Error adding parent path:', error);
-      alert('Failed to add parent path to whitelist');
-    }
-  });
-
-  openSettingsBtn.addEventListener('click', () => {
-    chrome.runtime.openOptionsPage();
-  });
+  openOptions.addEventListener('click', () => chrome.runtime.openOptionsPage());
 });

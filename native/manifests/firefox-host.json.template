@@ -1,0 +1,10 @@
+{
+  "name": "io.github.anime4k_browser.native",
+  "description": "AniWebScale native Windows renderer",
+  "path": "${HOST_PATH}",
+  "type": "stdio",
+  "allowed_extensions": [
+    "${FIREFOX_EXTENSION_ID}"
+  ]
+}
+

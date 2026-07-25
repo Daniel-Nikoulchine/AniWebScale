@@ -46,6 +46,25 @@ export function getFullscreenElement(target: Document = document): Element | nul
   return fullscreenDocument.fullscreenElement ?? fullscreenDocument.webkitFullscreenElement ?? null;
 }
 
+/**
+ * Players such as Crunchyroll run their <video> inside a cross-origin iframe
+ * while requesting Fullscreen from the top-level document. An enhancer living in
+ * that iframe never sees document.fullscreenElement (it belongs to the parent)
+ * and never receives the frame-local fullscreenchange event. Resolve the
+ * authoritative top-level fullscreen element so the video can still be matched
+ * against the real fullscreen subtree.
+ */
+export function getAuthoritativeFullscreenElement(): Element | null {
+  if (window.top === window || !window.top) return getFullscreenElement();
+  try {
+    return getFullscreenElement(window.top.document);
+  } catch {
+    // Cross-origin top documents throw on property access. The local fullscreen
+    // element is authoritative in that case (the guest cannot observe the parent).
+    return getFullscreenElement();
+  }
+}
+
 export function viewportOccupiesScreen(viewport: ViewportMetrics, display: ScreenMetrics): boolean {
   const displayWidth = Math.max(display.width, display.availWidth);
   const displayHeight = Math.max(display.height, display.availHeight);
@@ -111,7 +130,12 @@ export function isVideoInFullscreenContext(
   video: HTMLVideoElement,
   allowGeometryFallback = window.top !== window,
 ): boolean {
-  if (isFullscreenVideoEligible(getFullscreenElement(), video)) return true;
+  // A player may request Fullscreen from the top-level document while its
+  // <video> lives in a (possibly cross-origin) iframe. The local
+  // document.fullscreenElement is then null, so resolve the authoritative
+  // top-level element before the local one.
+  const fullscreen = getAuthoritativeFullscreenElement();
+  if (isFullscreenVideoEligible(fullscreen, video)) return true;
   // A top-level document must have an actual Fullscreen API element. Without
   // this guard, Anime4K's own fixed fullscreen layout can keep satisfying the
   // geometry test after document.exitFullscreen(), causing a start/stop loop.
@@ -119,11 +143,25 @@ export function isVideoInFullscreenContext(
   // stack, so they retain the strict viewport/video geometry fallback.
   if (!allowGeometryFallback) return false;
   if (!isVisibleVideo(video, video.getAttribute(ANIME4K_APPLIED_ATTR) === 'true')) return false;
-  const viewport = { width: window.innerWidth, height: window.innerHeight };
-  return viewportOccupiesScreen(viewport, {
-    width: screen.width,
-    height: screen.height,
-    availWidth: screen.availWidth,
-    availHeight: screen.availHeight,
-  }) && rectOccupiesViewport(video.getBoundingClientRect(), viewport);
+  // When the visible fullscreen element belongs to the top-level document,
+  // measure against the top-level viewport rather than the (clipped) iframe.
+  const topDocument = window.top?.document;
+  const viewport = topDocument
+    ? { width: topDocument.documentElement.clientWidth, height: topDocument.documentElement.clientHeight }
+    : { width: window.innerWidth, height: window.innerHeight };
+  const display = topDocument
+    ? {
+        width: window.top!.screen.width,
+        height: window.top!.screen.height,
+        availWidth: window.top!.screen.availWidth,
+        availHeight: window.top!.screen.availHeight,
+      }
+    : {
+        width: screen.width,
+        height: screen.height,
+        availWidth: screen.availWidth,
+        availHeight: screen.availHeight,
+      };
+  return viewportOccupiesScreen(viewport, display)
+    && rectOccupiesViewport(video.getBoundingClientRect(), viewport);
 }

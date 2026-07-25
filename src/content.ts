@@ -459,6 +459,10 @@ function dispatchPointer(message: Record<string, unknown>): void {
   const targetRect = semanticTarget.getBoundingClientRect();
   const targetRatioX = targetRect.width > 0 ? (clientX - targetRect.left) / targetRect.width : normalizedX;
   const interactiveTarget = semanticTarget.matches('button, input, [role="button"], [role="slider"]');
+  // Consult the native seek surface first. When the pointer is inside the
+  // bottom seek zone (or an active scrub is in progress) the native output
+  // window owns that gesture and must consume it before any fullscreen
+  // control descriptor below can short-circuit the gesture.
   if (isolation && (nativeSeekScrubbing || !interactiveTarget)) {
     const nativeSurfaceAction = selectNativeSurfacePointerAction({
       event: message.event as 'move' | 'down' | 'up' | 'wheel',
@@ -489,7 +493,11 @@ function dispatchPointer(message: Record<string, unknown>): void {
     currentTime: video.currentTime,
     volume: video.volume,
   });
+  // Only treat a gesture as a fullscreen toggle when it did not already
+  // resolve to a concrete media command and is not an active native scrub.
   const nativeFullscreenControl = isolation !== null
+    && !fallback
+    && !nativeSeekScrubbing
     && /fullscreen|full-screen|enter-full|exit-full/i.test(descriptor);
   if (nativeFullscreenControl) {
     if (message.event === 'up') showNotice('Native output is already fullscreen. Press Esc to exit.');

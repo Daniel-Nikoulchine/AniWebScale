@@ -31,22 +31,13 @@ import {
   resolveNativeMessageOrigin,
 } from './shared/native-session-messages';
 import {
-  isNativeFallbackRequest,
-} from './shared/native-fallback-request';
-import type { NativeFallbackRequest } from './shared/native-fallback-request';
-import {
   resolveFullscreenExitState,
 } from './shared/fullscreen-exit';
 import type { FullscreenExitFrameResponse } from './shared/fullscreen-exit';
-import { requiresProConfiguration } from './account/entitlement';
 import {
-  ensureProAccess,
-  getAccountStatus,
-  refreshAccountStatus,
-  signIn,
-  signOut,
-  signUp,
-} from './account/service';
+  isNativeFallbackRequest,
+} from './shared/native-fallback-request';
+import type { NativeFallbackRequest } from './shared/native-fallback-request';
 import {
   migrateLegacyBroadSiteAccess,
   synchronizeRegisteredContentScripts,
@@ -394,7 +385,15 @@ async function routeNativeEvent(event: NativeEvent, sourceClient: NativeMessagin
       if (event.type === 'mediaCommand' && event.command === 'exitFullscreen') {
         await exitNativeFullscreen(session, message);
       } else {
-        await sendToFrame(session.tabId, session.frameId, message).catch(() => undefined);
+        // A player may run its <video> in an iframe while the native output
+        // window is owned by the top-level document. send the pointer to the
+        // source frame where isolation is staged, and also to the top frame:
+        // whichever content-script instance holds the active isolation will act
+        // on it. A cross-frame mismatch silently dropped seek/scrub before.
+        const targets = session.frameId === 0
+          ? [0]
+          : [session.frameId, 0];
+        await Promise.all(targets.map(frameId => sendToFrame(session.tabId, frameId, message).catch(() => undefined)));
       }
     }
     return;
@@ -840,10 +839,6 @@ async function recoverPersistedSession(): Promise<void> {
     await stopNativeSession('AniWebScale was disabled.', true);
     return;
   }
-  if (!await ensureProAccess()) {
-    await stopNativeSession('The saved Native session requires an active Pro license.', true);
-    return;
-  }
 
   const recoveredTab = await findRecoveredSessionTab(persisted);
   if (!recoveredTab || recoveredTab.id === undefined) {
@@ -969,9 +964,6 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
       if (!await isExtensionEnabled()) {
         return { ok: false, status: 'denied', message: 'AniWebScale is disabled.' };
       }
-      if (!await ensureProAccess()) {
-        return { ok: false, status: 'denied', message: 'The Native renderer requires an active Pro license.' };
-      }
       return serialized(() => startNativeFallback(request, sender));
 
     case 'NATIVE_UPDATE_CONFIGURATION': {
@@ -982,9 +974,6 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
       };
       if (!isNativeConfiguration(configuration)) {
         return { ok: false, message: 'Invalid native enhancement configuration.' };
-      }
-      if (!await ensureProAccess()) {
-        return { ok: false, message: 'The Native renderer requires an active Pro license.' };
       }
       try {
         await serialized(async () => {
@@ -1069,12 +1058,6 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
     }
 
     case 'SETTINGS_UPDATED': {
-      const requestedSettings = message.settings;
-      if (requestedSettings && typeof requestedSettings === 'object'
-        && requiresProConfiguration(requestedSettings as Partial<import('./types').Anime4KWebExtSettings>)
-        && !await ensureProAccess()) {
-        return { ok: false, message: 'Native, AI upscaling and frame generation require Pro.' };
-      }
       const extensionEnabled = await isExtensionEnabled();
       const current = await loadActiveEnhancement();
       let contentUpdatedNativeSession = false;
@@ -1114,31 +1097,12 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
       return { ok: true };
     }
 
-    case 'ACCOUNT_STATUS':
-      return { ok: true, account: await getAccountStatus(message.refresh !== false) };
-
-    case 'ACCOUNT_REFRESH':
-      return { ok: true, account: await refreshAccountStatus() };
-
-    case 'ACCOUNT_SIGN_IN':
-      return { ok: true, account: await signIn() };
-
-    case 'ACCOUNT_SIGN_UP':
-      return { ok: true, account: await signUp() };
-
-    case 'ACCOUNT_SIGN_OUT':
-      return { ok: true, account: await signOut() };
-
     case 'SITE_ACCESS_SYNC':
       await updateSiteAccess();
       return { ok: true };
 
     case 'OPEN_OPTIONS_PAGE':
       await chrome.runtime.openOptionsPage();
-      return undefined;
-
-    case 'OPEN_ACCOUNT_PAGE':
-      await chrome.tabs.create({ url: `${__ANIME4K_ACCOUNT_API_URL__}/account` });
       return undefined;
 
     case 'OPEN_ONBOARDING':
@@ -1243,7 +1207,4 @@ chrome.permissions.onRemoved.addListener(() => {
 void serialized(recoverPersistedSession);
 void updateSiteAccess(true).catch(error => {
   console.warn('[Site access] Initial synchronization failed.', error);
-});
-void refreshAccountStatus().catch(error => {
-  console.warn('[Account] Initial license refresh failed; Free mode remains active.', error);
 });

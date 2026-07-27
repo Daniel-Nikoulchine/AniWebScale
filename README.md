@@ -159,11 +159,9 @@ npm run build:native
 npm run package:local
 ```
 
-Public store bundles are built without any backend. The extension is fully free and
-needs no account, license server or database; see [`docs/RELEASE.md`](docs/RELEASE.md).
+Public store bundles must be built with the final HTTPS account URL. The release build refuses localhost and placeholder domains; see [`docs/RELEASE.md`](docs/RELEASE.md).
 
-The optional Windows native renderer signs its binaries; no backend, store secret or
-account API URL is involved.
+After deployment, `npm run check:live -- https://your-domain.example` runs the non-mutating final gate for HTTPS security, all three paid plans, Stripe/Neon readiness, signed-license verification, CORS and store links.
 
 `npm run package:local` creates:
 

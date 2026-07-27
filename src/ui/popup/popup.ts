@@ -8,6 +8,9 @@ import {
 import { getSettings, saveSettings } from '../../utils/settings';
 import { populateModeSelect, renderModeDescription } from '../mode-select';
 import { themeManager } from '../theme-manager';
+import type { AccountStatus } from '../../account/entitlement';
+import { isProMode, requiresProConfiguration } from '../../account/entitlement';
+import { renderPlanAccessLabels } from '../plan-access';
 import { localizeDocument, message } from '../i18n';
 import {
   hasSiteAccess,
@@ -33,9 +36,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const openOptions = document.getElementById('open-options') as HTMLButtonElement;
   const status = document.getElementById('status') as HTMLDivElement;
   const version = document.getElementById('version') as HTMLSpanElement;
+  const accountPlan = document.getElementById('account-plan') as HTMLButtonElement;
+  const accountPlanSummary = document.getElementById('account-plan-summary') as HTMLElement;
+  const accountPlanAction = document.getElementById('account-plan-action') as HTMLElement;
+  const frameGenerationDescription = document.getElementById('frame-generation-description') as HTMLElement;
   const siteAccessCard = document.getElementById('site-access-card') as HTMLElement;
   const siteAccessSummary = document.getElementById('site-access-summary') as HTMLElement;
   const siteAccessButton = document.getElementById('site-access') as HTMLButtonElement;
+  let hasPro = false;
   let activeSite: { tabId: number; url: string; granted: boolean } | null = null;
 
   const synchronizeSiteAccess = async (): Promise<void> => {
@@ -154,15 +162,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  const accountPlan = document.getElementById('account-plan') as HTMLButtonElement;
-  const accountPlanSummary = document.getElementById('account-plan-summary') as HTMLElement;
-  accountPlan.querySelector('strong')!.textContent = message('free', 'Free');
-  accountPlanSummary.textContent = message('planFreeSummary', 'Anime4K, WebGPU, Native, AI upscaling and frame generation are all included.');
+  const accountResponse = await chrome.runtime.sendMessage({ type: 'ACCOUNT_STATUS', refresh: false }) as
+    { ok?: boolean; account?: AccountStatus } | undefined;
+  const account = accountResponse?.account;
+  hasPro = Boolean(account
+    && (account.plan === 'pro' || account.plan === 'lifetime')
+    && (account.status === 'active' || account.status === 'trialing'));
+  const planLabel = account?.plan === 'lifetime'
+    ? message('lifetimePro', 'Lifetime Pro')
+    : hasPro ? message('pro', 'Pro') : message('free', 'Free');
+  const label = accountPlan.querySelector('strong');
+  if (label) label.textContent = planLabel;
+  accountPlanSummary.textContent = hasPro
+    ? message('planUnlockedSummary', 'All enhancement modes and renderers are unlocked.')
+    : message('planFreeSummary', 'Free: Anime4K + WebGPU · Pro: AI, Native + Frame Gen');
+  accountPlanAction.textContent = hasPro
+    ? message('manageArrow', 'Manage →')
+    : message('upgradeArrow', 'Upgrade →');
   accountPlan.addEventListener('click', () => chrome.runtime.openOptionsPage());
 
   const refreshModeUi = () => {
     const selectedMode = mode.value as EnhancementMode;
     const processingDisabled = !isProcessingEnabled(selectedMode, frameGeneration.checked);
+    renderPlanAccessLabels(
+      mode,
+      backend,
+      frameGeneration,
+      frameGenerationDescription,
+      hasPro,
+      message('frameMotion2x', 'Motion-aware 2x'),
+    );
+    mode.querySelectorAll('option').forEach(option => {
+      const value = (option as HTMLOptionElement).value as EnhancementMode;
+      if (isProMode(value)) {
+        (option as HTMLOptionElement).disabled = !hasPro;
+      }
+    });
+    Array.from(backend.options).forEach(option => {
+      if (option.value !== 'webgpu') option.disabled = !hasPro;
+    });
+    if (!hasPro && backend.value !== 'webgpu') backend.value = 'webgpu';
+    frameGeneration.disabled = !hasPro;
+    if (!hasPro) frameGeneration.checked = false;
     renderModeDescription(selectedMode, modeDescription);
     quality.disabled = !modeUsesQuality(selectedMode);
     backend.disabled = processingDisabled;
@@ -173,6 +214,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   refreshModeUi();
 
   save.addEventListener('click', async () => {
+    if (!hasPro && requiresProConfiguration({
+      mode: mode.value as EnhancementMode,
+      backend: backend.value as RenderBackend,
+      frameGenerationEnabled: frameGeneration.checked,
+    })) {
+      status.textContent = message('proRequired', 'Native, AI models and frame generation require Pro.');
+      return;
+    }
     save.disabled = true;
     status.textContent = message('saving', 'Saving...');
     let settingsSaved = false;

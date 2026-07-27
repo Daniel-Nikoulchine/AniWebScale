@@ -37,6 +37,8 @@ module.exports = (env, argv) => {
   const isDevelopment = argv.mode === 'development';
   const targetBrowser = process.env.TARGET_BROWSER || 'chrome';
   const isE2EBuild = process.env.ANIME4K_E2E === '1';
+  const accountApiUrl = process.env.ANIME4K_ACCOUNT_API_URL
+    || (isDevelopment ? 'http://localhost:4242' : 'https://aniwebscale.pages.dev');
 
   const manifest = structuredClone(require('./manifest.json'));
   const extensionIdentities = require('./native/extension-identities.json');
@@ -137,6 +139,7 @@ module.exports = (env, argv) => {
     plugins: [
       new DefinePlugin({
         __ANIME4K_E2E__: JSON.stringify(isE2EBuild),
+        __ANIME4K_ACCOUNT_API_URL__: JSON.stringify(accountApiUrl.replace(/\/$/, '')),
       }),
       new CleanWebpackPlugin(),
       new CopyWebpackPlugin({

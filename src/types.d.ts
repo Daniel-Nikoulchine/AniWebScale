@@ -8,6 +8,8 @@ import type {
 declare global {
   /** Compile-time gate; false in every distributable build. */
   const __ANIME4K_E2E__: boolean;
+  /** Account/licensing API origin embedded at build time. */
+  const __ANIME4K_ACCOUNT_API_URL__: string;
 }
 
 /** Canonical identifiers shared by storage, UI, WebGPU, and native messaging. */

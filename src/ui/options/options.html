@@ -11,6 +11,7 @@
     <a class="brand" href="#top" aria-label="AniWebScale settings home" data-i18n-aria-label="settingsHome"><img src="icons/icon128.png" alt="" width="40" height="40"><span>AniWebScale</span></a>
     <button class="menu-button" type="button" aria-expanded="false" aria-controls="settings-nav"><span></span><span></span><span></span><span class="sr-only" data-i18n="openMenu">Open menu</span></button>
     <nav id="settings-nav" aria-label="Settings navigation">
+      <a href="#account" data-i18n="account">Account</a>
       <a class="active" href="#enhancement" data-i18n="enhancement">Enhancement</a>
       <a href="#permissions" data-i18n="permissions">Permissions</a>
       <a href="#appearance" data-i18n="appearance">Appearance</a>
@@ -44,6 +45,29 @@
         <img class="hero-logo" src="icons/icon400.png" alt="" width="250" height="250">
       </div>
     </header>
+
+    <div class="section-intro" id="account">
+      <span class="heading-icon mint" aria-hidden="true">&#9825;</span>
+      <h2 data-i18n="accountLicense">Account &amp; license</h2>
+    </div>
+    <section class="card account-card">
+      <div class="account-copy">
+        <p class="eyebrow">CURRENT PLAN</p>
+        <h3 id="account-plan">Free</h3>
+        <p id="account-details" class="note">Anime4K + WebGPU</p>
+        <strong id="account-email"></strong>
+      </div>
+      <div id="account-auth" class="account-auth">
+        <p class="note">Sign in on the AniWebScale website. Your password is never entered into or stored by the extension.</p>
+        <div class="account-buttons"><button id="account-sign-in" class="primary" type="button" data-i18n="signInSecurely">Sign in securely</button><button id="account-sign-up" class="outline" type="button" data-i18n="createAccount">Create account</button></div>
+      </div>
+      <div id="account-session" class="account-session" hidden>
+        <button id="account-refresh" class="outline" type="button" data-i18n="refreshLicense">Refresh license</button>
+        <button id="account-sign-out" class="outline" type="button" data-i18n="signOut">Sign out</button>
+      </div>
+      <button id="account-upgrade" class="outline" type="button" data-i18n="viewPlansBilling">View plans &amp; billing</button>
+      <p id="account-status" class="note" role="status" aria-live="polite"></p>
+    </section>
 
     <div class="section-intro" id="enhancement">
       <span class="heading-icon lavender" aria-hidden="true">&#10022;</span>

@@ -8,6 +8,9 @@ import {
 import { getSettings, saveSettings } from '../../utils/settings';
 import { themeManager, type ThemeMode } from '../theme-manager';
 import { populateModeSelect, renderModeSummary } from '../mode-select';
+import type { AccountStatus } from '../../account/entitlement';
+import { isProMode, requiresProConfiguration } from '../../account/entitlement';
+import { renderPlanAccessLabels } from '../plan-access';
 import { localizeDocument, message } from '../i18n';
 import {
   getGrantedSitePatterns,
@@ -34,6 +37,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   const save = document.getElementById('save') as HTMLButtonElement;
   const status = document.getElementById('status') as HTMLDivElement;
   const version = document.getElementById('version') as HTMLSpanElement;
+  const accountPlan = document.getElementById('account-plan') as HTMLElement;
+  const accountDetails = document.getElementById('account-details') as HTMLElement;
+  const accountEmail = document.getElementById('account-email') as HTMLElement;
+  const accountAuth = document.getElementById('account-auth') as HTMLElement;
+  const accountSession = document.getElementById('account-session') as HTMLElement;
+  const accountSignIn = document.getElementById('account-sign-in') as HTMLButtonElement;
+  const accountSignUp = document.getElementById('account-sign-up') as HTMLButtonElement;
+  const accountSignOut = document.getElementById('account-sign-out') as HTMLButtonElement;
+  const accountRefresh = document.getElementById('account-refresh') as HTMLButtonElement;
+  const accountUpgrade = document.getElementById('account-upgrade') as HTMLButtonElement;
+  const accountStatus = document.getElementById('account-status') as HTMLElement;
+  const frameGenerationDescription = document.getElementById('frame-generation-description') as HTMLElement;
+  let hasPro = false;
 
   const storedTheme = await chrome.storage.local.get(['theme']);
   const initialTheme: ThemeMode = ['light', 'dark', 'auto'].includes(storedTheme.theme)
@@ -85,12 +101,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   const refreshModeUi = () => {
     const selectedMode = mode.value as EnhancementMode;
     const processingDisabled = !isProcessingEnabled(selectedMode, frameGeneration.checked);
+    renderPlanAccessLabels(
+      mode,
+      backend,
+      frameGeneration,
+      frameGenerationDescription,
+      hasPro,
+      message('frameMotion2xDetailed', 'Generate a motion-aware intermediate frame for 2x frame rate.'),
+    );
+    mode.querySelectorAll('option').forEach(option => {
+      const value = (option as HTMLOptionElement).value as EnhancementMode;
+      if (isProMode(value)) {
+        (option as HTMLOptionElement).disabled = !hasPro;
+      }
+    });
+    Array.from(backend.options).forEach(option => {
+      if (option.value !== 'webgpu') option.disabled = !hasPro;
+    });
+    if (!hasPro && backend.value !== 'webgpu') backend.value = 'webgpu';
+    frameGeneration.disabled = !hasPro;
+    if (!hasPro) frameGeneration.checked = false;
     renderModeSummary(selectedMode, modeDescription, modeProfile);
     quality.disabled = !modeUsesQuality(selectedMode);
     backend.disabled = processingDisabled;
     const intensive = frameGeneration.checked;
-    compatibilityHint.hidden = !intensive && !processingDisabled;
-    compatibilityHint.textContent = intensive
+    compatibilityHint.hidden = hasPro
+      ? processingDisabled || !intensive
+      : false;
+    compatibilityHint.textContent = !hasPro
+      ? message('freePlanCompatibility', 'Free plan active — Anime4K and WebGPU are included. Pro unlocks Native, AI models and frame generation.')
+      : intensive
       ? message('frameGenerationLoad', 'Frame generation increases GPU memory use and processing load.')
       : '';
   };
@@ -104,6 +144,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     refreshThemeUi();
   });
   save.addEventListener('click', async () => {
+    if (!hasPro && requiresProConfiguration({
+      mode: mode.value as EnhancementMode,
+      backend: backend.value as RenderBackend,
+      frameGenerationEnabled: frameGeneration.checked,
+    })) {
+      status.textContent = message('proRequired', 'Native, AI models and frame generation require Pro.');
+      return;
+    }
     save.disabled = true;
     status.textContent = message('saving', 'Saving...');
     let settingsSaved = false;
@@ -133,9 +181,69 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  const renderAccount = (account: AccountStatus) => {
+    hasPro = (account.plan === 'pro' || account.plan === 'lifetime')
+      && (account.status === 'active' || account.status === 'trialing');
+    accountPlan.textContent = account.plan === 'lifetime'
+      ? message('lifetimePro', 'Lifetime Pro')
+      : hasPro ? message('pro', 'Pro') : message('free', 'Free');
+    accountDetails.textContent = hasPro
+      ? message('allFeaturesUnlocked', 'All features unlocked: Native + AI + frame generation.')
+      : message('freeFeaturesSummary', 'Free includes Anime4K + WebGPU. Native, AI + frame generation require Pro.');
+    accountUpgrade.textContent = hasPro
+      ? message('viewPlansBilling', 'View plans & billing')
+      : message('unlockProFeatures', 'Unlock Pro features');
+    accountEmail.textContent = account.email || '';
+    accountAuth.hidden = account.signedIn;
+    accountSession.hidden = !account.signedIn;
+    accountStatus.textContent = account.message
+      || (account.signedIn
+        ? message('licenseVerified', 'License verified.')
+        : message('signInPaidLicense', 'Sign in to use a paid license.'));
+    refreshModeUi();
+  };
+
+  const accountRequest = async (type: string, extra: Record<string, unknown> = {}) => {
+    accountStatus.textContent = message('pleaseWait', 'Please wait…');
+    const response = await chrome.runtime.sendMessage({ type, ...extra }) as
+      { ok?: boolean; account?: AccountStatus; message?: string };
+    if (!response?.ok || !response.account) {
+      throw new Error(response?.message || message('accountRequestFailed', 'Account request failed.'));
+    }
+    renderAccount(response.account);
+  };
+
+  const authenticate = async (type: 'ACCOUNT_SIGN_IN' | 'ACCOUNT_SIGN_UP') => {
+    try {
+      await accountRequest(type);
+    } catch (error) {
+      accountStatus.textContent = error instanceof Error ? error.message : message('authenticationFailed', 'Authentication failed.');
+    }
+  };
+
+  accountSignIn.addEventListener('click', () => void authenticate('ACCOUNT_SIGN_IN'));
+  accountSignUp.addEventListener('click', () => void authenticate('ACCOUNT_SIGN_UP'));
+  accountSignOut.addEventListener('click', () => void accountRequest('ACCOUNT_SIGN_OUT').catch(error => {
+    accountStatus.textContent = error instanceof Error ? error.message : message('signOutFailed', 'Sign out failed.');
+  }));
+  accountRefresh.addEventListener('click', () => void accountRequest('ACCOUNT_REFRESH').catch(error => {
+    accountStatus.textContent = error instanceof Error ? error.message : message('licenseRefreshFailed', 'License refresh failed.');
+  }));
+  accountUpgrade.addEventListener('click', () => void chrome.runtime.sendMessage({ type: 'OPEN_ACCOUNT_PAGE' }));
+
   await Promise.all([
     renderWebsitePermissions(),
     renderNativePermissions(),
+    accountRequest('ACCOUNT_STATUS').catch(error => {
+      accountStatus.textContent = error instanceof Error ? error.message : message('accountStatusUnavailable', 'Account status unavailable.');
+      renderAccount({
+        signedIn: false,
+        email: null,
+        plan: 'free',
+        status: 'inactive',
+        features: ['anime4k', 'webgpu'],
+      });
+    }),
   ]);
 });
 

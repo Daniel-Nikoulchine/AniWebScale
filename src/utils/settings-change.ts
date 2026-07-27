@@ -1,3 +1,5 @@
+import { LICENSE_STORAGE_KEY } from '../account/entitlement';
+
 export const RENDER_SETTING_KEYS = new Set([
   'extensionEnabled',
   'mode',
@@ -8,6 +10,7 @@ export const RENDER_SETTING_KEYS = new Set([
   'autoFullscreenEnabled',
   'frameGenerationEnabled',
   'selectedModeId',
+  LICENSE_STORAGE_KEY,
 ]);
 
 export function shouldApplySettingsChange(

@@ -8,7 +8,7 @@
   <meta property="og:title" content="AniWebScale — make every frame magical">
   <meta property="og:description" content="Real-time anime and animation enhancement, directly in your browser.">
   <meta property="og:type" content="website">
-  <title>AniWebScale — Make every frame magical</title>
+  <title data-i18n="pageTitle">AniWebScale — Make every frame magical</title>
   <link rel="icon" href="/assets/logo-v2.png" type="image/png">
   <link rel="preconnect" href="https://fonts.bunny.net" crossorigin>
   <link rel="stylesheet" href="https://fonts.bunny.net/css?family=inter:400,500,600,700|space-grotesk:500,600,700">
@@ -17,41 +17,41 @@
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
+  <a class="skip-link" href="#main" data-i18n="skipLink">Skip to content</a>
   <header class="site-header">
     <a class="brand" href="#top" aria-label="AniWebScale home"><img src="/assets/logo-v2.png" alt="" width="40" height="40"><span>AniWebScale</span></a>
-    <button class="menu-button" type="button" aria-expanded="false" aria-controls="site-nav"><span></span><span></span><span></span><span class="sr-only">Open menu</span></button>
+    <button class="menu-button" type="button" aria-expanded="false" aria-controls="site-nav"><span></span><span></span><span></span><span class="sr-only" data-i18n="menuOpen">Open menu</span></button>
     <nav id="site-nav" aria-label="Main navigation">
-      <a href="#features">Features</a><a href="#how-it-works">How it works</a><a href="#faq">FAQ</a><a href="/support">Support</a>
+      <a href="#features" data-i18n="navFeatures">Features</a><a href="#how-it-works" data-i18n="navHow">How it works</a><a href="#faq" data-i18n="navFaq">FAQ</a><a href="/support" data-i18n="navSupport">Support</a>
     </nav>
     <div class="header-actions">
       <button class="theme-button" type="button" aria-label="Switch to dark theme">
         <span class="sun icon-sun" aria-hidden="true"></span>
         <span class="moon icon-moon" aria-hidden="true"></span>
       </button>
-      <a class="button button-small button-ghost" href="#download">Get AniWebScale</a>
+      <a class="button button-small button-ghost" href="#download" data-i18n="navCta">Get AniWebScale</a>
     </div>
   </header>
 
   <main id="main">
     <section class="hero" id="top">
       <div class="hero-copy reveal">
-        <h1>Make every frame<br><em>feel magical.</em></h1>
-        <p class="hero-lead">Sharper line art, cleaner gradients and smoother motion for anime and animation — enhanced directly inside your browser.</p>
-        <div class="hero-actions"><a class="button button-primary" href="#download">Add to your browser <span>&#8594;</span></a><a class="text-link" href="#comparison"><span class="play-mini">&#9654;</span> See the difference</a></div>
-        <div class="trust-row"><span><i>&#10003;</i>No telemetry</span><span><i>&#10003;</i>Open shaders</span><span><i>&#10003;</i>Chrome &amp; Firefox</span><span class="hardware-note"><i class="icon-gpu" aria-hidden="true"></i>Modern GPU required</span></div>
+        <h1 data-i18n="heroTitle">Make every frame<br><em>feel magical.</em></h1>
+        <p class="hero-lead" data-i18n="heroLead">Sharper line art, cleaner gradients and smoother motion for anime and animation — enhanced directly inside your browser.</p>
+        <div class="hero-actions"><a class="button button-primary" href="#download"><span data-i18n="heroCta">Add to your browser</span> <span aria-hidden="true">&#8594;</span></a><a class="text-link" href="#comparison"><span class="play-mini" aria-hidden="true">&#9654;</span><span data-i18n="heroSecondary">See the difference</span></a></div>
+        <div class="trust-row"><span><i>&#10003;</i><span data-i18n="trust1">No telemetry</span></span><span><i>&#10003;</i><span data-i18n="trust2">Open shaders</span></span><span><i>&#10003;</i><span data-i18n="trust3">Chrome &amp; Firefox</span></span><span class="hardware-note"><i class="icon-gpu" aria-hidden="true"></i><span data-i18n="trustGpu">Modern GPU required</span></span></div>
       </div>
 
-      <div class="hero-art reveal" aria-label="Stylized AniWebScale video player illustration">
+      <div class="hero-art reveal" data-i18n-aria-label="heroArtAria" aria-label="Stylized AniWebScale video player illustration">
         <div class="orbit orbit-a"></div><div class="orbit orbit-b"></div>
         <span class="spark spark-a">&#10022;</span><span class="spark spark-b">&#10022;</span><span class="spark spark-c">&#10023;</span>
         <div class="player-window">
-          <div class="window-bar"><span></span><span></span><span></span><p>AniWebScale preview</p></div>
+          <div class="window-bar"><span></span><span></span><span></span><p data-i18n="previewLabel">AniWebScale preview</p></div>
           <div class="video-art repo-hero-shot" role="img" aria-label="AniWebScale illustrative preview: soft source on the left, crisp enhanced result on the right">
             <div class="preview-panel preview-original" aria-hidden="true"></div>
             <div class="preview-panel preview-enhanced" aria-hidden="true"></div>
-            <span class="preview-label preview-label-original">Original</span>
-            <span class="preview-label preview-label-enhanced"><i></i>Enhanced 4K</span>
+            <span class="preview-label preview-label-original" data-i18n="previewOriginal">Original</span>
+            <span class="preview-label preview-label-enhanced"><i></i><span data-i18n="previewEnhanced">Enhanced 4K</span></span>
             <div class="preview-divider" aria-hidden="true"><span>&#8596;</span></div>
             <div class="video-controls"><span class="control-play">&#9654;</span><i></i><b>4K</b></div>
           </div>
@@ -59,85 +59,86 @@
       </div>
     </section>
 
-    <aside class="gpu-notice" aria-label="Graphics card requirement">
+    <aside class="gpu-notice" data-i18n-aria-label="gpuNoticeAria" aria-label="Graphics card requirement">
       <span class="gpu-notice-icon icon-gpu" aria-hidden="true"></span>
-      <div><strong>A modern GPU is required.</strong><p>Recent integrated graphics may handle lighter presets. For smooth 4K, AI upscaling and frame generation, use a powerful dedicated graphics card with current drivers and sufficient VRAM.</p></div>
-      <a href="#gpu-requirements">Check requirements <span aria-hidden="true">&#8594;</span></a>
+      <div><strong data-i18n="gpuTitle">A modern GPU is required.</strong><p data-i18n="gpuText">Recent integrated graphics may handle lighter presets. For smooth 4K, AI upscaling and frame generation, use a powerful dedicated graphics card with current drivers and sufficient VRAM.</p></div>
+      <a href="#gpu-requirements"><span data-i18n="gpuCheck">Check requirements</span> <span aria-hidden="true">&#8594;</span></a>
     </aside>
 
-    <aside class="gpu-notice streaming-notice" aria-label="Protected streaming compatibility">
+    <aside class="gpu-notice streaming-notice" data-i18n-aria-label="streamNoticeAria" aria-label="Protected streaming compatibility">
       <span class="gpu-notice-icon icon-lock" aria-hidden="true"></span>
-      <div><strong>Crunchyroll, Netflix and similar services require Native.</strong><p>Protected streams cannot use the WebGPU frame path. The Native Windows renderer is required, but individual services may still block capture because AniWebScale never bypasses DRM.</p></div>
-      <a href="#protected-video">Check compatibility <span aria-hidden="true">&#8594;</span></a>
+      <div><strong data-i18n="streamTitle">Crunchyroll, Netflix and similar services require Native.</strong><p data-i18n="streamText">Protected streams cannot use the WebGPU frame path. The Native Windows renderer is required, but individual services may still block capture because AniWebScale never bypasses DRM.</p></div>
+      <a href="#protected-video"><span data-i18n="streamCheck">Check compatibility</span> <span aria-hidden="true">&#8594;</span></a>
     </aside>
 
-    <section class="mini-proof" aria-label="Core technologies"><p>Loved by animation fans who notice every line</p><div><span>WebGPU</span><span>Anime4K</span><span>AI upscaling</span><span>Motion-aware 2x</span><span>Native fallback</span></div></section>
+    <section class="mini-proof" data-i18n-aria-label="miniProofAria" aria-label="Core technologies"><p data-i18n="proofText">Loved by animation fans who notice every line</p><div><span>WebGPU</span><span>Anime4K</span><span data-i18n="proofAi">AI upscaling</span><span data-i18n="proofMotion">Motion-aware 2x</span><span data-i18n="proofNative">Native fallback</span></div></section>
 
     <section class="section features" id="features">
-      <div class="section-heading reveal"><div><p class="section-kicker">01 / THE GOOD STUFF</p><h2>A tiny extension with<br><em>serious sparkle.</em></h2></div><p>Built for animated content where crisp outlines and subtle color transitions matter most.</p></div>
+      <div class="section-heading reveal"><div><p class="section-kicker" data-i18n="featKicker">01 / THE GOOD STUFF</p><h2 data-i18n="featTitle">A tiny extension with<br><em>serious sparkle.</em></h2></div><p data-i18n="featSub">Built for animated content where crisp outlines and subtle color transitions matter most.</p></div>
       <div class="feature-grid">
-        <article class="feature-card lavender-card reveal"><span class="feature-icon">&#10022;</span><h3>Real-time upscaling</h3><p>Anime4K and AI-powered modes sharpen every frame while your video keeps playing.</p><div class="line-demo"><i></i><i></i><i></i><b>2x</b></div></article>
-        <article class="feature-card blue-card reveal"><span class="feature-icon">&#9655;</span><h3>Smoother motion</h3><p>Motion-aware frame generation creates an intermediate frame for fluid 2x playback.</p><div class="frame-demo"><span>A</span><i>&#8594;</i><span class="middle">+</span><i>&#8594;</i><span>B</span></div></article>
-        <article class="feature-card mint-card reveal"><span class="feature-icon">&#9671;</span><h3>Smart fullscreen</h3><p>Enhancement starts with the player and releases GPU resources when you leave.</p><div class="fullscreen-demo"><span></span><i></i><b>&#8599;</b></div></article>
-        <article class="feature-card pink-card reveal"><span class="feature-icon">&#9825;</span><h3>Privacy by design</h3><p>No telemetry, no video uploads and no DRM bypass. Your frames stay on your device.</p><img class="privacy-art" src="/assets/privacy-lock-v2.png" width="72" height="72" loading="lazy" alt=""></article>
-        <article class="feature-card yellow-card reveal"><span class="feature-icon">&#9889;</span><h3>Choose your engine</h3><p>Use WebGPU in the browser or the optional native Windows renderer when needed.</p><div class="engine-tags"><span>WebGPU</span><span>Native</span></div></article>
-        <article class="feature-card paper-card reveal"><span class="feature-icon">Aa</span><h3>Made for line art</h3><p>Carefully tuned presets restore outlines without turning delicate artwork into noise.</p><div class="stroke-demo">あ <span>あ</span></div></article>
+        <article class="feature-card lavender-card reveal"><span class="feature-icon">&#10022;</span><h3 data-i18n="feat1Title">Real-time upscaling</h3><p data-i18n="feat1Text">Anime4K and AI-powered modes sharpen every frame while your video keeps playing.</p><div class="line-demo"><i></i><i></i><i></i><b>2x</b></div></article>
+        <article class="feature-card blue-card reveal"><span class="feature-icon">&#9655;</span><h3 data-i18n="feat2Title">Smoother motion</h3><p data-i18n="feat2Text">Motion-aware frame generation creates an intermediate frame for fluid 2x playback.</p><div class="frame-demo"><span>A</span><i>&#8594;</i><span class="middle">+</span><i>&#8594;</i><span>B</span></div></article>
+        <article class="feature-card mint-card reveal"><span class="feature-icon">&#9671;</span><h3 data-i18n="feat3Title">Smart fullscreen</h3><p data-i18n="feat3Text">Enhancement starts with the player and releases GPU resources when you leave.</p><div class="fullscreen-demo"><span></span><i></i><b>&#8599;</b></div></article>
+        <article class="feature-card pink-card reveal"><span class="feature-icon">&#9825;</span><h3 data-i18n="feat4Title">Privacy by design</h3><p data-i18n="feat4Text">No telemetry, no video uploads and no DRM bypass. Your frames stay on your device.</p><img class="privacy-art" src="/assets/privacy-lock-v2.png" width="72" height="72" loading="lazy" alt=""></article>
+        <article class="feature-card yellow-card reveal"><span class="feature-icon">&#9889;</span><h3 data-i18n="feat5Title">Choose your engine</h3><p data-i18n="feat5Text">Use WebGPU in the browser or the optional native Windows renderer when needed.</p><div class="engine-tags"><span>WebGPU</span><span>Native</span></div></article>
+        <article class="feature-card paper-card reveal"><span class="feature-icon">Aa</span><h3 data-i18n="feat6Title">Made for line art</h3><p data-i18n="feat6Text">Carefully tuned presets restore outlines without turning delicate artwork into noise.</p><div class="stroke-demo">あ <span>あ</span></div></article>
       </div>
     </section>
 
     <section class="section comparison" id="comparison">
-      <div class="comparison-copy reveal"><p class="section-kicker">02 / SEE THE DIFFERENCE</p><h2>From soft to<br><em>sparkling clear.</em></h2><p>Drag the slider to compare the original frame with an Anime4K-enhanced preview.</p><ul><li><span>&#10003;</span>Cleaner outlines</li><li><span>&#10003;</span>Smoother color bands</li><li><span>&#10003;</span>Sharper details at 2x and 4x</li></ul></div>
+      <div class="comparison-copy reveal"><p class="section-kicker" data-i18n="cmpKicker">02 / SEE THE DIFFERENCE</p><h2 data-i18n="cmpTitle">From soft to<br><em>sparkling clear.</em></h2><p data-i18n="cmpText">Drag the slider to compare the original frame with an Anime4K-enhanced preview.</p><ul><li><span>&#10003;</span><span data-i18n="cmpItem1">Cleaner outlines</span></li><li><span>&#10003;</span><span data-i18n="cmpItem2">Smoother color bands</span></li><li><span>&#10003;</span><span data-i18n="cmpItem3">Sharper details at 2x and 4x</span></li></ul></div>
       <div class="compare-wrap reveal">
         <div class="compare-stage split-50">
           <div class="compare-scene original"><span class="scene-label">ORIGINAL · 1080P</span></div>
           <div class="compare-scene enhanced"><span class="scene-label">ANIME4K · 2160P</span></div>
           <div class="compare-line"><span>&#8596;</span></div>
-          <input id="compare-slider" type="range" min="8" max="92" value="50" aria-label="Compare original and enhanced frame">
+          <input id="compare-slider" type="range" min="8" max="92" value="50" data-i18n-aria-label="compareSliderAria" aria-label="Compare original and enhanced frame">
         </div>
-        <p><span></span>Interactive visual preview</p>
+        <p><span></span><span data-i18n="cmpCaption">Interactive visual preview</span></p>
       </div>
     </section>
 
     <section class="section repo-results" aria-labelledby="repo-results-title">
-      <div class="section-heading reveal"><div><p class="section-kicker">VISUAL PREVIEW</p><h2 id="repo-results-title">See the effect.<br><em>Illustratively.</em></h2></div><p>This side-by-side comparison plate is an original procedural illustration showing the visual difference between a soft source and a crisp enhanced render.</p></div>
+      <div class="section-heading reveal"><div><p class="section-kicker" data-i18n="repoKicker">VISUAL PREVIEW</p><h2 id="repo-results-title" data-i18n="repoTitle">See the effect.<br><em>Illustratively.</em></h2></div><p data-i18n="repoText">This side-by-side comparison plate is an original procedural illustration showing the visual difference between a soft source and a crisp enhanced render.</p></div>
       <div class="repo-gallery">
-        <figure class="repo-figure reveal"><img src="/assets/owned/comparison-plate.svg" width="1800" height="800" loading="lazy" alt="AniWebScale illustrative preview: abstract geometric and celestial line art — soft on the left, crisp on the right"><figcaption><span>Illustrative preview</span><strong>Original procedurally authored comparison plate</strong></figcaption></figure>
+        <figure class="repo-figure reveal"><img src="/assets/owned/comparison-plate.svg" width="1800" height="800" loading="lazy" alt="AniWebScale illustrative preview: abstract geometric and celestial line art — soft on the left, crisp on the right"><figcaption><span data-i18n="repoCaption">Illustrative preview</span><strong data-i18n="repoCaptionStrong">Original procedurally authored comparison plate</strong></figcaption></figure>
       </div>
     </section>
 
     <section class="section how" id="how-it-works">
-      <div class="center-heading reveal"><p class="section-kicker">03 / EASY AS 1—2—3</p><h2>Set it once. Enjoy <em>every frame.</em></h2></div>
+      <div class="center-heading reveal"><p class="section-kicker" data-i18n="howKicker">03 / EASY AS 1—2—3</p><h2 data-i18n="howTitle">Set it once. Enjoy <em>every frame.</em></h2></div>
       <div class="steps">
-        <article class="step reveal"><span class="step-number">01</span><div class="step-art browser-step"><i></i><b>&#10022;</b></div><h3>Add the extension</h3><p>Install AniWebScale in Chrome or Firefox.</p></article>
+        <article class="step reveal"><span class="step-number">01</span><div class="step-art browser-step"><i></i><b>&#10022;</b></div><h3 data-i18n="step1Title">Add the extension</h3><p data-i18n="step1Text">Install AniWebScale in Chrome or Firefox.</p></article>
         <span class="step-arrow" aria-hidden="true">&#12336;</span>
-        <article class="step reveal"><span class="step-number">02</span><div class="step-art tune-step"><i></i><i></i><i></i></div><h3>Pick your look</h3><p>Choose a preset, quality and rendering backend.</p></article>
+        <article class="step reveal"><span class="step-number">02</span><div class="step-art tune-step"><i></i><i></i><i></i></div><h3 data-i18n="step2Title">Pick your look</h3><p data-i18n="step2Text">Choose a preset, quality and rendering backend.</p></article>
         <span class="step-arrow" aria-hidden="true">&#12336;</span>
-        <article class="step reveal"><span class="step-number">03</span><div class="step-art play-step"><span>&#9654;</span><b>&#10022;</b></div><h3>Press play</h3><p>Enter fullscreen and let AniWebScale do the rest.</p></article>
+        <article class="step reveal"><span class="step-number">03</span><div class="step-art play-step"><span>&#9654;</span><b>&#10022;</b></div><h3 data-i18n="step3Title">Press play</h3><p data-i18n="step3Text">Enter fullscreen and let AniWebScale do the rest.</p></article>
       </div>
     </section>
 
     <section class="section faq" id="faq">
-      <div class="faq-heading reveal"><p class="section-kicker">05 / GOOD TO KNOW</p><h2>Questions,<br><em>meet answers.</em></h2><p>Still curious? The extension is designed to be predictable, local and easy to undo.</p></div>
+      <div class="faq-heading reveal"><p class="section-kicker" data-i18n="faqKicker">05 / GOOD TO KNOW</p><h2 data-i18n="faqTitle">Questions,<br><em>meet answers.</em></h2><p data-i18n="faqSub">Still curious? The extension is designed to be predictable, local and easy to undo.</p></div>
       <div class="faq-list reveal">
-        <details open><summary>Does AniWebScale upload my videos?<span></span></summary><p>No. Enhancement runs locally on your GPU or, when explicitly enabled, through the local native Windows renderer.</p></details>
-        <details><summary>Which browsers are supported?<span></span></summary><p>Chrome, Chromium-based browsers and Firefox builds with the required WebGPU capabilities are supported.</p></details>
-        <details id="gpu-requirements"><summary>What graphics card do I need?<span></span></summary><p>A modern WebGPU-capable GPU is required. Recent integrated graphics may run lighter Anime4K presets, but a powerful dedicated GPU is strongly recommended for 1080p-to-4K processing, AI modes and frame generation. High-resolution 4x modes can require substantial VRAM, especially when combined with frame generation.</p></details>
-        <details id="protected-video"><summary>Does it work with Crunchyroll, Netflix and protected video?<span></span></summary><p>Crunchyroll, Netflix, Disney+, Prime Video and similar protected services require the Native Windows renderer; WebGPU cannot read protected frames. AniWebScale never bypasses DRM, so individual services may still block capture even with Native enabled.</p></details>
-        <details><summary>What is included for free?<span></span></summary><p>Everything. Anime4K real-time presets, the AI upscaling modes (ArtCNN, ACNet, ARNet), the optional Native Windows renderer and motion-aware frame generation are all available at no cost. There is no paid tier.</p></details>
-        <details><summary>How do I get support?<span></span></summary><p>Reach out through the support page. AniWebScale runs locally, so most issues are settings or hardware related and easy to resolve.</p></details>
+        <details open><summary><span data-i18n="faq1Q">Does AniWebScale upload my videos?</span><span></span></summary><p data-i18n="faq1A">No. Enhancement runs locally on your GPU or, when explicitly enabled, through the local native Windows renderer.</p></details>
+        <details><summary><span data-i18n="faq2Q">Which browsers are supported?</span><span></span></summary><p data-i18n="faq2A">Chrome, Chromium-based browsers and Firefox builds with the required WebGPU capabilities are supported.</p></details>
+        <details id="gpu-requirements"><summary><span data-i18n="faq3Q">What graphics card do I need?</span><span></span></summary><p data-i18n="faq3A">A modern WebGPU-capable GPU is required. Recent integrated graphics may run lighter Anime4K presets, but a powerful dedicated GPU is strongly recommended for 1080p-to-4K processing, AI modes and frame generation. High-resolution 4x modes can require substantial VRAM, especially when combined with frame generation.</p></details>
+        <details id="protected-video"><summary><span data-i18n="faq4Q">Does it work with Crunchyroll, Netflix and protected video?</span><span></span></summary><p data-i18n="faq4A">Crunchyroll, Netflix, Disney+, Prime Video and similar protected services require the Native Windows renderer; WebGPU cannot read protected frames. AniWebScale never bypasses DRM, so individual services may still block capture even with Native enabled.</p></details>
+        <details><summary><span data-i18n="faq5Q">What is included for free?</span><span></span></summary><p data-i18n="faq5A">Everything. Anime4K real-time presets, the AI upscaling modes (ArtCNN, ACNet, ARNet), the optional Native Windows renderer and motion-aware frame generation are all available at no cost. There is no paid tier.</p></details>
+        <details><summary><span data-i18n="faq6Q">How do I get support?</span><span></span></summary><p data-i18n="faq6A">Reach out through the support page. AniWebScale runs locally, so most issues are settings or hardware related and easy to resolve.</p></details>
       </div>
     </section>
 
     <section class="download" id="download">
-      <div class="download-copy reveal"><span class="download-spark">&#10022;</span><p class="section-kicker">READY WHEN YOU ARE</p><h2>Your next episode<br>deserves a little magic.</h2><p>Install AniWebScale and turn soft animation into crisp, smooth video in a few clicks.</p><div class="download-actions"><a class="button button-dark store-link" data-store="chrome" href="#" rel="noopener"><img class="store-icon" src="/assets/icons/google-chrome.svg" width="28" height="28" alt=""><span><small>AVAILABLE FOR</small>Chrome</span></a><a class="button button-dark store-link" data-store="firefox" href="#" rel="noopener"><img class="store-icon" src="/assets/icons/firefox-browser.svg" width="28" height="28" alt=""><span><small>AVAILABLE FOR</small>Firefox</span></a></div><p class="availability-note" hidden>Store links are being prepared. Configure them in the website environment.</p></div>
+      <div class="download-copy reveal"><span class="download-spark">&#10022;</span><p class="section-kicker" data-i18n="dlKicker">READY WHEN YOU ARE</p><h2 data-i18n="dlTitle">Your next episode<br>deserves a little magic.</h2><p data-i18n="dlText">Install AniWebScale and turn soft animation into crisp, smooth video in a few clicks.</p><div class="download-actions"><a class="button button-dark store-link" data-store="chrome" href="#" rel="noopener"><img class="store-icon" src="/assets/icons/google-chrome.svg" width="28" height="28" alt=""><span><small data-i18n="storeAvailableFor">AVAILABLE FOR</small><span>Chrome</span></span></a><a class="button button-dark store-link" data-store="firefox" href="#" rel="noopener"><img class="store-icon" src="/assets/icons/firefox-browser.svg" width="28" height="28" alt=""><span><small data-i18n="storeAvailableFor">AVAILABLE FOR</small><span>Firefox</span></span></a></div><p class="availability-note" hidden data-i18n="dlNote">Store links are being prepared. Configure them in the website environment.</p></div>
       <div class="download-art reveal" aria-hidden="true"><div class="big-logo"><img src="/assets/logo-v2.png" alt="" width="170" height="170"></div><span class="spark one">&#10022;</span><span class="spark two">&#10023;</span></div>
     </section>
   </main>
 
   <footer class="site-footer">
-    <div class="footer-main"><div><a class="brand" href="#top"><img src="/assets/logo-v2.png" alt="" width="38" height="38"><span>AniWebScale</span></a><p>Real-time video enhancement<br>for people who love every frame.</p></div><div><h3>Product</h3><a href="#features">Features</a><a href="#download">Download</a><a href="/support">Support</a></div><div><h3>Legal</h3><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/imprint">Imprint</a></div><div><h3>Contact</h3><a href="mailto:support@korrespont.com" data-support-email>Contact</a></div></div>
-    <div class="footer-bottom"><span>Made with <b>&#9825;</b> for animation</span></div>
+    <div class="footer-main"><div><a class="brand" href="#top"><img src="/assets/logo-v2.png" alt="" width="38" height="38"><span>AniWebScale</span></a><p data-i18n="footerTagline">Real-time video enhancement<br>for people who love every frame.</p></div><div><h3 data-i18n="footerProduct">Product</h3><a href="#features" data-i18n="footerFeatures">Features</a><a href="#download" data-i18n="footerDownload">Download</a><a href="/support" data-i18n="footerSupport">Support</a></div><div><h3 data-i18n="footerLegal">Legal</h3><a href="/privacy" data-i18n="footerPrivacy">Privacy</a><a href="/terms" data-i18n="footerTerms">Terms</a><a href="/imprint" data-i18n="footerImprint">Imprint</a></div><div><h3 data-i18n="footerContact">Contact</h3><a href="mailto:support@korrespont.com" data-support-email data-i18n="footerContactLink">Contact</a></div></div>
+    <div class="footer-bottom"><span data-i18n="footerMade">Made with <b>&#9825;</b> for animation</span></div>
   </footer>
   <div class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <script src="/site-localize.js"></script>
 </body>
 </html>

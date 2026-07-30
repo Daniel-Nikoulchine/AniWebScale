@@ -526,5 +526,314 @@
   },
   "footerSupport": {
     "message": "Support"
+  },
+  "pageTitle": {
+    "message": "AniWebScale — Mach jedes Frame magisch"
+  },
+  "skipLink": {
+    "message": "Zum Inhalt springen"
+  },
+  "menuOpen": {
+    "message": "Menü öffnen"
+  },
+  "navFeatures": {
+    "message": "Features"
+  },
+  "navHow": {
+    "message": "So funktioniert's"
+  },
+  "navFaq": {
+    "message": "FAQ"
+  },
+  "navSupport": {
+    "message": "Support"
+  },
+  "navCta": {
+    "message": "AniWebScale holen"
+  },
+  "heroTitle": {
+    "message": "Mach jedes Frame<br><em>magisch.</em>"
+  },
+  "heroLead": {
+    "message": "Schärfere Linien, sauberere Farbverläufe und flüssigere Bewegungen für Anime und Animation — direkt in deinem Browser verbessert."
+  },
+  "heroCta": {
+    "message": "Zum Browser hinzufügen"
+  },
+  "heroSecondary": {
+    "message": "Sieh den Unterschied"
+  },
+  "heroArtAria": {
+    "message": "Stilisierter AniWebScale-Videoplayer"
+  },
+  "trust1": {
+    "message": "Keine Telemetrie"
+  },
+  "trust2": {
+    "message": "Offene Shader"
+  },
+  "trust3": {
+    "message": "Chrome & Firefox"
+  },
+  "trustGpu": {
+    "message": "Moderne GPU erforderlich"
+  },
+  "previewLabel": {
+    "message": "AniWebScale-Vorschau"
+  },
+  "previewOriginal": {
+    "message": "Original"
+  },
+  "previewEnhanced": {
+    "message": "Verbessert 4K"
+  },
+  "gpuNoticeAria": {
+    "message": "Grafikkarten-Anforderung"
+  },
+  "gpuTitle": {
+    "message": "Eine moderne GPU ist erforderlich."
+  },
+  "gpuText": {
+    "message": "Neuere integrierte Grafikkarten schaffen leichtere Presets. Für flüssiges 4K, KI-Upscaling und Frame-Generierung empfiehlt sich eine leistungsstarke dedizierte Grafikkarte mit aktuellen Treibern und ausreichend VRAM."
+  },
+  "gpuCheck": {
+    "message": "Anforderungen prüfen"
+  },
+  "streamNoticeAria": {
+    "message": "Kompatibilität mit geschütztem Streaming"
+  },
+  "streamTitle": {
+    "message": "Crunchyroll, Netflix und ähnliche Dienste benötigen Native."
+  },
+  "streamText": {
+    "message": "Geschützte Streams können den WebGPU-Pfad nicht nutzen. Der Native-Windows-Renderer ist erforderlich, aber einzelne Dienste können die Aufnahme trotzdem blockieren, da AniWebScale DRM niemals umgeht."
+  },
+  "streamCheck": {
+    "message": "Kompatibilität prüfen"
+  },
+  "miniProofAria": {
+    "message": "Kerntechnologien"
+  },
+  "proofText": {
+    "message": "Geliebt von Animationsfans, die jede Linie bemerken"
+  },
+  "proofAi": {
+    "message": "KI-Upscaling"
+  },
+  "proofMotion": {
+    "message": "Bewegungsbasiertes 2x"
+  },
+  "proofNative": {
+    "message": "Native-Fallback"
+  },
+  "featKicker": {
+    "message": "01 / DAS GUTE ZEUG"
+  },
+  "featTitle": {
+    "message": "Eine winzige Erweiterung mit<br><em>ernsthaftem Funkeln.</em>"
+  },
+  "featSub": {
+    "message": "Gebaut für animierte Inhalte, bei denen klare Konturen und feine Farbabstufungen am wichtigsten sind."
+  },
+  "feat1Title": {
+    "message": "Echtzeit-Upscaling"
+  },
+  "feat1Text": {
+    "message": "Anime4K und KI-gestützte Modi schärfen jedes Frame, während dein Video weiterspielt."
+  },
+  "feat2Title": {
+    "message": "Flüssigere Bewegung"
+  },
+  "feat2Text": {
+    "message": "Bewegungsbasierte Frame-Generierung erzeugt Zwischenbilder für flüssige 2x-Wiedergabe."
+  },
+  "feat3Title": {
+    "message": "Smarter Vollbildmodus"
+  },
+  "feat3Text": {
+    "message": "Die Verbesserung startet mit dem Player und gibt GPU-Ressourcen beim Verlassen frei."
+  },
+  "feat4Title": {
+    "message": "Privatsphäre by Design"
+  },
+  "feat4Text": {
+    "message": "Keine Telemetrie, keine Video-Uploads und keine DRM-Umgehung. Deine Frames bleiben auf deinem Gerät."
+  },
+  "feat5Title": {
+    "message": "Wähle deine Engine"
+  },
+  "feat5Text": {
+    "message": "Nutze WebGPU im Browser oder bei Bedarf den optionalen nativen Windows-Renderer."
+  },
+  "feat6Title": {
+    "message": "Gemacht für Line Art"
+  },
+  "feat6Text": {
+    "message": "Sorgfältig abgestimmte Presets stellen Konturen wieder her, ohne zarte Zeichnungen in Rauschen zu verwandeln."
+  },
+  "cmpKicker": {
+    "message": "02 / SIEH DEN UNTERSCHIED"
+  },
+  "cmpTitle": {
+    "message": "Von weich zu<br><em>glasklar.</em>"
+  },
+  "cmpText": {
+    "message": "Ziehe den Regler, um das Original-Frame mit einer Anime4K-verbesserten Vorschau zu vergleichen."
+  },
+  "cmpItem1": {
+    "message": "Sauberere Konturen"
+  },
+  "cmpItem2": {
+    "message": "Glattere Farbbänder"
+  },
+  "cmpItem3": {
+    "message": "Schärfere Details bei 2x und 4x"
+  },
+  "compareSliderAria": {
+    "message": "Original und verbessertes Frame vergleichen"
+  },
+  "cmpCaption": {
+    "message": "Interaktive visuelle Vorschau"
+  },
+  "repoKicker": {
+    "message": "VISUELLE VORSCHAU"
+  },
+  "repoTitle": {
+    "message": "Sieh den Effekt.<br><em>Illustrativ.</em>"
+  },
+  "repoText": {
+    "message": "Diese Seite-an-Seite-Vergleichsplatte ist eine originäre prozedurale Illustration, die den visuellen Unterschied zwischen einer weichen Quelle und einem scharfen verbesserten Render zeigt."
+  },
+  "repoCaption": {
+    "message": "Illustrative Vorschau"
+  },
+  "repoCaptionStrong": {
+    "message": "Originäre prozedural erstellte Vergleichsplatte"
+  },
+  "howKicker": {
+    "message": "03 / SO EINFACH WIE 1—2—3"
+  },
+  "howTitle": {
+    "message": "Einmal eingerichtet. <em>Jedes Frame</em> genießen."
+  },
+  "step1Title": {
+    "message": "Erweiterung hinzufügen"
+  },
+  "step1Text": {
+    "message": "Installiere AniWebScale in Chrome oder Firefox."
+  },
+  "step2Title": {
+    "message": "Wähle deinen Look"
+  },
+  "step2Text": {
+    "message": "Wähle Preset, Qualität und Rendering-Backend."
+  },
+  "step3Title": {
+    "message": "Play drücken"
+  },
+  "step3Text": {
+    "message": "Gehe in den Vollbildmodus und lass AniWebScale den Rest machen."
+  },
+  "faqKicker": {
+    "message": "05 / GUT ZU WISSEN"
+  },
+  "faqTitle": {
+    "message": "Fragen<br><em>treffen Antworten.</em>"
+  },
+  "faqSub": {
+    "message": "Noch neugierig? Die Erweiterung ist darauf ausgelegt, berechenbar, lokal und leicht rückgängig zu machen zu sein."
+  },
+  "faq1Q": {
+    "message": "Lädt AniWebScale meine Videos hoch?"
+  },
+  "faq1A": {
+    "message": "Nein. Die Verbesserung läuft lokal auf deiner GPU oder, wenn explizit aktiviert, über den lokalen nativen Windows-Renderer."
+  },
+  "faq2Q": {
+    "message": "Welche Browser werden unterstützt?"
+  },
+  "faq2A": {
+    "message": "Chrome, Chromium-basierte Browser und Firefox-Builds mit den erforderlichen WebGPU-Fähigkeiten werden unterstützt."
+  },
+  "faq3Q": {
+    "message": "Welche Grafikkarte brauche ich?"
+  },
+  "faq3A": {
+    "message": "Eine moderne WebGPU-fähige GPU ist erforderlich. Neuere integrierte Grafikkarten schaffen leichtere Anime4K-Presets, aber für 1080p-zu-4K-Verarbeitung, KI-Modi und Frame-Generierung wird eine leistungsstarke dedizierte GPU dringend empfohlen. Hochauflösende 4x-Modi können erheblichen VRAM erfordern, besonders in Kombination mit Frame-Generierung."
+  },
+  "faq4Q": {
+    "message": "Funktioniert es mit Crunchyroll, Netflix und geschütztem Video?"
+  },
+  "faq4A": {
+    "message": "Crunchyroll, Netflix, Disney+, Prime Video und ähnliche geschützte Dienste erfordern den nativen Windows-Renderer; WebGPU kann geschützte Frames nicht lesen. AniWebScale umgeht niemals DRM, daher können einzelne Dienste die Aufnahme auch mit aktiviertem Native blockieren."
+  },
+  "faq5Q": {
+    "message": "Was ist kostenlos enthalten?"
+  },
+  "faq5A": {
+    "message": "Alles. Anime4K-Echtzeit-Presets, die KI-Upscaling-Modi (ArtCNN, ACNet, ARNet), der optionale native Windows-Renderer und bewegungsbasierte Frame-Generierung sind alle kostenlos verfügbar. Es gibt keine bezahlte Stufe."
+  },
+  "faq6Q": {
+    "message": "Wie bekomme ich Support?"
+  },
+  "faq6A": {
+    "message": "Melde dich über die Support-Seite. AniWebScale läuft lokal, daher sind die meisten Probleme einstellungs- oder hardwarebedingt und leicht zu lösen."
+  },
+  "dlKicker": {
+    "message": "BEREIT, WENN DU ES BIST"
+  },
+  "dlTitle": {
+    "message": "Deine nächste Folge<br>verdient ein bisschen Magie."
+  },
+  "dlText": {
+    "message": "Installiere AniWebScale und verwandle weiche Animation in wenigen Klicks in scharfes, flüssiges Video."
+  },
+  "storeAvailableFor": {
+    "message": "VERFÜGBAR FÜR"
+  },
+  "dlNote": {
+    "message": "Store-Links werden vorbereitet. Konfiguriere sie in der Website-Umgebung."
+  },
+  "footerTagline": {
+    "message": "Echtzeit-Videoverbesserung<br>für Menschen, die jedes Frame lieben."
+  },
+  "footerProduct": {
+    "message": "Produkt"
+  },
+  "footerFeatures": {
+    "message": "Features"
+  },
+  "footerDownload": {
+    "message": "Download"
+  },
+  "footerLegal": {
+    "message": "Rechtliches"
+  },
+  "footerContact": {
+    "message": "Kontakt"
+  },
+  "footerContactLink": {
+    "message": "Kontakt"
+  },
+  "footerMade": {
+    "message": "Mit <b>♥</b> für Animation gemacht"
+  },
+  "notFoundTitle": {
+    "message": "Seite nicht gefunden — AniWebScale"
+  },
+  "notFoundBack": {
+    "message": "Zur Startseite"
+  },
+  "notFoundKicker": {
+    "message": "VERLORENES FRAME"
+  },
+  "notFoundHeading": {
+    "message": "Diese Seite ist<br><em>zwischen den Frames</em> durchgerutscht."
+  },
+  "notFoundText": {
+    "message": "Der Link ist möglicherweise veraltet oder die Seite ist an einen magischeren Ort gezogen."
+  },
+  "notFoundCta": {
+    "message": "Zurück zur Startseite →"
   }
 }

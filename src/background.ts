@@ -3,9 +3,6 @@ import { createAsyncSerializer } from './shared/async-serializer';
 import { NativeHostUnavailableError, NativeMessagingClient, createRequestId } from './native/client';
 import {
   isNativeConfiguration,
-  isNativeEnhancementMode,
-  isNativeQuality,
-  NativeCapabilitiesEvent,
   NativeConfiguration,
   NativeEvent,
   NativeMediaCommandName,
@@ -18,7 +15,6 @@ import {
 import {
   NATIVE_SESSION_VERSION,
   matchesExpectedNativeSession,
-  migrateNativeSessionMetadata,
   requiresLegacyPopupRestore,
   selectRecoveredSessionTab,
 } from './shared/session-recovery';
@@ -41,7 +37,6 @@ import {
   synchronizeRegisteredContentScripts,
 } from './site-access';
 import type {
-  ActiveEnhancementRecord,
   NativeSessionRecord,
   NativeStatusSnapshot,
   PopupMeasurement,
@@ -53,17 +48,15 @@ import {
   sourceOrigin,
   topLevelOrigin,
 } from './background-helpers';
+import { NativeSessionStore } from './background/session-store';
+import { NativeBridge } from './background/native-bridge';
 
-const SESSION_STORAGE_KEY = 'anime4kNativeSessionV1';
 const CONSENT_STORAGE_KEY = 'anime4kNativeConsentByOrigin';
-const ACTIVE_ENHANCEMENT_KEY = 'anime4kActiveEnhancementV1';
 const SESSION_VERSION = NATIVE_SESSION_VERSION;
 
-let activeSession: NativeSessionRecord | null = null;
-let nativeClient: NativeMessagingClient | null = null;
-let nativeCapabilities: NativeCapabilitiesEvent | null = null;
+const store = new NativeSessionStore();
+const bridge = new NativeBridge();
 let latestStatus: NativeStatusSnapshot = { active: false };
-let activeEnhancement: ActiveEnhancementRecord | null = null;
 const serialized = createAsyncSerializer();
 let fullscreenExitSessionId: string | null = null;
 let siteAccessChain: Promise<void> = Promise.resolve();
@@ -83,26 +76,6 @@ async function isExtensionEnabled(): Promise<boolean> {
   return stored.extensionEnabled !== false;
 }
 
-async function loadActiveEnhancement(): Promise<ActiveEnhancementRecord | null> {
-  if (activeEnhancement) return activeEnhancement;
-  const stored = await chrome.storage.local.get(ACTIVE_ENHANCEMENT_KEY);
-  const candidate = stored[ACTIVE_ENHANCEMENT_KEY] as Partial<ActiveEnhancementRecord> | undefined;
-  if (!candidate || !Number.isInteger(candidate.tabId) || !Number.isInteger(candidate.frameId)
-      || typeof candidate.videoId !== 'string' || candidate.videoId.length === 0) return null;
-  activeEnhancement = {
-    tabId: candidate.tabId as number,
-    frameId: candidate.frameId as number,
-    videoId: candidate.videoId,
-  };
-  return activeEnhancement;
-}
-
-async function persistActiveEnhancement(record: ActiveEnhancementRecord | null): Promise<void> {
-  activeEnhancement = record;
-  if (record) await chrome.storage.local.set({ [ACTIVE_ENHANCEMENT_KEY]: record });
-  else await chrome.storage.local.remove(ACTIVE_ENHANCEMENT_KEY);
-}
-
 async function claimEnhancement(
   videoId: string,
   sender: chrome.runtime.MessageSender,
@@ -117,10 +90,10 @@ async function claimEnhancement(
   }
 
   const next = { tabId, frameId, videoId };
-  const previous = await loadActiveEnhancement();
+  const previous = await store.loadActiveEnhancement();
   if (previous && (previous.tabId !== tabId || previous.frameId !== frameId || previous.videoId !== videoId)) {
-    if (activeSession?.tabId === previous.tabId && activeSession.frameId === previous.frameId
-        && activeSession.videoId === previous.videoId) {
+    if (store.activeSession?.tabId === previous.tabId && store.activeSession.frameId === previous.frameId
+        && store.activeSession.videoId === previous.videoId) {
       await stopNativeSession('Another video was selected.', true);
     } else {
       await sendToFrame(previous.tabId, previous.frameId, {
@@ -129,52 +102,16 @@ async function claimEnhancement(
       }).catch(() => undefined);
     }
   }
-  await persistActiveEnhancement(next);
+  await store.persistActiveEnhancement(next);
   return { ok: true };
 }
 
 async function releaseEnhancement(videoId: string, sender: chrome.runtime.MessageSender): Promise<void> {
-  const current = await loadActiveEnhancement();
+  const current = await store.loadActiveEnhancement();
   if (current && current.tabId === sender.tab?.id && current.frameId === (sender.frameId ?? 0)
       && current.videoId === videoId) {
-    await persistActiveEnhancement(null);
+    await store.persistActiveEnhancement(null);
   }
-}
-
-async function persistSession(session: NativeSessionRecord | null): Promise<void> {
-  activeSession = session;
-  if (session) {
-    await chrome.storage.local.set({ [SESSION_STORAGE_KEY]: session });
-  } else {
-    await chrome.storage.local.remove(SESSION_STORAGE_KEY);
-  }
-}
-
-async function loadPersistedSession(): Promise<NativeSessionRecord | null> {
-  const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
-  const candidate = stored[SESSION_STORAGE_KEY] as (
-    Partial<NativeSessionRecord> & { preset?: unknown }
-  ) | undefined;
-  const metadata = candidate ? migrateNativeSessionMetadata(candidate) : null;
-  if (!candidate || !metadata || typeof candidate.tabId !== 'number') {
-    return null;
-  }
-  const rawConfiguration = candidate.configuration ?? candidate.preset;
-  const configuration = isNativeConfiguration(rawConfiguration)
-    ? rawConfiguration
-    : rawConfiguration && typeof rawConfiguration === 'object'
-      && isNativeEnhancementMode((rawConfiguration as Record<string, unknown>).mode)
-      && isNativeQuality((rawConfiguration as Record<string, unknown>).quality)
-      ? {
-          mode: (rawConfiguration as { mode: NativeConfiguration['mode'] }).mode,
-          quality: (rawConfiguration as { quality: NativeConfiguration['quality'] }).quality,
-          frameGenerationEnabled: false,
-        }
-      : null;
-  if (!configuration) return null;
-  const normalized = { ...candidate };
-  delete normalized.preset;
-  return { ...normalized, ...metadata, configuration } as NativeSessionRecord;
 }
 
 async function sendToFrame<T = unknown>(
@@ -219,68 +156,12 @@ async function checkOnboarding(): Promise<void> {
   }
 }
 
-function installNativeEventRouting(client: NativeMessagingClient): void {
-  client.onEvent(event => {
-    void routeNativeEvent(event, client);
-  });
-}
-
-async function connectAndHandshake(): Promise<NativeMessagingClient> {
-  if (nativeClient?.connected && nativeCapabilities) return nativeClient;
-
-  nativeClient?.disconnect();
-  nativeClient = null;
-  nativeCapabilities = null;
-  const client = new NativeMessagingClient();
-  installNativeEventRouting(client);
-  try {
-    client.connect();
-
-    const ready = await client.request({
-      ...nativeRequestBase(),
-      type: 'hello',
-    }, 5_000);
-    if (ready.type !== 'ready') {
-      throw new Error('The native host returned an invalid handshake response.');
-    }
-
-    const capabilities = await client.request<NativeCapabilitiesEvent>({
-      ...nativeRequestBase(),
-      type: 'capabilities',
-    }, 5_000);
-    if (capabilities.type !== 'capabilities' || !capabilities.windowsCapture || !capabilities.d3d11) {
-      throw new Error('The native host does not support Windows Graphics Capture and Direct3D 11.');
-    }
-
-    nativeCapabilities = capabilities;
-    nativeClient = client;
-    return client;
-  } catch (error) {
-    client.disconnect();
-    nativeCapabilities = null;
-    throw error;
-  }
-}
-
-function assertNativeSupportsConfiguration(configuration: NativeConfiguration): void {
-  const capabilities = nativeCapabilities;
-  if (!capabilities?.modes.includes(configuration.mode)) {
-    throw new Error(`The installed native renderer does not support ${configuration.mode}.`);
-  }
-  if (!capabilities.qualities.includes(configuration.quality)) {
-    throw new Error(`The installed native renderer does not support quality ${configuration.quality}.`);
-  }
-  if (configuration.frameGenerationEnabled && !capabilities.frameGeneration) {
-    throw new Error('The installed native renderer does not support frame generation.');
-  }
-}
-
 async function routeNativeEvent(event: NativeEvent, sourceClient: NativeMessagingClient): Promise<void> {
   // A disconnected client can still have a previously queued callback. Never
   // reinterpret an unscoped transport error from that client as belonging to
   // the replacement native session.
-  if (sourceClient !== nativeClient) return;
-  const session = activeSession;
+  if (sourceClient !== bridge.currentClient) return;
+  const session = store.activeSession;
 
   if (event.type === 'pointer' || event.type === 'mediaCommand') {
     if (session && event.sessionId === session.sessionId) {
@@ -360,7 +241,7 @@ async function exitNativeFullscreen(session: NativeSessionRecord, message: unkno
     // frame, then confirm the resulting state. A short retry absorbs those DOM
     // swaps without requiring the user to press Esc several times.
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      if (activeSession?.sessionId !== session.sessionId) return;
+      if (store.activeSession?.sessionId !== session.sessionId) return;
       const topFrame = await sendToFrame<FullscreenExitFrameResponse>(
         session.tabId,
         0,
@@ -445,12 +326,12 @@ async function startNativeFallback(
     return { ok: false, status: 'denied', message: 'Native capture was not allowed for this website.' };
   }
 
-  if (activeSession
-      && activeSession.tabId === tabId
-      && activeSession.frameId === frameId
-      && activeSession.videoId === request.videoId) {
+  if (store.activeSession
+      && store.activeSession.tabId === tabId
+      && store.activeSession.frameId === frameId
+      && store.activeSession.videoId === request.videoId) {
     await updateNativeConfiguration(request.configuration);
-    return { ok: true, status: 'started', sessionId: activeSession.sessionId };
+    return { ok: true, status: 'started', sessionId: store.activeSession.sessionId };
   }
 
   await stopNativeSession('A different video was selected.', true);
@@ -483,10 +364,10 @@ async function startNativeFallback(
     createdAt: Date.now(),
   };
 
-  await persistSession(session);
+  await store.persistSession(session);
   try {
     const prepared = await prepareDirectFullscreen(session);
-    await persistSession(session);
+    await store.persistSession(session);
 
     // Let the site's fullscreen transition and controls settle before
     // measuring the exact visible decoded-video rectangle.
@@ -514,10 +395,10 @@ async function startNativeFallback(
     session.captureHeight = captureRegion?.height ?? prepared.intrinsicHeight;
     session.targetWidth = prepared.targetWidth;
     session.targetHeight = prepared.targetHeight;
-    await persistSession(session);
+    await store.persistSession(session);
 
-    const client = await connectAndHandshake();
-    assertNativeSupportsConfiguration(session.configuration);
+    const client = await bridge.connectAndHandshake(routeNativeEvent);
+    bridge.assertSupportsConfiguration(session.configuration);
     const started = await client.request<NativeStatusEvent>({
       ...nativeRequestBase(),
       type: 'start',
@@ -556,7 +437,7 @@ async function startNativeFallback(
       message: [started.message, scalingSummary].filter(Boolean).join(' · '),
       configuration: session.configuration,
     };
-    await persistSession(session);
+    await store.persistSession(session);
     await sendSessionEvent(session, started);
     return { ok: true, status: 'started', sessionId: session.sessionId };
   } catch (error) {
@@ -575,10 +456,10 @@ async function startNativeFallback(
 }
 
 async function updateNativeConfiguration(configuration: NativeConfiguration): Promise<void> {
-  const session = activeSession;
+  const session = store.activeSession;
   if (!session) throw new Error('No native session is active.');
-  const client = await connectAndHandshake();
-  assertNativeSupportsConfiguration(configuration);
+  const client = await bridge.connectAndHandshake(routeNativeEvent);
+  bridge.assertSupportsConfiguration(configuration);
   const status = await client.request<NativeStatusEvent>({
     ...nativeRequestBase(),
     type: 'updateConfiguration',
@@ -589,7 +470,7 @@ async function updateNativeConfiguration(configuration: NativeConfiguration): Pr
   });
   session.configuration = configuration;
   latestStatus = { ...latestStatus, configuration };
-  await persistSession(session);
+  await store.persistSession(session);
   await sendSessionEvent(session, status);
 }
 
@@ -674,20 +555,18 @@ async function stopNativeSession(
   restoreBrowser = true,
   expectedSessionId?: string,
 ): Promise<void> {
-  const session = activeSession ?? await loadPersistedSession();
+  const session = store.activeSession ?? await store.loadPersistedSession();
   if (!matchesExpectedNativeSession(session, expectedSessionId)) return;
   if (!session) {
     latestStatus = { active: false };
-    nativeClient?.disconnect();
-    nativeClient = null;
-    nativeCapabilities = null;
+    bridge.disconnect();
     return;
   }
   session.phase = 'stopping';
-  await persistSession(session);
-  if (notifyHost && nativeClient?.connected) {
+  await store.persistSession(session);
+  if (notifyHost && bridge.currentClient?.connected) {
     try {
-      await nativeClient.request({
+      await bridge.currentClient.request({
         ...nativeRequestBase(),
         type: 'stop',
         sessionId: session.sessionId,
@@ -701,15 +580,13 @@ async function stopNativeSession(
     await restoreContent(session);
     if (requiresLegacyPopupRestore(session)) await restoreTab(session);
   }
-  nativeClient?.disconnect();
-  nativeClient = null;
-  nativeCapabilities = null;
-  await persistSession(null);
-  const currentEnhancement = await loadActiveEnhancement();
+  bridge.disconnect();
+  await store.persistSession(null);
+  const currentEnhancement = await store.loadActiveEnhancement();
   if (currentEnhancement?.tabId === session.tabId
       && currentEnhancement.frameId === session.frameId
       && currentEnhancement.videoId === session.videoId) {
-    await persistActiveEnhancement(null);
+    await store.persistActiveEnhancement(null);
   }
   latestStatus = { active: false, state: 'stopped', message: reason };
 }
@@ -738,9 +615,9 @@ async function findRecoveredSessionTab(session: NativeSessionRecord): Promise<ch
 }
 
 async function recoverPersistedSession(): Promise<void> {
-  const persisted = await loadPersistedSession();
+  const persisted = await store.loadPersistedSession();
   if (!persisted) return;
-  await persistSession(persisted);
+  await store.persistSession(persisted);
   if (!await isExtensionEnabled()) {
     await stopNativeSession('AniWebScale was disabled.', true);
     return;
@@ -749,7 +626,7 @@ async function recoverPersistedSession(): Promise<void> {
   const recoveredTab = await findRecoveredSessionTab(persisted);
   if (!recoveredTab || recoveredTab.id === undefined) {
     try {
-      await connectAndHandshake();
+      await bridge.connectAndHandshake(routeNativeEvent);
     } catch {
       // Cleanup below is still safe when the host is already gone.
     }
@@ -766,16 +643,16 @@ async function recoverPersistedSession(): Promise<void> {
     const windows = await chrome.windows.getAll();
     const normalWindow = windows.find(window => window.type === 'normal' && window.id !== recoveredTab.windowId);
     if (normalWindow?.id !== undefined) persisted.originalWindowId = normalWindow.id;
-    await persistSession(persisted);
+    await store.persistSession(persisted);
   } else if (persisted.captureKind === 'direct-fullscreen') {
     persisted.tabId = recoveredTab.id;
     persisted.sourceWindowId = recoveredTab.windowId;
-    await persistSession(persisted);
+    await store.persistSession(persisted);
   }
 
   if (persisted.phase !== 'active') {
     try {
-      await connectAndHandshake();
+      await bridge.connectAndHandshake(routeNativeEvent);
     } catch {
       // Browser restoration below is still safe for the nonce-verified tab.
     }
@@ -784,7 +661,7 @@ async function recoverPersistedSession(): Promise<void> {
   }
 
   try {
-    const client = await connectAndHandshake();
+    const client = await bridge.connectAndHandshake(routeNativeEvent);
     const status = await client.request<NativeStatusEvent>({
       ...nativeRequestBase(),
       type: 'status',
@@ -807,9 +684,9 @@ async function recoverPersistedSession(): Promise<void> {
 }
 
 async function forwardMediaCommand(command: NativeMediaCommandName, value?: number): Promise<void> {
-  const session = activeSession;
+  const session = store.activeSession;
   if (!session) throw new Error('No native session is active.');
-  const client = await connectAndHandshake();
+  const client = await bridge.connectAndHandshake(routeNativeEvent);
   client.post({
     ...nativeRequestBase(),
     type: 'mediaCommand',
@@ -820,7 +697,7 @@ async function forwardMediaCommand(command: NativeMediaCommandName, value?: numb
 }
 
 async function forwardPointer(request: Record<string, unknown>): Promise<void> {
-  const session = activeSession;
+  const session = store.activeSession;
   if (!session) throw new Error('No native session is active.');
   const x = Number(request.x);
   const y = Number(request.y);
@@ -830,7 +707,7 @@ async function forwardPointer(request: Record<string, unknown>): Promise<void> {
       || !Number.isFinite(y) || y < 0 || y > 1) {
     throw new Error('Invalid native pointer event.');
   }
-  const client = await connectAndHandshake();
+  const client = await bridge.connectAndHandshake(routeNativeEvent);
   client.post({
     ...nativeRequestBase(),
     type: 'pointer',
@@ -883,7 +760,7 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
       }
       try {
         await serialized(async () => {
-          const session = activeSession;
+          const session = store.activeSession;
           if (!session || !isNativeSessionControlAuthorized(session, message, {
             tabId: sender.tab?.id,
             frameId: sender.frameId,
@@ -900,7 +777,7 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
 
     case 'NATIVE_STOP':
       return serialized(async () => {
-        const session = activeSession;
+        const session = store.activeSession;
         if (!session) return { ok: true };
         if (!isNativeSessionControlAuthorized(session, message, {
           tabId: sender.tab?.id,
@@ -916,7 +793,7 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
       return { ok: true, ...latestStatus };
 
     case 'NATIVE_PLAYBACK_STATE': {
-      const session = activeSession;
+      const session = store.activeSession;
       const playbackActive = message.playbackActive;
       const mediaTime = message.mediaTime;
       if (!session || !isNativePlaybackStateAuthorized(session, message, {
@@ -926,7 +803,7 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
           || typeof mediaTime !== 'number' || !Number.isFinite(mediaTime) || mediaTime < 0) {
         return { ok: false, message: 'Invalid native playback state.' };
       }
-      const client = await connectAndHandshake();
+      const client = await bridge.connectAndHandshake(routeNativeEvent);
       client.post({
         protocolVersion: NATIVE_PROTOCOL_VERSION,
         requestId: `playback-${createRequestId()}`,
@@ -965,7 +842,7 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
 
     case 'SETTINGS_UPDATED': {
       const extensionEnabled = await isExtensionEnabled();
-      const current = await loadActiveEnhancement();
+      const current = await store.loadActiveEnhancement();
       let contentUpdatedNativeSession = false;
       if (current) {
         const response = await sendToFrame<{ status?: string; message?: string }>(
@@ -977,19 +854,19 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
           return { ok: false, message: response.message || 'The active renderer could not apply the new settings.' };
         }
         contentUpdatedNativeSession = response?.status === 'SUCCESS'
-          && activeSession?.tabId === current.tabId
-          && activeSession.frameId === current.frameId
-          && activeSession.videoId === current.videoId;
+          && store.activeSession?.tabId === current.tabId
+          && store.activeSession.frameId === current.frameId
+          && store.activeSession.videoId === current.videoId;
       }
       if (!extensionEnabled) {
         await serialized(() => stopNativeSession('AniWebScale was disabled.', true));
-        await persistActiveEnhancement(null);
+        await store.persistActiveEnhancement(null);
         return { ok: true };
       }
       // A live content script owns normal backend updates. Only update the
       // native host here when recovering an orphaned session; otherwise the
       // same expensive native pipeline would be rebuilt twice.
-      if (activeSession && !contentUpdatedNativeSession) {
+      if (store.activeSession && !contentUpdatedNativeSession) {
         const settings = await chrome.storage.local.get(['mode', 'quality', 'frameGenerationEnabled']);
         const configuration = {
           mode: settings.mode,
@@ -1031,12 +908,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'loading' || changeInfo.url) {
     void serialized(async () => {
-      const current = await loadActiveEnhancement();
-      if (current?.tabId === tabId) await persistActiveEnhancement(null);
+      const current = await store.loadActiveEnhancement();
+      if (current?.tabId === tabId) await store.persistActiveEnhancement(null);
     });
   }
-  if (activeSession?.tabId === tabId && (changeInfo.status === 'loading' || changeInfo.url)) {
-    const sessionId = activeSession.sessionId;
+  if (store.activeSession?.tabId === tabId && (changeInfo.status === 'loading' || changeInfo.url)) {
+    const sessionId = store.activeSession.sessionId;
     void serialized(() => stopNativeSession('The source tab navigated.', true, true, sessionId));
     return;
   }
@@ -1052,10 +929,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.tabs.onRemoved.addListener(tabId => {
   void serialized(async () => {
-    const current = await loadActiveEnhancement();
-    if (current?.tabId === tabId) await persistActiveEnhancement(null);
+    const current = await store.loadActiveEnhancement();
+    if (current?.tabId === tabId) await store.persistActiveEnhancement(null);
   });
-  const session = activeSession;
+  const session = store.activeSession;
   if (session?.tabId === tabId) {
     const sessionId = session.sessionId;
     void serialized(() => stopNativeSession(
@@ -1068,7 +945,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
 });
 
 chrome.windows.onRemoved.addListener(windowId => {
-  const session = activeSession;
+  const session = store.activeSession;
   const captureWindowId = session?.captureKind === 'direct-fullscreen'
     ? session.sourceWindowId
     : session?.popupWindowId;

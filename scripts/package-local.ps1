@@ -160,7 +160,7 @@ try {
     }
 
     if ($RequireNativeSignature) {
-        & npm.cmd run check:release-config
+        & npm.cmd run check:identities
         if ($LASTEXITCODE -ne 0) { throw "Release configuration check failed with exit code $LASTEXITCODE." }
         & (Join-Path $nativeRoot 'scripts\sign-release.ps1') `
             -BinaryDirectory $nativeSource -VerifyOnly

@@ -9,7 +9,6 @@ import {
   NativeConfiguration,
   NativeEvent,
   NativeMediaCommandName,
-  NativeMetricsEvent,
   NativeStatusEvent,
   NATIVE_PROTOCOL_VERSION,
 } from './native/protocol';
@@ -27,9 +26,7 @@ import {
   isHttpOrigin,
   isNativePlaybackStateAuthorized,
   isNativeSessionControlAuthorized,
-  parseHttpOrigin,
   parseNativeConsentResponse,
-  resolveNativeMessageOrigin,
 } from './shared/native-session-messages';
 import {
   resolveFullscreenExitState,
@@ -43,85 +40,24 @@ import {
   migrateLegacyBroadSiteAccess,
   synchronizeRegisteredContentScripts,
 } from './site-access';
+import type {
+  ActiveEnhancementRecord,
+  NativeSessionRecord,
+  NativeStatusSnapshot,
+  PopupMeasurement,
+  PreparedVideo,
+} from './background-types';
+import {
+  generateNonce,
+  nativeRequestBase,
+  sourceOrigin,
+  topLevelOrigin,
+} from './background-helpers';
 
 const SESSION_STORAGE_KEY = 'anime4kNativeSessionV1';
 const CONSENT_STORAGE_KEY = 'anime4kNativeConsentByOrigin';
 const ACTIVE_ENHANCEMENT_KEY = 'anime4kActiveEnhancementV1';
 const SESSION_VERSION = NATIVE_SESSION_VERSION;
-
-interface PreparedVideo {
-  ok: boolean;
-  originalTitle?: string;
-  intrinsicWidth?: number;
-  intrinsicHeight?: number;
-  screenAvailWidth?: number;
-  screenAvailHeight?: number;
-  screenAvailLeft?: number;
-  screenAvailTop?: number;
-  devicePixelRatio?: number;
-  targetWidth?: number;
-  targetHeight?: number;
-  message?: string;
-}
-
-interface PopupMeasurement {
-  ok: boolean;
-  innerWidth?: number;
-  innerHeight?: number;
-  outerWidth?: number;
-  outerHeight?: number;
-  devicePixelRatio?: number;
-  screenAvailWidth?: number;
-  screenAvailHeight?: number;
-  screenAvailLeft?: number;
-  screenAvailTop?: number;
-  videoRect?: { left: number; top: number; width: number; height: number };
-}
-
-interface NativeSessionRecord {
-  version: typeof SESSION_VERSION;
-  captureKind: 'direct-fullscreen' | 'legacy-popup';
-  phase: 'preparing' | 'active' | 'stopping';
-  sessionId: string;
-  nonce: string;
-  tabId: number;
-  frameId: number;
-  videoId: string;
-  origin: string;
-  sourceUrl: string;
-  topLevelUrl: string;
-  sourceWindowId?: number;
-  originalWindowId?: number;
-  originalIndex?: number;
-  originalWindowState?: chrome.windows.windowStateEnum;
-  originalWindowBounds?: { left?: number; top?: number; width?: number; height?: number };
-  popupWindowId?: number;
-  originalTitle?: string;
-  intrinsicWidth?: number;
-  intrinsicHeight?: number;
-  captureWidth?: number;
-  captureHeight?: number;
-  targetWidth?: number;
-  targetHeight?: number;
-  configuration: NativeConfiguration;
-  output: 'auto';
-  createdAt: number;
-}
-
-interface NativeStatusSnapshot {
-  active: boolean;
-  sessionId?: string;
-  state?: string;
-  message?: string;
-  configuration?: NativeConfiguration;
-  metrics?: Pick<NativeMetricsEvent, 'fps' | 'frameTimeMs' | 'droppedFrames'>;
-}
-
-interface ActiveEnhancementRecord {
-  tabId: number;
-  frameId: number;
-  videoId: string;
-}
 
 let activeSession: NativeSessionRecord | null = null;
 let nativeClient: NativeMessagingClient | null = null;
@@ -205,24 +141,6 @@ async function releaseEnhancement(videoId: string, sender: chrome.runtime.Messag
   }
 }
 
-function generateNonce(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function sourceOrigin(sender: chrome.runtime.MessageSender): string | null {
-  return resolveNativeMessageOrigin({
-    origin: sender.origin,
-    url: sender.url,
-    tabUrl: sender.tab?.url,
-  });
-}
-
-function topLevelOrigin(sender: chrome.runtime.MessageSender): string | null {
-  return parseHttpOrigin(sender.tab?.url);
-}
-
 async function persistSession(session: NativeSessionRecord | null): Promise<void> {
   activeSession = session;
   if (session) {
@@ -299,13 +217,6 @@ async function checkOnboarding(): Promise<void> {
     // background. The user can still open the guide explicitly from the UI.
     await chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html'), active: false });
   }
-}
-
-function nativeRequestBase(): {
-  protocolVersion: typeof NATIVE_PROTOCOL_VERSION;
-  requestId: string;
-} {
-  return { protocolVersion: NATIVE_PROTOCOL_VERSION, requestId: createRequestId() };
 }
 
 function installNativeEventRouting(client: NativeMessagingClient): void {

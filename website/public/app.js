@@ -73,3 +73,15 @@ const emailLink = document.querySelector('[data-support-email]');
 if (emailLink && !emailLink.getAttribute('href')?.startsWith('mailto:')) {
   emailLink.href = 'mailto:support@korrespont.com';
 }
+
+// Store listings are not live yet: the buttons are honest placeholders.
+// Prevent the href="#" jump-to-top and give the user feedback instead.
+document.querySelectorAll('.store-link').forEach(link => {
+  link.addEventListener('click', event => {
+    event.preventDefault();
+    const msg = document.documentElement.lang === 'de'
+      ? 'Store-Listing folgt bald – die Erweiterung ist noch nicht im Store verfügbar.'
+      : 'Store listing coming soon – the extension is not yet available in the store.';
+    showToast(msg);
+  });
+});

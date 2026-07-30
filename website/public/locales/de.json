@@ -735,7 +735,7 @@
     "message": "Gehe in den Vollbildmodus und lass AniWebScale den Rest machen."
   },
   "faqKicker": {
-    "message": "05 / GUT ZU WISSEN"
+    "message": "04 / GUT ZU WISSEN"
   },
   "faqTitle": {
     "message": "Fragen<br><em>treffen Antworten.</em>"
@@ -792,7 +792,7 @@
     "message": "VERFÜGBAR FÜR"
   },
   "dlNote": {
-    "message": "Store-Links werden vorbereitet. Konfiguriere sie in der Website-Umgebung."
+    "message": "Store-Listings werden vorbereitet — Download-Links erscheinen hier, sobald sie live sind."
   },
   "footerTagline": {
     "message": "Echtzeit-Videoverbesserung<br>für Menschen, die jedes Frame lieben."
@@ -835,5 +835,11 @@
   },
   "notFoundCta": {
     "message": "Zurück zur Startseite →"
+  },
+  "storeComingSoon": {
+    "message": "Demnächst"
+  },
+  "langToggleAria": {
+    "message": "Sprache wechseln"
   }
 }

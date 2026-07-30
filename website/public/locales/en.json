@@ -735,7 +735,7 @@
     "message": "Enter fullscreen and let AniWebScale do the rest."
   },
   "faqKicker": {
-    "message": "05 / GOOD TO KNOW"
+    "message": "04 / GOOD TO KNOW"
   },
   "faqTitle": {
     "message": "Questions,<br><em>meet answers.</em>"
@@ -792,7 +792,7 @@
     "message": "AVAILABLE FOR"
   },
   "dlNote": {
-    "message": "Store links are being prepared. Configure them in the website environment."
+    "message": "Store listings are being prepared — download links will appear here as soon as they are live."
   },
   "footerTagline": {
     "message": "Real-time video enhancement<br>for people who love every frame."
@@ -835,5 +835,11 @@
   },
   "notFoundCta": {
     "message": "Return home →"
+  },
+  "storeComingSoon": {
+    "message": "Coming soon"
+  },
+  "langToggleAria": {
+    "message": "Switch language"
   }
 }

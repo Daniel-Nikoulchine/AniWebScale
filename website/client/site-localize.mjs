@@ -1,5 +1,9 @@
-import { loadLocalization } from './i18n.mjs';
+import { loadLocalization, setLanguage } from './i18n.mjs';
 
-loadLocalization().catch(error => {
+loadLocalization().then(() => {
+  document.querySelectorAll('[data-lang-toggle]').forEach(button => {
+    button.addEventListener('click', () => setLanguage(button.dataset.langToggle));
+  });
+}).catch(error => {
   console.warn('[AniWebScale] Localization could not be loaded:', error);
 });

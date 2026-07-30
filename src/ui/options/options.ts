@@ -5,7 +5,7 @@ import {
   isProcessingEnabled,
   modeUsesQuality,
 } from '../../shared/presets';
-import { getSettings, saveSettings } from '../../utils/settings';
+import { getSettings, saveSettings, saveLocalSettings } from '../../utils/settings';
 import { themeManager, type ThemeMode } from '../theme-manager';
 import { populateModeSelect, renderModeSummary } from '../mode-select';
 import { localizeDocument, message } from '../i18n';
@@ -34,12 +34,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const save = document.getElementById('save') as HTMLButtonElement;
   const status = document.getElementById('status') as HTMLDivElement;
   const version = document.getElementById('version') as HTMLSpanElement;
+  const verboseLogging = document.getElementById('verbose-logging') as HTMLInputElement;
 
-  const storedTheme = await chrome.storage.local.get(['theme']);
+  const storedTheme = await chrome.storage.local.get(['theme', 'verboseLogging']);
   const initialTheme: ThemeMode = ['light', 'dark', 'auto'].includes(storedTheme.theme)
     ? storedTheme.theme as ThemeMode
     : 'auto';
   themeManager.setTheme(initialTheme);
+  verboseLogging.checked = storedTheme.verboseLogging === true;
   version.textContent = chrome.runtime.getManifest().version;
   const settings = await getSettings();
   populateModeSelect(mode, settings.mode);
@@ -118,6 +120,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
     try {
       await saveSettings(update);
+      await saveLocalSettings({ verboseLogging: verboseLogging.checked });
       settingsSaved = true;
       const response = await chrome.runtime.sendMessage({ type: 'SETTINGS_UPDATED', settings: update }) as
         { ok?: boolean; message?: string } | undefined;

@@ -853,5 +853,20 @@
   },
   "supportPageTitle": {
     "message": "Support – AniWebScale"
+  },
+  "diagnostics": {
+    "message": "Diagnostics"
+  },
+  "verboseLogging": {
+    "message": "Verbose logging"
+  },
+  "verboseLoggingDescription": {
+    "message": "Write detailed diagnostic messages to the browser console. Useful when troubleshooting; leave off for normal use."
+  },
+  "enableVerboseLogging": {
+    "message": "Enable verbose logging"
+  },
+  "verboseLoggingHint": {
+    "message": "Logs stash, pipeline and renderer events to the DevTools console."
   }
 }

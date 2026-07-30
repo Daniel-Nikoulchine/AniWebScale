@@ -1,4 +1,5 @@
 import { VideoEnhancer } from './video-enhancer';
+import { debug } from '../utils/debug-log';
 
 interface StashedEnhancer {
   enhancer: VideoEnhancer;
@@ -19,11 +20,11 @@ export function stashEnhancer(enhancer: VideoEnhancer): boolean {
   const mediaKey = getMediaKey(video);
   if (!mediaKey) return false;
 
-  console.log(`[Anime4KWebExt] Stashing active enhancer for ${mediaKey}.`);
+  debug(`Stashing active enhancer for ${mediaKey}.`);
   enhancer.detach();
 
   const cleanupTimer = window.setTimeout(() => {
-    console.log(`[Anime4KWebExt] Stash for ${mediaKey} expired. Cleaning up.`);
+    debug(`Stash for ${mediaKey} expired. Cleaning up.`);
     clearStashEntry(mediaKey);
   }, STASH_TTL);
 
@@ -45,7 +46,7 @@ export function findAndUnstashEnhancer(video: HTMLVideoElement): VideoEnhancer |
   }
 
   const stashedItem = stash[index];
-  console.log(`[Anime4KWebExt] Found stashed enhancer for ${mediaKey}. Re-attaching.`);
+  debug(`Found stashed enhancer for ${mediaKey}. Re-attaching.`);
   clearTimeout(stashedItem.cleanupTimer);
   stash.splice(index, 1);
 

@@ -1,4 +1,5 @@
 import { ensureLatestConfig } from './utils/migration';
+import { createAsyncSerializer } from './shared/async-serializer';
 import { NativeHostUnavailableError, NativeMessagingClient, createRequestId } from './native/client';
 import {
   isNativeConfiguration,
@@ -127,15 +128,9 @@ let nativeClient: NativeMessagingClient | null = null;
 let nativeCapabilities: NativeCapabilitiesEvent | null = null;
 let latestStatus: NativeStatusSnapshot = { active: false };
 let activeEnhancement: ActiveEnhancementRecord | null = null;
-let operationChain: Promise<unknown> = Promise.resolve();
+const serialized = createAsyncSerializer();
 let fullscreenExitSessionId: string | null = null;
 let siteAccessChain: Promise<void> = Promise.resolve();
-
-function serialized<T>(operation: () => Promise<T>): Promise<T> {
-  const result = operationChain.then(operation, operation);
-  operationChain = result.then(() => undefined, () => undefined);
-  return result;
-}
 
 function updateSiteAccess(migrateLegacy = false): Promise<void> {
   if (__ANIME4K_E2E__) return Promise.resolve();

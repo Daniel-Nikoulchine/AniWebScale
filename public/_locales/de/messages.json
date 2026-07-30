@@ -352,5 +352,20 @@
   },
   "support": {
     "message": "Support"
+  },
+  "diagnostics": {
+    "message": "Diagnose"
+  },
+  "verboseLogging": {
+    "message": "Ausführliche Protokollierung"
+  },
+  "verboseLoggingDescription": {
+    "message": "Schreibt detaillierte Diagnosemeldungen in die Browser-Konsole. Nützlich bei der Fehlersuche; für den normalen Betrieb deaktiviert lassen."
+  },
+  "enableVerboseLogging": {
+    "message": "Ausführliche Protokollierung aktivieren"
+  },
+  "verboseLoggingHint": {
+    "message": "Protokolliert Stash-, Pipeline- und Renderer-Ereignisse in die DevTools-Konsole."
   }
 }

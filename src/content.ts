@@ -14,6 +14,7 @@ import {
 } from './shared/intrinsic-capture';
 import { calculateRenderedVideoRect } from './shared/video-content-rect';
 import { shouldApplySettingsChange } from './utils/settings-change';
+import { initDebugLogging, setVerboseLogging } from './utils/debug-log';
 
 const VIDEO_ID_ATTRIBUTE = 'data-anime4k-video-id';
 const NATIVE_ROOT_ATTRIBUTE = 'data-anime4k-native-root';
@@ -850,12 +851,16 @@ if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
   });
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.verboseLogging) {
+      setVerboseLogging(changes.verboseLogging.newValue === true);
+    }
     if (!shouldApplySettingsChange(changes, areaName)) return;
     void handleSettingsUpdate({ type: 'SETTINGS_UPDATED' }, () => undefined).catch(error => {
       console.info('[AniWebScale] Could not apply changed fullscreen settings:', error instanceof Error ? error.message : String(error));
     });
   });
 
+  void initDebugLogging();
   void initializeOnPage();
   if (__ANIME4K_E2E__) installLocalE2ETestBridge();
   window.addEventListener('anime4k-video-reattached', handleNativeVideoReattach);

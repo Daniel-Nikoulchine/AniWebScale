@@ -111,6 +111,15 @@
       <label class="theme-field"><span data-i18n="colorTheme">Color theme</span><select id="theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
     </section>
 
+    <div class="section-intro" id="diagnostics">
+      <span class="heading-icon lavender" aria-hidden="true">&#9881;</span>
+      <h2 data-i18n="diagnostics">Diagnostics</h2>
+    </div>
+    <section class="card permission-card">
+      <div><h3 data-i18n="verboseLogging">Verbose logging</h3><p class="note" data-i18n="verboseLoggingDescription">Write detailed diagnostic messages to the browser console. Useful when troubleshooting; leave off for normal use.</p></div>
+      <label class="check"><input id="verbose-logging" type="checkbox"><span class="check-control"></span><span><strong data-i18n="enableVerboseLogging">Enable verbose logging</strong><small data-i18n="verboseLoggingHint">Logs stash, pipeline and renderer events to the DevTools console.</small></span></label>
+    </section>
+
     <div class="actions">
       <button id="save" class="primary" type="button"><span data-i18n="saveSettings">Save settings</span> <span aria-hidden="true">&#10022;</span></button>
       <div id="status" role="status" aria-live="polite"></div>

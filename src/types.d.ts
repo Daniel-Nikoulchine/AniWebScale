@@ -39,6 +39,7 @@ interface Anime4KWebExtSettings {
 
 interface LocalSettings {
   hasCompletedOnboarding: boolean;
+  verboseLogging: boolean;
 }
 
 interface RenderStats {

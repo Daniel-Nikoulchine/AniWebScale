@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   fullscreenContainsVideo,
+  getAuthoritativeFullscreenElement,
   hasFullscreenContext,
   isFullscreenVideoEligible,
+  isVideoInFullscreenContext,
   rectOccupiesViewport,
   viewportOccupiesScreen,
 } from '../src/shared/fullscreen-video';
@@ -88,5 +90,48 @@ describe('fullscreen geometry fallback', () => {
       width: 1280,
       height: 720,
     }, { width: 1920, height: 1080 })).toBe(false);
+  });
+
+  it('resolves the top-level fullscreen element from a cross-origin guest frame', () => {
+    const topFullscreen = { tagName: 'DIV' } as unknown as Element;
+    const guestWindow = {
+      top: {
+        document: { fullscreenElement: topFullscreen, webkitFullscreenElement: null },
+      },
+      document: { fullscreenElement: null, webkitFullscreenElement: null },
+    };
+    vi.stubGlobal('window', guestWindow);
+    try {
+      expect(getAuthoritativeFullscreenElement()).toBe(topFullscreen);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('treats a guest-frame video as fullscreen when the top document owns it', () => {
+    const topFullscreen = { parentNode: null, getRootNode: () => null } as unknown as Element;
+    const video = {
+      parentNode: topFullscreen,
+      isConnected: true,
+      getBoundingClientRect: () => ({ width: 1280, height: 720 }),
+      getAttribute: () => null,
+    } as unknown as HTMLVideoElement;
+    const guestWindow = {
+      top: {
+        document: { fullscreenElement: topFullscreen, webkitFullscreenElement: null },
+        screen: { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040 },
+        documentElement: { clientWidth: 1920, clientHeight: 1080 },
+      },
+      document: { fullscreenElement: null, webkitFullscreenElement: null },
+    };
+    vi.stubGlobal('window', guestWindow);
+    vi.stubGlobal('getComputedStyle', () => ({
+      display: 'block', visibility: 'visible', opacity: '1', transform: 'none',
+    }));
+    try {
+      expect(isVideoInFullscreenContext(video)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

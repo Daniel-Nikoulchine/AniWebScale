@@ -9,7 +9,6 @@ describe('settings storage change routing', () => {
     'backend',
     'autoFullscreenEnabled',
     'frameGenerationEnabled',
-    'aniwebscaleVerifiedLicenseV1',
   ])('applies relevant local key %s', key => {
     expect(shouldApplySettingsChange({ [key]: { oldValue: null, newValue: true } }, 'local')).toBe(true);
   });

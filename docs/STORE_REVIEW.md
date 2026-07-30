@@ -12,10 +12,9 @@
 
 | Permission | User-facing purpose |
 |---|---|
-| `storage` | Save presets, renderer choice, site-specific Native consent and the short-lived signed license locally. |
+| `storage` | Save presets, renderer choice and site-specific Native consent locally. |
 | `activeTab` | Coordinate enhancement with the tab the user actively invokes from the extension UI. It does not grant background access to browsing history. |
 | `scripting` | Register the local content scripts only after the user grants the current site origin, and remove them when that grant is revoked. |
-| `identity` | Open the AniWebScale website sign-in flow and receive a one-time PKCE authorization code without exposing the account password to the extension. |
 | `nativeMessaging` | Connect only to the optional locally installed AniWebScale Windows renderer for protected/fullscreen capture. |
 | `http://*/*`, `https://*/*` | Find and enhance user-selected video elements across streaming sites. Video frames and visited URLs are not sent to AniWebScale. |
 
@@ -29,14 +28,13 @@ The comparison plate used on the website (`public/assets/owned/comparison-plate.
 
 ## Data disclosure
 
-- Firefox required categories: `authenticationInfo`, `personallyIdentifyingInfo` for account login and license lookup.
-- Not collected by AniWebScale: browsing history, website content, video frames, search terms, health/location/communications or payment-card details.
-- Stripe-hosted Checkout handles payment data on the website, not inside extension code.
+- Firefox required categories: none. AniWebScale collects no personal data.
+- Not collected by AniWebScale: browsing history, website content, video frames, search terms, health/location/communications, account data or payment details.
 - Privacy policy URL: `https://aniwebscale.pages.dev/privacy` until the confirmed custom domain is active.
 
 ## Submission gate
 
-- Build with `npm run build:release:all`; reject `localhost` in output.
+- Build with `npm run build:all`; reject `localhost` in output.
 - Run unit/type tests, inspect both manifests, scan bundles for secrets and confirm the Native allowlist.
-- Provide the privacy URL, permission explanations, data-use answers, support e-mail, screenshots and accurate pricing/refund terms.
+- Provide the privacy URL, permission explanations, data-use answers, support e-mail and screenshots.
 - Chrome Web Store and AMO review/signing remain external steps. The Windows Native ZIP should be Authenticode-signed before public distribution; unsigned packages can trigger SmartScreen.

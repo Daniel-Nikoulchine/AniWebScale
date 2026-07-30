@@ -8,7 +8,6 @@ import type {
 } from '../types';
 import { ID_TO_MODE, isEnhancementMode, isQualityTier } from '../shared/presets';
 import { resolveEnhancementGraph } from './effect-chain-templates';
-import { applyFreePlanLimits, hasStoredProLicense } from '../account/entitlement';
 
 export const DEFAULT_SETTINGS: Anime4KWebExtSettings = {
   extensionEnabled: true,
@@ -57,7 +56,7 @@ export async function getSettings(): Promise<Anime4KWebExtSettings> {
       ? data.frameGenerationEnabled
       : DEFAULT_SETTINGS.frameGenerationEnabled,
   };
-  return await hasStoredProLicense() ? settings : applyFreePlanLimits(settings);
+  return settings;
 }
 
 function storageSet(area: chrome.storage.StorageArea, values: Record<string, unknown>): Promise<void> {

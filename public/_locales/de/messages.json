@@ -1,158 +1,356 @@
 {
-  "extensionName": { "message": "AniWebScale" },
-  "description": { "message": "AniWebScale verbessert Anime-Videos in Echtzeit mit Anime4K, WebGPU und einem optionalen lokalen Windows-Renderer." },
-  "realTimeVideoEnhancement": { "message": "Videoverbesserung in Echtzeit" },
-  "extensionEnabled": { "message": "Erweiterung aktiviert" },
-  "processVideos": { "message": "Videos in diesem Browser verarbeiten" },
-  "websiteAccess": { "message": "Website-Zugriff" },
-  "websiteAccessDescription": { "message": "AniWebScale läuft nur auf Websites, die du im Popup ausdrücklich freigibst." },
-  "sitePermissions": { "message": "Website-Berechtigungen" },
-  "allowSiteAccess": { "message": "Diese Website erlauben" },
-  "removeSiteAccess": { "message": "Zugriff entfernen" },
-  "siteAccessGranted": { "message": "AniWebScale kann Videos auf {site} verbessern." },
-  "siteAccessMissing": { "message": "Erlaube nur {site}, damit Videos dort verbessert werden können." },
-  "siteAccessUnavailable": { "message": "Auf dieser Seite ist kein Website-Zugriff möglich." },
-  "siteAccessUnavailableAction": { "message": "Nicht verfügbar" },
-  "requestingSiteAccess": { "message": "Website-Zugriff wird angefragt..." },
-  "removingSiteAccess": { "message": "Website-Zugriff wird entfernt..." },
-  "siteAccessReady": { "message": "Website-Zugriff erteilt. AniWebScale ist hier bereit." },
-  "siteAccessRemoved": { "message": "Website-Zugriff entfernt. Lade die Seite neu, um die Bereinigung abzuschließen." },
-  "siteAccessNotGranted": { "message": "Website-Zugriff wurde nicht erteilt." },
-  "siteAccessRemoveFailed": { "message": "Website-Zugriff wurde nicht entfernt." },
-  "siteAccessChangeFailed": { "message": "Website-Zugriff konnte nicht geändert werden." },
-  "siteAccessCheckFailed": { "message": "Website-Zugriff konnte nicht geprüft werden." },
-  "siteAccessSyncFailed": { "message": "Website-Zugriff konnte nicht angewendet werden." },
-  "clearWebsiteAccess": { "message": "Website-Zugriff löschen" },
-  "noWebsiteSites": { "message": "Noch keine Website darf AniWebScale ausführen." },
-  "quickSetup": { "message": "Schnelleinrichtung" },
-  "enhancementMode": { "message": "Verbesserungsmodus" },
-  "quality": { "message": "Qualität" },
-  "backend": { "message": "Backend" },
-  "frameGeneration": { "message": "Frame-Generierung" },
-  "autoFullscreen": { "message": "Auto-Vollbild" },
-  "liveStatistics": { "message": "Live-Statistiken" },
-  "saveApply": { "message": "Speichern & anwenden" },
-  "advancedSettings": { "message": "Erweiterte Einstellungen" },
-  "account": { "message": "Konto" },
-  "enhancement": { "message": "Verbesserung" },
-  "permissions": { "message": "Berechtigungen" },
-  "appearance": { "message": "Darstellung" },
-  "accountLicense": { "message": "Konto & Lizenz" },
-  "signInSecurely": { "message": "Sicher anmelden" },
-  "createAccount": { "message": "Konto erstellen" },
-  "refreshLicense": { "message": "Lizenz aktualisieren" },
-  "signOut": { "message": "Abmelden" },
-  "viewPlansBilling": { "message": "Tarife & Abrechnung" },
-  "nativeRendererPermissions": { "message": "Berechtigungen des nativen Renderers" },
-  "trustedSites": { "message": "Vertrauenswürdige Websites" },
-  "clearPermissions": { "message": "Alle Berechtigungen löschen" },
-  "theme": { "message": "Design" },
-  "colorTheme": { "message": "Farbschema" },
-  "saveSettings": { "message": "Einstellungen speichern" },
-  "welcomeStep": { "message": "WILLKOMMEN / 01" },
-  "onboardingTitle": { "message": "Lass deine Videos funkeln!" },
-  "chooseDefaults": { "message": "Standardeinstellungen wählen" },
-  "viewProPlans": { "message": "Pro-Tarife ansehen" },
-  "finishSetup": { "message": "Einrichtung abschließen" },
-  "settingsHome": { "message": "Startseite der AniWebScale-Einstellungen" },
-  "openMenu": { "message": "Menü öffnen" },
-  "switchLightTheme": { "message": "Zum hellen Design wechseln" },
-  "switchDarkTheme": { "message": "Zum dunklen Design wechseln" },
-  "anime4kModeGroup": { "message": "Anime4K-Voreinstellungen" },
-  "aiModeGroup": { "message": "KI-Skalierung | GPU-intensiv" },
-  "aiModeGroupPro": { "message": "KI-Skalierung | Pro-Tarif" },
-  "proSuffix": { "message": "{label} — Pro" },
-  "proFeaturePrefix": { "message": "Pro-Funktion · {description}" },
-  "backendAuto": { "message": "Automatisch" },
-  "backendWebGpu": { "message": "WebGPU (Hardwarebeschleunigung erforderlich)" },
-  "backendNative": { "message": "Nativer Windows-Renderer" },
-  "modeOffOption": { "message": "Aus - Keine Bildverbesserung" },
-  "modeAOption": { "message": "Anime4K A - Ausgewogene Wiederherstellung + 2x-Skalierung (Empfohlen)" },
-  "modeBOption": { "message": "Anime4K B - Sanfte Wiederherstellung + 2x-Skalierung" },
-  "modeCOption": { "message": "Anime4K C - Entrauschen + 2x-Skalierung" },
-  "modeAaOption": { "message": "Anime4K A+A - Starke Wiederherstellung in 2 Durchläufen + bis zu 4x" },
-  "modeBbOption": { "message": "Anime4K B+B - Starke sanfte Wiederherstellung + bis zu 4x" },
-  "modeCaOption": { "message": "Anime4K C+A - Entrauschen, wiederherstellen + bis zu 4x" },
-  "modeCnnOption": { "message": "Anime4K CNN 2x - Scharfe neuronale Skalierung (GPU: mittel)" },
-  "modeArtCnnOption": { "message": "ArtCNN C4F16 2x - Linien-/Detailrekonstruktion (GPU: Echtzeit)" },
-  "modeAcNetOption": { "message": "ACNet F8B4 2x - Schnelle leichte Skalierung (GPU: sehr gering)" },
-  "modeArNetOption": { "message": "ARNet F8B8 2x - Starke Detailwiederherstellung (GPU: ausgewogen)" },
-  "profileOff": { "message": "Aus" },
-  "profileRecommended": { "message": "Empfohlen" },
-  "profileSoftSources": { "message": "Weiche Quellen" },
-  "profileNoisySources": { "message": "Verrauschte Quellen" },
-  "profileBestAt2x": { "message": "Am besten ab 2x" },
-  "profileGpuMedium": { "message": "GPU: mittel" },
-  "profileGpuRealtime": { "message": "GPU: Echtzeit" },
-  "profileGpuVeryLight": { "message": "GPU: sehr gering" },
-  "profileGpuBalanced": { "message": "GPU: ausgewogen" },
-  "modeOffDescription": { "message": "Deaktiviert die Bildverbesserung. Die Frame-Generierung kann separat aktiv bleiben." },
-  "modeADescription": { "message": "Stellt Liniendetails wieder her und skaliert anschließend mit Anime4K CNN. Die ausgewogene Voreinstellung für die meisten Anime." },
-  "modeBDescription": { "message": "Verwendet eine sanftere Wiederherstellung vor der Anime4K-CNN-Skalierung, um Artefakte bei unscharfen oder komprimierten Videos zu reduzieren." },
-  "modeCDescription": { "message": "Entrauscht und skaliert in einem Anime4K-CNN-Durchlauf. Besonders geeignet für sichtbar verrauschte Animationen." },
-  "modeAaDescription": { "message": "Führt die Anime4K-A-Kette zweimal aus, für stärkere Details und bis zu 4x Skalierung. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels." },
-  "modeBbDescription": { "message": "Führt die sanftere Anime4K-B-Kette für unscharfe Quellen zweimal aus und skaliert bis zu 4x. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels." },
-  "modeCaDescription": { "message": "Entrauscht und skaliert zuerst, stellt dann wieder her und kann erneut skalieren. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels." },
-  "modeCnnDescription": { "message": "Offizielles Anime4K CNN mit fester 2x-Skalierung. Liefert ein scharfes Ergebnis; Qualität ändert Modellgröße und GPU-Last." },
-  "modeArtCnnDescription": { "message": "Festes 2x-GLSL-Netz zur Rekonstruktion von Anime-Linien und natürlichen Details in Echtzeit." },
-  "modeAcNetDescription": { "message": "Kleines festes 2x-GLSL-Netz, das Geschwindigkeit und sehr geringe GPU-Last priorisiert." },
-  "modeArNetDescription": { "message": "Tieferes festes 2x-GLSL-Netz mit stärkerer Detailwiederherstellung als ACNet bei ausgewogener GPU-Last." },
-  "frameMotion2x": { "message": "Bewegungsbasierte 2x-Rate" },
-  "frameMotion2xDetailed": { "message": "Erzeugt ein bewegungsbasiertes Zwischenbild für die doppelte Bildrate." },
-  "frameMotion2xEvenOff": { "message": "Bewegungsbasierte 2x-Rate, auch bei ausgeschalteter Verbesserung." },
-  "proRequired": { "message": "Nativer Renderer, KI-Modelle und Frame-Generierung erfordern Pro." },
-  "onboardingProRequired": { "message": "KI-Skalierung, nativer Renderer und Frame-Generierung erfordern Pro." },
-  "saving": { "message": "Wird gespeichert..." },
-  "savingSetup": { "message": "Einrichtung wird gespeichert..." },
-  "settingsSaved": { "message": "Einstellungen gespeichert." },
-  "settingsSavedApplied": { "message": "Einstellungen gespeichert und angewendet." },
-  "settingsSavedNotApplied": { "message": "Einstellungen gespeichert, konnten aber nicht angewendet werden." },
-  "settingsSaveFailed": { "message": "Einstellungen konnten nicht gespeichert werden." },
-  "setupComplete": { "message": "Einrichtung abgeschlossen. Dieser Tab kann geschlossen werden." },
-  "setupSaveFailed": { "message": "Einrichtung konnte nicht gespeichert werden." },
-  "done": { "message": "Fertig" },
-  "freePlan": { "message": "Kostenloser Tarif" },
-  "proActive": { "message": "Pro aktiv" },
-  "managePlan": { "message": "Tarif verwalten" },
-  "onboardingProUnlocked": { "message": " Alle Verbesserungsmodi, Renderer und die Frame-Generierung sind freigeschaltet." },
-  "onboardingFreeIncluded": { "message": " Anime4K-Voreinstellungen und WebGPU sind enthalten. KI-Skalierung, nativer Renderer und Frame-Generierung erfordern Pro." },
-  "enablingExtension": { "message": "Erweiterung wird aktiviert..." },
-  "disablingExtension": { "message": "Erweiterung wird deaktiviert..." },
-  "extensionEnabledStatus": { "message": "Erweiterung aktiviert." },
-  "extensionDisabledStatus": { "message": "Erweiterung deaktiviert." },
-  "extensionStatusSavedNotApplied": { "message": "Erweiterungsstatus gespeichert, konnte aber nicht angewendet werden." },
-  "extensionStatusChangeFailed": { "message": "Erweiterungsstatus konnte nicht geändert werden." },
-  "rendererRejectedSettings": { "message": "Der aktive Renderer hat die Einstellungen abgelehnt." },
-  "lifetimePro": { "message": "Lifetime Pro" },
-  "pro": { "message": "Pro" },
-  "free": { "message": "Kostenlos" },
-  "planUnlockedSummary": { "message": "Alle Verbesserungsmodi und Renderer sind freigeschaltet." },
-  "planFreeSummary": { "message": "Kostenlos: Anime4K + WebGPU · Pro: KI, Native + Frame-Gen" },
-  "manageArrow": { "message": "Verwalten →" },
-  "upgradeArrow": { "message": "Upgrade →" },
-  "freePlanCompatibility": { "message": "Kostenloser Tarif aktiv — Anime4K und WebGPU sind enthalten. Pro schaltet Native, KI-Modelle und Frame-Generierung frei." },
-  "frameGenerationLoad": { "message": "Frame-Generierung erhöht GPU-Speicherbedarf und Verarbeitungslast." },
-  "allFeaturesUnlocked": { "message": "Alle Funktionen freigeschaltet: Native + KI + Frame-Generierung." },
-  "freeFeaturesSummary": { "message": "Kostenlos enthält Anime4K + WebGPU. Native, KI + Frame-Generierung erfordern Pro." },
-  "unlockProFeatures": { "message": "Pro-Funktionen freischalten" },
-  "licenseVerified": { "message": "Lizenz bestätigt." },
-  "signInPaidLicense": { "message": "Melde dich an, um eine bezahlte Lizenz zu verwenden." },
-  "pleaseWait": { "message": "Bitte warten…" },
-  "accountRequestFailed": { "message": "Kontoanfrage fehlgeschlagen." },
-  "authenticationFailed": { "message": "Authentifizierung fehlgeschlagen." },
-  "signOutFailed": { "message": "Abmeldung fehlgeschlagen." },
-  "licenseRefreshFailed": { "message": "Lizenz konnte nicht aktualisiert werden." },
-  "accountStatusUnavailable": { "message": "Kontostatus nicht verfügbar." },
-  "noNativeSites": { "message": "Keine Website darf den nativen Renderer starten." },
-  "allowed": { "message": "Erlaubt" },
-  "blocked": { "message": "Blockiert" },
-  "remove": { "message": "Entfernen" },
-  "home": { "message": "Startseite" },
-  "backToHome": { "message": "Zurück zur Startseite" },
-  "imprint": { "message": "Impressum" },
-  "privacy": { "message": "Datenschutz" },
-  "terms": { "message": "Nutzungsbedingungen" },
-  "withdrawal": { "message": "Widerruf" },
-  "refunds": { "message": "Rückerstattungen" },
-  "support": { "message": "Support" }
+  "extensionName": {
+    "message": "AniWebScale"
+  },
+  "description": {
+    "message": "AniWebScale verbessert Anime-Videos in Echtzeit mit Anime4K, WebGPU und einem optionalen lokalen Windows-Renderer."
+  },
+  "realTimeVideoEnhancement": {
+    "message": "Videoverbesserung in Echtzeit"
+  },
+  "extensionEnabled": {
+    "message": "Erweiterung aktiviert"
+  },
+  "processVideos": {
+    "message": "Videos in diesem Browser verarbeiten"
+  },
+  "websiteAccess": {
+    "message": "Website-Zugriff"
+  },
+  "websiteAccessDescription": {
+    "message": "AniWebScale läuft nur auf Websites, die du im Popup ausdrücklich freigibst."
+  },
+  "sitePermissions": {
+    "message": "Website-Berechtigungen"
+  },
+  "allowSiteAccess": {
+    "message": "Diese Website erlauben"
+  },
+  "removeSiteAccess": {
+    "message": "Zugriff entfernen"
+  },
+  "siteAccessGranted": {
+    "message": "AniWebScale kann Videos auf {site} verbessern."
+  },
+  "siteAccessMissing": {
+    "message": "Erlaube nur {site}, damit Videos dort verbessert werden können."
+  },
+  "siteAccessUnavailable": {
+    "message": "Auf dieser Seite ist kein Website-Zugriff möglich."
+  },
+  "siteAccessUnavailableAction": {
+    "message": "Nicht verfügbar"
+  },
+  "requestingSiteAccess": {
+    "message": "Website-Zugriff wird angefragt..."
+  },
+  "removingSiteAccess": {
+    "message": "Website-Zugriff wird entfernt..."
+  },
+  "siteAccessReady": {
+    "message": "Website-Zugriff erteilt. AniWebScale ist hier bereit."
+  },
+  "siteAccessRemoved": {
+    "message": "Website-Zugriff entfernt. Lade die Seite neu, um die Bereinigung abzuschließen."
+  },
+  "siteAccessNotGranted": {
+    "message": "Website-Zugriff wurde nicht erteilt."
+  },
+  "siteAccessRemoveFailed": {
+    "message": "Website-Zugriff wurde nicht entfernt."
+  },
+  "siteAccessChangeFailed": {
+    "message": "Website-Zugriff konnte nicht geändert werden."
+  },
+  "siteAccessCheckFailed": {
+    "message": "Website-Zugriff konnte nicht geprüft werden."
+  },
+  "siteAccessSyncFailed": {
+    "message": "Website-Zugriff konnte nicht angewendet werden."
+  },
+  "clearWebsiteAccess": {
+    "message": "Website-Zugriff löschen"
+  },
+  "noWebsiteSites": {
+    "message": "Noch keine Website darf AniWebScale ausführen."
+  },
+  "quickSetup": {
+    "message": "Schnelleinrichtung"
+  },
+  "enhancementMode": {
+    "message": "Verbesserungsmodus"
+  },
+  "quality": {
+    "message": "Qualität"
+  },
+  "backend": {
+    "message": "Backend"
+  },
+  "frameGeneration": {
+    "message": "Frame-Generierung"
+  },
+  "autoFullscreen": {
+    "message": "Auto-Vollbild"
+  },
+  "liveStatistics": {
+    "message": "Live-Statistiken"
+  },
+  "saveApply": {
+    "message": "Speichern & anwenden"
+  },
+  "advancedSettings": {
+    "message": "Erweiterte Einstellungen"
+  },
+  "enhancement": {
+    "message": "Verbesserung"
+  },
+  "permissions": {
+    "message": "Berechtigungen"
+  },
+  "appearance": {
+    "message": "Darstellung"
+  },
+  "nativeRendererPermissions": {
+    "message": "Berechtigungen des nativen Renderers"
+  },
+  "trustedSites": {
+    "message": "Vertrauenswürdige Websites"
+  },
+  "clearPermissions": {
+    "message": "Alle Berechtigungen löschen"
+  },
+  "theme": {
+    "message": "Design"
+  },
+  "colorTheme": {
+    "message": "Farbschema"
+  },
+  "saveSettings": {
+    "message": "Einstellungen speichern"
+  },
+  "welcomeStep": {
+    "message": "WILLKOMMEN / 01"
+  },
+  "onboardingTitle": {
+    "message": "Lass deine Videos funkeln!"
+  },
+  "chooseDefaults": {
+    "message": "Standardeinstellungen wählen"
+  },
+  "finishSetup": {
+    "message": "Einrichtung abschließen"
+  },
+  "settingsHome": {
+    "message": "Startseite der AniWebScale-Einstellungen"
+  },
+  "openMenu": {
+    "message": "Menü öffnen"
+  },
+  "switchLightTheme": {
+    "message": "Zum hellen Design wechseln"
+  },
+  "switchDarkTheme": {
+    "message": "Zum dunklen Design wechseln"
+  },
+  "anime4kModeGroup": {
+    "message": "Anime4K-Voreinstellungen"
+  },
+  "aiModeGroup": {
+    "message": "KI-Skalierung | GPU-intensiv"
+  },
+  "backendAuto": {
+    "message": "Automatisch"
+  },
+  "backendWebGpu": {
+    "message": "WebGPU (Hardwarebeschleunigung erforderlich)"
+  },
+  "backendNative": {
+    "message": "Nativer Windows-Renderer"
+  },
+  "modeOffOption": {
+    "message": "Aus - Keine Bildverbesserung"
+  },
+  "modeAOption": {
+    "message": "Anime4K A - Ausgewogene Wiederherstellung + 2x-Skalierung (Empfohlen)"
+  },
+  "modeBOption": {
+    "message": "Anime4K B - Sanfte Wiederherstellung + 2x-Skalierung"
+  },
+  "modeCOption": {
+    "message": "Anime4K C - Entrauschen + 2x-Skalierung"
+  },
+  "modeAaOption": {
+    "message": "Anime4K A+A - Starke Wiederherstellung in 2 Durchläufen + bis zu 4x"
+  },
+  "modeBbOption": {
+    "message": "Anime4K B+B - Starke sanfte Wiederherstellung + bis zu 4x"
+  },
+  "modeCaOption": {
+    "message": "Anime4K C+A - Entrauschen, wiederherstellen + bis zu 4x"
+  },
+  "modeCnnOption": {
+    "message": "Anime4K CNN 2x - Scharfe neuronale Skalierung (GPU: mittel)"
+  },
+  "modeArtCnnOption": {
+    "message": "ArtCNN C4F16 2x - Linien-/Detailrekonstruktion (GPU: Echtzeit)"
+  },
+  "modeAcNetOption": {
+    "message": "ACNet F8B4 2x - Schnelle leichte Skalierung (GPU: sehr gering)"
+  },
+  "modeArNetOption": {
+    "message": "ARNet F8B8 2x - Starke Detailwiederherstellung (GPU: ausgewogen)"
+  },
+  "profileOff": {
+    "message": "Aus"
+  },
+  "profileRecommended": {
+    "message": "Empfohlen"
+  },
+  "profileSoftSources": {
+    "message": "Weiche Quellen"
+  },
+  "profileNoisySources": {
+    "message": "Verrauschte Quellen"
+  },
+  "profileBestAt2x": {
+    "message": "Am besten ab 2x"
+  },
+  "profileGpuMedium": {
+    "message": "GPU: mittel"
+  },
+  "profileGpuRealtime": {
+    "message": "GPU: Echtzeit"
+  },
+  "profileGpuVeryLight": {
+    "message": "GPU: sehr gering"
+  },
+  "profileGpuBalanced": {
+    "message": "GPU: ausgewogen"
+  },
+  "modeOffDescription": {
+    "message": "Deaktiviert die Bildverbesserung. Die Frame-Generierung kann separat aktiv bleiben."
+  },
+  "modeADescription": {
+    "message": "Stellt Liniendetails wieder her und skaliert anschließend mit Anime4K CNN. Die ausgewogene Voreinstellung für die meisten Anime."
+  },
+  "modeBDescription": {
+    "message": "Verwendet eine sanftere Wiederherstellung vor der Anime4K-CNN-Skalierung, um Artefakte bei unscharfen oder komprimierten Videos zu reduzieren."
+  },
+  "modeCDescription": {
+    "message": "Entrauscht und skaliert in einem Anime4K-CNN-Durchlauf. Besonders geeignet für sichtbar verrauschte Animationen."
+  },
+  "modeAaDescription": {
+    "message": "Führt die Anime4K-A-Kette zweimal aus, für stärkere Details und bis zu 4x Skalierung. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels."
+  },
+  "modeBbDescription": {
+    "message": "Führt die sanftere Anime4K-B-Kette für unscharfe Quellen zweimal aus und skaliert bis zu 4x. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels."
+  },
+  "modeCaDescription": {
+    "message": "Entrauscht und skaliert zuerst, stellt dann wieder her und kann erneut skalieren. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels."
+  },
+  "modeCnnDescription": {
+    "message": "Offizielles Anime4K CNN mit fester 2x-Skalierung. Liefert ein scharfes Ergebnis; Qualität ändert Modellgröße und GPU-Last."
+  },
+  "modeArtCnnDescription": {
+    "message": "Festes 2x-GLSL-Netz zur Rekonstruktion von Anime-Linien und natürlichen Details in Echtzeit."
+  },
+  "modeAcNetDescription": {
+    "message": "Kleines festes 2x-GLSL-Netz, das Geschwindigkeit und sehr geringe GPU-Last priorisiert."
+  },
+  "modeArNetDescription": {
+    "message": "Tieferes festes 2x-GLSL-Netz mit stärkerer Detailwiederherstellung als ACNet bei ausgewogener GPU-Last."
+  },
+  "frameMotion2x": {
+    "message": "Bewegungsbasierte 2x-Rate"
+  },
+  "frameMotion2xDetailed": {
+    "message": "Erzeugt ein bewegungsbasiertes Zwischenbild für die doppelte Bildrate."
+  },
+  "frameMotion2xEvenOff": {
+    "message": "Bewegungsbasierte 2x-Rate, auch bei ausgeschalteter Verbesserung."
+  },
+  "saving": {
+    "message": "Wird gespeichert..."
+  },
+  "savingSetup": {
+    "message": "Einrichtung wird gespeichert..."
+  },
+  "settingsSaved": {
+    "message": "Einstellungen gespeichert."
+  },
+  "settingsSavedApplied": {
+    "message": "Einstellungen gespeichert und angewendet."
+  },
+  "settingsSavedNotApplied": {
+    "message": "Einstellungen gespeichert, konnten aber nicht angewendet werden."
+  },
+  "settingsSaveFailed": {
+    "message": "Einstellungen konnten nicht gespeichert werden."
+  },
+  "setupComplete": {
+    "message": "Einrichtung abgeschlossen. Dieser Tab kann geschlossen werden."
+  },
+  "setupSaveFailed": {
+    "message": "Einrichtung konnte nicht gespeichert werden."
+  },
+  "done": {
+    "message": "Fertig"
+  },
+  "enablingExtension": {
+    "message": "Erweiterung wird aktiviert..."
+  },
+  "disablingExtension": {
+    "message": "Erweiterung wird deaktiviert..."
+  },
+  "extensionEnabledStatus": {
+    "message": "Erweiterung aktiviert."
+  },
+  "extensionDisabledStatus": {
+    "message": "Erweiterung deaktiviert."
+  },
+  "extensionStatusSavedNotApplied": {
+    "message": "Erweiterungsstatus gespeichert, konnte aber nicht angewendet werden."
+  },
+  "extensionStatusChangeFailed": {
+    "message": "Erweiterungsstatus konnte nicht geändert werden."
+  },
+  "rendererRejectedSettings": {
+    "message": "Der aktive Renderer hat die Einstellungen abgelehnt."
+  },
+  "frameGenerationLoad": {
+    "message": "Frame-Generierung erhöht GPU-Speicherbedarf und Verarbeitungslast."
+  },
+  "pleaseWait": {
+    "message": "Bitte warten…"
+  },
+  "noNativeSites": {
+    "message": "Keine Website darf den nativen Renderer starten."
+  },
+  "allowed": {
+    "message": "Erlaubt"
+  },
+  "blocked": {
+    "message": "Blockiert"
+  },
+  "remove": {
+    "message": "Entfernen"
+  },
+  "home": {
+    "message": "Startseite"
+  },
+  "backToHome": {
+    "message": "Zurück zur Startseite"
+  },
+  "imprint": {
+    "message": "Impressum"
+  },
+  "privacy": {
+    "message": "Datenschutz"
+  },
+  "terms": {
+    "message": "Nutzungsbedingungen"
+  },
+  "support": {
+    "message": "Support"
+  }
 }

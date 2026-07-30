@@ -161,6 +161,19 @@ export class VideoEnhancer {
     window.addEventListener('resize', this.targetChangeHandler);
     document.addEventListener('fullscreenchange', this.fullscreenChangeHandler);
     document.addEventListener('webkitfullscreenchange', this.fullscreenChangeHandler);
+    // A player may request Fullscreen from the top-level document while the
+    // <video> lives in a (cross-origin) iframe. The frame-local
+    // fullscreenchange event never fires in that case, so observe the
+    // top-level document too and reconcile from the guest frame.
+    if (window.top && window.top !== window) {
+      try {
+        window.top.addEventListener('fullscreenchange', this.fullscreenChangeHandler);
+        window.top.addEventListener('webkitfullscreenchange', this.fullscreenChangeHandler);
+      } catch {
+        // A cross-origin top document may reject listener registration.
+        // The geometry reconcile below still runs on resize/scroll.
+      }
+    }
     window.addEventListener('anime4k-native-session', this.nativeSessionHandler);
     void getSettings().then(settings => {
       if (this.destroyed) return;
@@ -765,6 +778,14 @@ export class VideoEnhancer {
     window.removeEventListener('resize', this.targetChangeHandler);
     document.removeEventListener('fullscreenchange', this.fullscreenChangeHandler);
     document.removeEventListener('webkitfullscreenchange', this.fullscreenChangeHandler);
+    if (window.top && window.top !== window) {
+      try {
+        window.top.removeEventListener('fullscreenchange', this.fullscreenChangeHandler);
+        window.top.removeEventListener('webkitfullscreenchange', this.fullscreenChangeHandler);
+      } catch {
+        // A cross-origin top document may reject listener removal; harmless.
+      }
+    }
     window.removeEventListener('anime4k-native-session', this.nativeSessionHandler);
     if (this.targetUpdateTimer) window.clearTimeout(this.targetUpdateTimer);
     if (this.fullscreenDebounceTimer) window.clearTimeout(this.fullscreenDebounceTimer);

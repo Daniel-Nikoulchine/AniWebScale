@@ -116,44 +116,10 @@ async function setExtensionSettings(
   if (!worker) throw new Error(`The expected extension service worker ${EXTENSION_ID} is not running.`);
   await worker.evaluate(async ({ enabled, settingsOverrides }) => {
     await chrome.storage.local.set({
-      aniwebscaleVerifiedLicenseV1: {
-        token: 'e2e-only',
-        userId: '00000000-0000-4000-8000-000000000001',
-        plan: 'pro',
-        status: 'active',
-        features: ['anime4k', 'webgpu', 'native_renderer', 'ai_models', 'frame_generation'],
-        expiresAt: Date.now() + 3_600_000,
-      },
-    });
-    await chrome.storage.local.set({
       extensionEnabled: true, mode: 'A', quality: 'M', output: 'auto', backend: 'webgpu', statsEnabled: true,
       autoFullscreenEnabled: enabled, frameGenerationEnabled: false, ...settingsOverrides,
     });
   }, { enabled: autoFullscreenEnabled, settingsOverrides: overrides });
-}
-
-async function setFreeExtensionSettings(context: BrowserContext): Promise<void> {
-  let worker = context.serviceWorkers().find(item => item.url().startsWith(`chrome-extension://${EXTENSION_ID}/`));
-  if (!worker) {
-    const extensionPage = await context.newPage();
-    await extensionPage.goto(`chrome-extension://${EXTENSION_ID}/options.html`);
-    worker = context.serviceWorkers().find(item => item.url().startsWith(`chrome-extension://${EXTENSION_ID}/`));
-    await extensionPage.close();
-  }
-  if (!worker) throw new Error(`The expected extension service worker ${EXTENSION_ID} is not running.`);
-  await worker.evaluate(async () => {
-    await chrome.storage.local.remove('aniwebscaleVerifiedLicenseV1');
-    await chrome.storage.local.set({
-      extensionEnabled: true,
-      mode: 'A',
-      quality: 'M',
-      output: 'auto',
-      backend: 'webgpu',
-      statsEnabled: true,
-      autoFullscreenEnabled: true,
-      frameGenerationEnabled: false,
-    });
-  });
 }
 
 test.beforeEach(async ({ extensionContext, extensionPage }) => {
@@ -294,52 +260,6 @@ test('presents enhancement modes with readable names and relevant controls', asy
     await expect(popup.locator('#backend')).toBeDisabled();
   } finally {
     await popup.close();
-  }
-});
-
-test('makes Free plan limits explicit wherever enhancement features are selected', async ({ extensionContext }) => {
-  await setFreeExtensionSettings(extensionContext);
-
-  const popup = await extensionContext.newPage();
-  try {
-    await popup.goto(`chrome-extension://${EXTENSION_ID}/popup.html`);
-    await expect(popup.locator('#account-plan strong')).toHaveText('Free');
-    await expect(popup.locator('#account-plan-summary')).toContainText('Free: Anime4K + WebGPU');
-    await expect(popup.locator('#account-plan-summary')).toContainText('Pro: AI, Native + Frame Gen');
-    await expect(popup.locator('#mode option[value="ARTCNN"]')).toHaveAttribute('disabled', '');
-    await expect(popup.locator('#mode option[value="ARTCNN"]')).toContainText('— Pro');
-    await expect(popup.locator('#backend option[value="auto"]')).toHaveText('Auto — Pro');
-    await expect(popup.locator('#backend option[value="native"]')).toHaveText('Native Windows renderer — Pro');
-    await expect(popup.locator('#frame-generation')).toBeDisabled();
-    await expect(popup.locator('#frame-generation-description')).toContainText('Pro feature');
-  } finally {
-    await popup.close();
-  }
-
-  const options = await extensionContext.newPage();
-  try {
-    await options.goto(`chrome-extension://${EXTENSION_ID}/options.html`);
-    await expect(options.locator('#account-plan')).toHaveText('Free');
-    await expect(options.locator('#account-details')).toContainText('require Pro');
-    await expect(options.locator('#account-upgrade')).toHaveText('Unlock Pro features');
-    await expect(options.locator('#compatibility-hint')).toContainText('Free plan active');
-    await expect(options.locator('#mode option[value="ARTCNN"]')).toHaveAttribute('disabled', '');
-    await expect(options.locator('#mode option[value="ARTCNN"]')).toContainText('— Pro');
-    await expect(options.locator('#frame-generation-description')).toContainText('Pro feature');
-  } finally {
-    await options.close();
-  }
-
-  const onboarding = await extensionContext.newPage();
-  try {
-    await onboarding.goto(`chrome-extension://${EXTENSION_ID}/onboarding.html`);
-    await expect(onboarding.locator('#plan-hint')).toContainText('Free plan');
-    await expect(onboarding.locator('#plan-hint')).toContainText('require Pro');
-    await expect(onboarding.locator('#mode option[value="ARTCNN"]')).toHaveAttribute('disabled', '');
-    await expect(onboarding.locator('#backend option[value="native"]')).toHaveText('Native Windows renderer — Pro');
-    await expect(onboarding.locator('#frame-generation')).toBeDisabled();
-  } finally {
-    await onboarding.close();
   }
 });
 

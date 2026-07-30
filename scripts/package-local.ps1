@@ -87,39 +87,6 @@ function Remove-RepositoryStage {
     Remove-Item -LiteralPath $resolvedStage -Recurse -Force
 }
 
-function Assert-ReleaseBrowserBundle {
-    param(
-        [Parameter(Mandatory)] [string] $BundleDirectory,
-        [Parameter(Mandatory)] [string] $ExpectedOrigin,
-        [Parameter(Mandatory)] [string] $ExpectedVersion
-    )
-
-    $bundleManifestPath = Join-Path $BundleDirectory 'manifest.json'
-    $bundleManifest = Get-Content -LiteralPath $bundleManifestPath -Raw | ConvertFrom-Json
-    if ([string] $bundleManifest.version -ne $ExpectedVersion) {
-        throw "Release bundle version mismatch in ${BundleDirectory}: expected $ExpectedVersion, found $($bundleManifest.version)."
-    }
-
-    $javascriptFiles = @(Get-ChildItem -LiteralPath $BundleDirectory -Recurse -File -Filter '*.js')
-    if ($javascriptFiles.Count -eq 0) {
-        throw "Release bundle contains no JavaScript: $BundleDirectory"
-    }
-    $originFound = $false
-    foreach ($file in $javascriptFiles) {
-        if (Select-String -LiteralPath $file.FullName -SimpleMatch -Quiet -Pattern $ExpectedOrigin) {
-            $originFound = $true
-        }
-        foreach ($forbiddenOrigin in @('http://localhost', 'http://127.0.0.1')) {
-            if (Select-String -LiteralPath $file.FullName -SimpleMatch -Quiet -Pattern $forbiddenOrigin) {
-                throw "Release bundle contains forbidden local origin $forbiddenOrigin in $($file.FullName)."
-            }
-        }
-    }
-    if (-not $originFound) {
-        throw "Release bundle does not contain the validated account origin ${ExpectedOrigin}: $BundleDirectory"
-    }
-}
-
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $artifactRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts'))
 $expectedPrefix = $repoRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
@@ -195,15 +162,6 @@ try {
     if ($RequireNativeSignature) {
         & npm.cmd run check:release-config
         if ($LASTEXITCODE -ne 0) { throw "Release configuration check failed with exit code $LASTEXITCODE." }
-        $expectedOrigin = ([Uri] $env:ANIME4K_ACCOUNT_API_URL).GetLeftPart([UriPartial]::Authority)
-        Assert-ReleaseBrowserBundle `
-            -BundleDirectory $chromeSource `
-            -ExpectedOrigin $expectedOrigin `
-            -ExpectedVersion $extensionVersion
-        Assert-ReleaseBrowserBundle `
-            -BundleDirectory $firefoxSource `
-            -ExpectedOrigin $expectedOrigin `
-            -ExpectedVersion $extensionVersion
         & (Join-Path $nativeRoot 'scripts\sign-release.ps1') `
             -BinaryDirectory $nativeSource -VerifyOnly
         if ($LASTEXITCODE -ne 0) { throw "Native signature verification failed with exit code $LASTEXITCODE." }

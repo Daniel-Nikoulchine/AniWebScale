@@ -352,5 +352,179 @@
   },
   "support": {
     "message": "Support"
+  },
+  "backToWebsite": {
+    "message": "Back to website"
+  },
+  "imprintKicker": {
+    "message": "LEGAL / IMPRINT"
+  },
+  "imprintTitle": {
+    "message": "Provider<br><em>information.</em>"
+  },
+  "imprintDate": {
+    "message": "Last updated: July 25, 2026"
+  },
+  "imprintS1Heading": {
+    "message": "Information pursuant to § 5 DDG"
+  },
+  "imprintS2Heading": {
+    "message": "Contact"
+  },
+  "imprintS2Email": {
+    "message": "Email: "
+  },
+  "imprintS3Heading": {
+    "message": "Consumer dispute resolution"
+  },
+  "imprintS3Text": {
+    "message": "We are neither obligated nor willing to participate in dispute resolution proceedings before a consumer arbitration board."
+  },
+  "imprintS4Heading": {
+    "message": "Trademarks and third-party content"
+  },
+  "imprintS4Text": {
+    "message": "Chrome, Firefox, Anime4K and other designations may be trademarks of their respective owners. Mention does not imply any affiliation or endorsement. AniWebScale does not bypass access controls or DRM systems."
+  },
+  "supportKicker": {
+    "message": "HELP / SUPPORT"
+  },
+  "supportTitle": {
+    "message": "We're here<br><em>to help.</em>"
+  },
+  "supportS1Heading": {
+    "message": "Contact"
+  },
+  "supportS1Text": {
+    "message": "Write to "
+  },
+  "supportS1Text2": {
+    "message": ". Include your browser, extension version, Windows version, GPU, affected website and the exact error message. If an error message shows a \"Support code\" ID, include it."
+  },
+  "supportS2Heading": {
+    "message": "Priorities"
+  },
+  "supportS2Text": {
+    "message": "General compatibility questions are handled in order of receipt. Protected streams may still produce black frames with Native enabled, because AniWebScale does not bypass DRM."
+  },
+  "termsKicker": {
+    "message": "LEGAL / TERMS"
+  },
+  "termsTitle": {
+    "message": "Terms of<br><em>Service.</em>"
+  },
+  "termsDate": {
+    "message": "Last updated: July 25, 2026"
+  },
+  "termsS1Heading": {
+    "message": "1. Subject matter"
+  },
+  "termsS1Text": {
+    "message": "AniWebScale is a free browser extension for local, real-time enhancement of video rendering using WebGPU and an optional Windows native renderer. All features (Anime4K presets, AI upscaling, native renderer, frame generation) are available free of charge and without an account."
+  },
+  "termsS2Heading": {
+    "message": "2. Performance"
+  },
+  "termsS2Text": {
+    "message": "AniWebScale enhances video rendering locally. Actual performance depends on browser, Windows version, GPU, drivers, source material and website, among other factors. Protected streams may prevent capture; AniWebScale does not bypass DRM."
+  },
+  "termsS3Heading": {
+    "message": "3. No purchase contract"
+  },
+  "termsS3Text": {
+    "message": "Since the extension is provided free of charge, no paid contract is formed. No payment data, accounts or billing information is processed."
+  },
+  "termsS4Heading": {
+    "message": "4. Acceptable use"
+  },
+  "termsS4Text": {
+    "message": "The extension and included open-source components (Anime4K, ArtCNN, ACNet, ARNet, Magpie-related shaders) remain under their respective licenses. Use must comply with applicable store policies and law. Circumventing technical protection measures of content providers is prohibited."
+  },
+  "termsS5Heading": {
+    "message": "5. Availability and updates"
+  },
+  "termsS5Text": {
+    "message": "Updates may be required for security, compatibility or functionality reasons. Short outages due to maintenance or third parties are possible. Statutory warranty and defect rights remain unaffected."
+  },
+  "termsS6Heading": {
+    "message": "6. Liability"
+  },
+  "termsS6Text": {
+    "message": "Liability is governed by statutory provisions. No specific availability or degree of result is guaranteed for free software."
+  },
+  "privacyKicker": {
+    "message": "LEGAL / PRIVACY"
+  },
+  "privacyTitle": {
+    "message": "Privacy,<br><em>plain and simple.</em>"
+  },
+  "privacyDate": {
+    "message": "Last updated: July 25, 2026"
+  },
+  "privacyS1Heading": {
+    "message": "1. Controller and data protection contact"
+  },
+  "privacyS1Contact": {
+    "message": "Email and data protection contact: "
+  },
+  "privacyS2Heading": {
+    "message": "2. Website, hosting and security logs"
+  },
+  "privacyS2Text": {
+    "message": "When you visit the site, the hosting provider processes technical connection data, in particular IP address, timestamp, browser/device information, requested URL and response status. The purposes are delivery, stability and attack prevention; the legal basis is Art. 6(1)(f) GDPR. AniWebScale does not use any advertising, analytics or profiling trackers. Application errors contain a support ID but no passwords, payment card data or video frames."
+  },
+  "privacyS3Heading": {
+    "message": "3. No account, no payment"
+  },
+  "privacyS3Text": {
+    "message": "AniWebScale is completely free and requires no account, no registration and no payment. No email addresses, passwords, customer data or billing data is collected. There is no pro license and no Stripe integration."
+  },
+  "privacyS4Heading": {
+    "message": "4. Browser extension and native renderer"
+  },
+  "privacyS4Text": {
+    "message": "Video processing, WebGPU models and the optional Windows native renderer run exclusively locally on the device. Video frames, visited pages and playback history are not transmitted to us. Settings, presets, theme and native site permissions are stored in chrome.storage.local or the corresponding local Firefox storage. No server communication is required for the extension to function."
+  },
+  "privacyS5Heading": {
+    "message": "5. Cookies and device storage"
+  },
+  "privacyS5Text": {
+    "message": "The website does not use cookies or marketing trackers. The main page uses the system setting for light or dark design without storing it. Only after an explicit theme selection is the key aniwebscale-theme stored in localStorage to provide the desired setting. The key can be removed via the browser's website data settings."
+  },
+  "privacyS6Heading": {
+    "message": "6. Recipients"
+  },
+  "privacyS6Text": {
+    "message": "As a purely static website, AniWebScale does not pass personal data on to third parties. The hosting provider processes the technical connection data mentioned in point 2 under its own responsibility."
+  },
+  "privacyS7Heading": {
+    "message": "7. Storage duration and deletion"
+  },
+  "privacyS7Text": {
+    "message": "Since no account data is collected, there is no specific deletion period for account data. Settings stored locally in the extension can be removed at any time by uninstalling the extension or clearing the website data in the browser."
+  },
+  "privacyS8Heading": {
+    "message": "8. Data subject rights"
+  },
+  "privacyS8Text": {
+    "message": "Data subjects may request access, rectification, erasure, restriction and data portability, and may withdraw consent for the future. Since AniWebScale does not store personal data, this is limited to data stored locally in the browser. There is also a right to lodge a complaint with a data protection supervisory authority, in particular the competent state commissioner for data protection and freedom of information."
+  },
+  "privacyS9Heading": {
+    "message": "9. Origin and changes"
+  },
+  "privacyS9Text": {
+    "message": "AniWebScale does not collect personal data directly from data subjects via the website. In the event of material changes, we will update this declaration and the displayed version information."
+  },
+  "footerImprint": {
+    "message": "Imprint"
+  },
+  "footerPrivacy": {
+    "message": "Privacy"
+  },
+  "footerTerms": {
+    "message": "Terms"
+  },
+  "footerSupport": {
+    "message": "Support"
   }
 }

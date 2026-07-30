@@ -22,7 +22,7 @@ export async function loadLocalization(root = document) {
   root.documentElement.lang = language;
   root.querySelectorAll('[data-i18n]').forEach(element => {
     const translated = t(element.dataset.i18n);
-    if (translated) element.textContent = translated;
+    if (translated) element.innerHTML = translated;
   });
   root.querySelectorAll('[data-i18n-aria-label]').forEach(element => {
     const translated = t(element.dataset.i18nAriaLabel);

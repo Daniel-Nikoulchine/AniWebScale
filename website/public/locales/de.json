@@ -352,5 +352,179 @@
   },
   "support": {
     "message": "Support"
+  },
+  "backToWebsite": {
+    "message": "Zur Website"
+  },
+  "imprintKicker": {
+    "message": "RECHTLICHES / IMPRESSUM"
+  },
+  "imprintTitle": {
+    "message": "Angaben zum<br><em>Anbieter.</em>"
+  },
+  "imprintDate": {
+    "message": "Stand: 25. Juli 2026"
+  },
+  "imprintS1Heading": {
+    "message": "Angaben gemäß § 5 DDG"
+  },
+  "imprintS2Heading": {
+    "message": "Kontakt"
+  },
+  "imprintS2Email": {
+    "message": "E-Mail: "
+  },
+  "imprintS3Heading": {
+    "message": "Verbraucherstreitbeilegung"
+  },
+  "imprintS3Text": {
+    "message": "Wir sind weder verpflichtet noch bereit, an Streitbeilegungsverfahren vor einer Verbraucherschlichtungsstelle teilzunehmen."
+  },
+  "imprintS4Heading": {
+    "message": "Marken und Inhalte Dritter"
+  },
+  "imprintS4Text": {
+    "message": "Chrome, Firefox, Anime4K und weitere Bezeichnungen können Marken ihrer jeweiligen Inhaber sein. Die Nennung bedeutet keine Verbindung oder Empfehlung. AniWebScale umgeht keine Zugangskontrollen oder DRM-Systeme."
+  },
+  "supportKicker": {
+    "message": "HILFE / SUPPORT"
+  },
+  "supportTitle": {
+    "message": "Wir helfen dir<br><em>weiter.</em>"
+  },
+  "supportS1Heading": {
+    "message": "Kontakt"
+  },
+  "supportS1Text": {
+    "message": "Schreibe an "
+  },
+  "supportS1Text2": {
+    "message": ". Gib Browser, Erweiterungsversion, Windows-Version, GPU, betroffene Website und die genaue Fehlermeldung an. Wenn eine Fehlermeldung eine „Support code“-ID zeigt, füge diese bei."
+  },
+  "supportS2Heading": {
+    "message": "Prioritäten"
+  },
+  "supportS2Text": {
+    "message": "Allgemeine Kompatibilitätsfragen werden in der Reihenfolge des Eingangs bearbeitet. Geschützte Streams können trotz Native schwarze Frames liefern, weil AniWebScale kein DRM umgeht."
+  },
+  "termsKicker": {
+    "message": "RECHTLICHES / AGB"
+  },
+  "termsTitle": {
+    "message": "Allgemeine<br><em>Geschäftsbedingungen.</em>"
+  },
+  "termsDate": {
+    "message": "Stand: 25. Juli 2026"
+  },
+  "termsS1Heading": {
+    "message": "1. Gegenstand"
+  },
+  "termsS1Text": {
+    "message": "AniWebScale ist eine kostenlose Browser-Erweiterung zur lokalen, Echtzeit-Verbesserung von Videoabbildungen mittels WebGPU und einem optionalen Windows-Native-Renderer. Sämtliche Funktionen (Anime4K-Presets, AI-Upscaling, Native-Renderer, Frame-Generation) sind ohne Entgelt und ohne Konto verfügbar."
+  },
+  "termsS2Heading": {
+    "message": "2. Leistung"
+  },
+  "termsS2Text": {
+    "message": "AniWebScale verbessert Videodarstellung lokal. Konkrete Leistung hängt unter anderem von Browser, Windows-Version, GPU, Treiber, Quelle und Website ab. Geschützte Streams können die Aufnahme verhindern; AniWebScale umgeht kein DRM."
+  },
+  "termsS3Heading": {
+    "message": "3. Kein Kaufvertrag"
+  },
+  "termsS3Text": {
+    "message": "Da die Erweiterung unentgeltlich bereitgestellt wird, kommt kein kostenpflichtiger Vertrag zustande. Es werden keine Zahlungsdaten, Konten oder Abrechnungen verarbeitet."
+  },
+  "termsS4Heading": {
+    "message": "4. Zulässige Nutzung"
+  },
+  "termsS4Text": {
+    "message": "Die Erweiterung und enthaltene Open-Source-Komponenten (Anime4K, ArtCNN, ACNet, ARNet, Magpie-nahe Shader) bleiben unter ihren jeweiligen Lizenzen. Die Nutzung erfolgt im Einklang mit den jeweiligen Store-Richtlinien und geltendem Recht. Es ist untersagt, technische Schutzmaßnahmen von Inhalteanbietern zu umgehen."
+  },
+  "termsS5Heading": {
+    "message": "5. Verfügbarkeit und Updates"
+  },
+  "termsS5Text": {
+    "message": "Updates können aus Sicherheits-, Kompatibilitäts- oder Funktionsgründen erforderlich sein. Kurzzeitige Ausfälle durch Wartung oder Drittanbieter sind möglich. Gesetzliche Gewährleistungs- und Mängelrechte bleiben unberührt."
+  },
+  "termsS6Heading": {
+    "message": "6. Haftung"
+  },
+  "termsS6Text": {
+    "message": "Die Haftung richtet sich nach den gesetzlichen Bestimmungen. Für eine kostenlose Software wird keine besondere Verfügbarkeit oder einen bestimmten Ergebnisgrad zugesichert."
+  },
+  "privacyKicker": {
+    "message": "RECHTLICHES / DATENSCHUTZ"
+  },
+  "privacyTitle": {
+    "message": "Datenschutz,<br><em>verständlich erklärt.</em>"
+  },
+  "privacyDate": {
+    "message": "Stand: 25. Juli 2026"
+  },
+  "privacyS1Heading": {
+    "message": "1. Verantwortlicher und Datenschutzkontakt"
+  },
+  "privacyS1Contact": {
+    "message": "E-Mail und Datenschutzkontakt: "
+  },
+  "privacyS2Heading": {
+    "message": "2. Website, Hosting und Sicherheitsprotokolle"
+  },
+  "privacyS2Text": {
+    "message": "Beim Aufruf verarbeitet der Hosting-Anbieter technische Verbindungsdaten, insbesondere IP-Adresse, Zeitpunkt, Browser-/Geräteangaben, angeforderte URL und Antwortstatus. Zwecke sind Auslieferung, Stabilität und Abwehr von Angriffen; Rechtsgrundlage ist Art. 6 Abs. 1 lit. f DSGVO. AniWebScale setzt keine Werbe-, Reichweiten- oder Profiling-Tracker ein. Anwendungsfehler enthalten eine Support-ID, jedoch keine Passwörter, Zahlungskartendaten oder Videoframes."
+  },
+  "privacyS3Heading": {
+    "message": "3. Kein Konto, keine Zahlung"
+  },
+  "privacyS3Text": {
+    "message": "AniWebScale ist vollständig kostenlos und benötigt kein Konto, keine Anmeldung und keine Zahlung. Es werden keine E-Mail-Adressen, Passwörter, Kundendaten oder Abrechnungsdaten erhoben. Es gibt keine Pro-Lizenz und keine Stripe-Anbindung."
+  },
+  "privacyS4Heading": {
+    "message": "4. Browser-Erweiterung und Native Renderer"
+  },
+  "privacyS4Text": {
+    "message": "Videoverarbeitung, WebGPU-Modelle und der optionale Windows-Native-Renderer laufen ausschließlich lokal auf dem Gerät. Videoframes, besuchte Seiten und Wiedergabeverlauf werden nicht an uns übertragen. Einstellungen, Presets, Theme und Native-Websitefreigaben liegen in chrome.storage.local beziehungsweise dem entsprechenden lokalen Firefox-Speicher. Für die Funktion der Erweiterung ist keine Server-Kommunikation erforderlich."
+  },
+  "privacyS5Heading": {
+    "message": "5. Cookies und Endgerätespeicherung"
+  },
+  "privacyS5Text": {
+    "message": "Die Website verwendet keine Cookies und keine Marketing-Tracker. Auf der Hauptseite wird die Systemeinstellung für helles oder dunkles Design ohne Speicherung verwendet. Erst nach einer ausdrücklichen Theme-Auswahl wird der Schlüssel aniwebscale-theme in localStorage gespeichert, um diese gewünschte Einstellung bereitzustellen. Der Schlüssel kann über die Browser-Website-Daten entfernt werden."
+  },
+  "privacyS6Heading": {
+    "message": "6. Empfänger"
+  },
+  "privacyS6Text": {
+    "message": "Als rein statische Website werden personenbezogene Daten durch AniWebScale nicht an Dritte weitergegeben. Der Hosting-Anbieter verarbeitet die unter Punkt 2 genannten technischen Verbindungsdaten in eigener Verantwortung."
+  },
+  "privacyS7Heading": {
+    "message": "7. Speicherdauer und Löschung"
+  },
+  "privacyS7Text": {
+    "message": "Da keine Kontodaten erhoben werden, entfällt eine spezifische Löschfrist für Account-Daten. Lokal in der Erweiterung gespeicherte Einstellungen können jederzeit durch Deinstallation der Erweiterung oder das Leeren der Website-Daten im Browser entfernt werden."
+  },
+  "privacyS8Heading": {
+    "message": "8. Betroffenenrechte"
+  },
+  "privacyS8Text": {
+    "message": "Betroffene Personen können Auskunft, Berichtigung, Löschung, Einschränkung und Datenübertragbarkeit verlangen sowie Einwilligungen für die Zukunft widerrufen. Da AniWebScale keine personenbezogenen Daten speichert, beschränkt sich dies auf die lokal im Browser liegenden Daten. Außerdem besteht ein Beschwerderecht bei einer Datenschutzaufsichtsbehörde, insbesondere der zuständigen Landesbeauftragten für Datenschutz und Informationsfreiheit."
+  },
+  "privacyS9Heading": {
+    "message": "9. Herkunft und Änderungen"
+  },
+  "privacyS9Text": {
+    "message": "AniWebScale erhebt keine personenbezogenen Daten direkt von betroffenen Personen über die Website. Bei wesentlichen Änderungen aktualisieren wir diese Erklärung und die angezeigte Versionsangabe."
+  },
+  "footerImprint": {
+    "message": "Impressum"
+  },
+  "footerPrivacy": {
+    "message": "Datenschutz"
+  },
+  "footerTerms": {
+    "message": "AGB"
+  },
+  "footerSupport": {
+    "message": "Support"
   }
 }

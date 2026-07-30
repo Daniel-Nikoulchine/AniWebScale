@@ -71,5 +71,5 @@ slider?.addEventListener('input', () => {
 
 const emailLink = document.querySelector('[data-support-email]');
 if (emailLink && !emailLink.getAttribute('href')?.startsWith('mailto:')) {
-  emailLink.href = 'mailto:hello@example.com';
+  emailLink.href = 'mailto:support@korrespont.com';
 }

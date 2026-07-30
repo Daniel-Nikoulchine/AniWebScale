@@ -21,10 +21,15 @@ describe('extension localization catalog', () => {
     expect(manifest.description).toBe('__MSG_description__');
   });
 
-  it('publishes the same catalogs for website and legal navigation', () => {
+  it('publishes the extension catalog as a subset of the website catalog', () => {
     for (const locale of ['en', 'de']) {
-      expect(JSON.parse(readFileSync(`website/public/locales/${locale}.json`, 'utf8')))
-        .toEqual(messages(locale));
+      const website = JSON.parse(readFileSync(`website/public/locales/${locale}.json`, 'utf8'));
+      const extension = messages(locale);
+      // Every extension key must exist on the website with the identical value;
+      // the website may carry additional marketing/legal-only keys on top.
+      for (const [key, value] of Object.entries(extension)) {
+        expect(website[key], `website locale "${locale}" is missing extension key "${key}"`).toEqual(value);
+      }
     }
   });
 });

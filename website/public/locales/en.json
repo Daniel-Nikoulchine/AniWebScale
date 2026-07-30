@@ -841,5 +841,17 @@
   },
   "langToggleAria": {
     "message": "Switch language"
+  },
+  "privacyPageTitle": {
+    "message": "Privacy – AniWebScale"
+  },
+  "termsPageTitle": {
+    "message": "Terms – AniWebScale"
+  },
+  "imprintPageTitle": {
+    "message": "Imprint – AniWebScale"
+  },
+  "supportPageTitle": {
+    "message": "Support – AniWebScale"
   }
 }

@@ -31,7 +31,7 @@ export function setLanguage(lang) {
 
 export async function loadLocalization(root = document) {
   const language = resolveLanguage();
-  const response = await fetch(`/locales/${language}.json`, { cache: 'force-cache' });
+  const response = await fetch(`/locales/${language}.json`, { cache: 'no-cache' });
   if (!response.ok) throw new Error(`Localization catalog unavailable (${response.status}).`);
   catalog = await response.json();
   root.documentElement.lang = language;

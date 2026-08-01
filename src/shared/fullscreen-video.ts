@@ -1,4 +1,18 @@
-import { ANIME4K_APPLIED_ATTR } from '../constants';
+import { ANIME4K_APPLIED_ATTR, ANIME4K_FULLSCREEN_DOCUMENT_ATTR } from '../constants';
+
+/**
+ * Tracks whether the Fullscreen API is currently active on this page.
+ * Set to true when a non-null fullscreenElement is observed, reset to false
+ * when fullscreenchange fires with a null element. This ensures the geometry
+ * fallback is only blocked immediately after an explicit API exit, not
+ * permanently (which would break CSS fullscreen in SPAs like YouTube/Netflix).
+ */
+let fullscreenApiActive = false;
+
+/** Reset the fullscreen API tracking state. Used by tests. */
+export function resetFullscreenApiTracking(): void {
+  fullscreenApiActive = false;
+}
 
 /** True when the video belongs to the composed subtree placed in fullscreen. */
 export function fullscreenContainsVideo(fullscreen: Element | null, video: HTMLVideoElement): boolean {
@@ -135,13 +149,26 @@ export function isVideoInFullscreenContext(
   // document.fullscreenElement is then null, so resolve the authoritative
   // top-level element before the local one.
   const fullscreen = getAuthoritativeFullscreenElement();
+  if (fullscreen) fullscreenApiActive = true;
   if (isFullscreenVideoEligible(fullscreen, video)) return true;
+  // When the Fullscreen API was active and the element just became null, the
+  // player explicitly exited fullscreen (minimize button, Esc, etc.). Block
+  // the geometry fallback for THIS call so the native renderer stops, then
+  // reset the flag so a later CSS fullscreen can still use the fallback.
+  if (fullscreenApiActive && !fullscreen) {
+    fullscreenApiActive = false;
+    return false;
+  }
   // A top-level document must have an actual Fullscreen API element. Without
   // this guard, Anime4K's own fixed fullscreen layout can keep satisfying the
   // geometry test after document.exitFullscreen(), causing a start/stop loop.
   // Embedded player frames may not expose the parent document's fullscreen
   // stack, so they retain the strict viewport/video geometry fallback.
-  if (!allowGeometryFallback) return false;
+  // Top-level pages using CSS fullscreen (no requestFullscreen call) also
+  // need the geometry fallback; allow it unless the extension's own layout
+  // is active, which would cause the loop described above.
+  const ownLayoutActive = document.documentElement?.hasAttribute(ANIME4K_FULLSCREEN_DOCUMENT_ATTR) ?? false;
+  if (!allowGeometryFallback && ownLayoutActive) return false;
   if (!isVisibleVideo(video, video.getAttribute(ANIME4K_APPLIED_ATTR) === 'true')) return false;
   // When the visible fullscreen element belongs to the top-level document,
   // measure against the top-level viewport rather than the (clipped) iframe.

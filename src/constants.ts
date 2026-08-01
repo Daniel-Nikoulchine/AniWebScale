@@ -4,6 +4,9 @@ export const ANIME4K_APPLIED_ATTR = 'data-anime4k-applied';
 /** Lets the page-world fullscreen bridge retarget direct video fullscreen. */
 export const ANIME4K_FULLSCREEN_AUTO_ATTR = 'data-anime4k-auto-fullscreen';
 
+/** Set by the document-start page bridge when any media element uses EME. */
+export const ANIME4K_PROTECTED_PLAYBACK_ATTR = 'data-anime4k-protected-playback';
+
 export const ANIME4K_FULLSCREEN_DOCUMENT_ATTR = 'data-anime4k-fullscreen-document';
 export const ANIME4K_FULLSCREEN_ROOT_ATTR = 'data-anime4k-fullscreen-root';
 export const ANIME4K_FULLSCREEN_VIDEO_ATTR = 'data-anime4k-fullscreen-video';

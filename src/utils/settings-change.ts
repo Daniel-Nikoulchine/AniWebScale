@@ -5,7 +5,6 @@ export const RENDER_SETTING_KEYS = new Set([
   'output',
   'backend',
   'statsEnabled',
-  'autoFullscreenEnabled',
   'frameGenerationEnabled',
   'selectedModeId',
 ]);

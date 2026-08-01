@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   allowsNativeFallback,
+  hasProtectedPlaybackSignal,
   isKnownProtectedPlaybackHost,
   selectInitialBackend,
 } from '../src/shared/backend-selection';
@@ -83,5 +84,20 @@ describe('known protected playback hosts', () => {
     expect(isKnownProtectedPlaybackHost('WWW.CRUNCHYROLL.COM.')).toBe(true);
     expect(isKnownProtectedPlaybackHost('crunchyroll.com.example.org')).toBe(false);
     expect(isKnownProtectedPlaybackHost('example.org')).toBe(false);
+  });
+
+  it('uses a page-level DRM signal on every website instead of relying on a hostname list', () => {
+    expect(hasProtectedPlaybackSignal({
+      encryptedDetected: false,
+      hasMediaKeys: false,
+      pageProtectedPlaybackDetected: true,
+      hostname: 'video.example.org',
+    })).toBe(true);
+    expect(hasProtectedPlaybackSignal({
+      encryptedDetected: false,
+      hasMediaKeys: false,
+      pageProtectedPlaybackDetected: false,
+      hostname: 'video.example.org',
+    })).toBe(false);
   });
 });

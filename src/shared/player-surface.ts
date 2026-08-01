@@ -13,6 +13,15 @@ export function isPlausiblePlayerSurface(video: RectSize, candidate: RectSize): 
     && candidate.height <= video.height * 1.22;
 }
 
+export function selectNativeCaptureSurfaceScope(options: {
+  fullscreenContainsVideo: boolean;
+  hasLocalFullscreenElement: boolean;
+}): 'fullscreen' | 'player' {
+  return options.hasLocalFullscreenElement && options.fullscreenContainsVideo
+    ? 'fullscreen'
+    : 'player';
+}
+
 function composedParent(element: Element): HTMLElement | null {
   if (element.parentElement) return element.parentElement;
   const root = element.getRootNode();

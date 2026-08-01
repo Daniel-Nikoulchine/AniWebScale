@@ -22,7 +22,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const quality = document.getElementById('quality') as HTMLSelectElement;
   const backend = document.getElementById('backend') as HTMLSelectElement;
   const statistics = document.getElementById('statistics') as HTMLInputElement;
-  const autoFullscreen = document.getElementById('auto-fullscreen') as HTMLInputElement;
   const frameGeneration = document.getElementById('frame-generation') as HTMLInputElement;
   const modeDescription = document.getElementById('mode-description') as HTMLElement;
   const modeProfile = document.getElementById('mode-profile') as HTMLElement;
@@ -48,7 +47,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   quality.value = settings.quality;
   backend.value = settings.backend;
   statistics.checked = settings.statsEnabled;
-  autoFullscreen.checked = settings.autoFullscreenEnabled;
   frameGeneration.checked = settings.frameGenerationEnabled;
   theme.value = initialTheme;
 
@@ -115,7 +113,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       output: 'auto' as const,
       backend: backend.value as RenderBackend,
       statsEnabled: statistics.checked,
-      autoFullscreenEnabled: autoFullscreen.checked,
+      autoFullscreenEnabled: true,
       frameGenerationEnabled: frameGeneration.checked,
     };
     try {

@@ -1,5 +1,3 @@
-const SITE_ACCESS_MIGRATION_KEY = 'anime4kGranularSiteAccessV1';
-const LEGACY_BROAD_PATTERNS = ['http://*/*', 'https://*/*'];
 const REGISTERED_SCRIPT_IDS = [
   'aniwebscale-fullscreen-bridge',
   'aniwebscale-content',
@@ -7,50 +5,6 @@ const REGISTERED_SCRIPT_IDS = [
 
 function isHttpMatchPattern(pattern: string): boolean {
   return /^https?:\/\/[^/]+\/\*$/.test(pattern);
-}
-
-function sameStrings(left: string[] | undefined, right: string[]): boolean {
-  if (!left || left.length !== right.length) return false;
-  return [...left].sort().every((value, index) => value === [...right].sort()[index]);
-}
-
-function desiredContentScripts(matches: string[]): chrome.scripting.RegisteredContentScript[] {
-  return [
-    {
-      id: REGISTERED_SCRIPT_IDS[0],
-      matches,
-      js: ['fullscreen-bridge.js'],
-      runAt: 'document_start',
-      allFrames: true,
-      matchOriginAsFallback: true,
-      persistAcrossSessions: true,
-      world: 'MAIN',
-    },
-    {
-      id: REGISTERED_SCRIPT_IDS[1],
-      matches,
-      js: ['content.js'],
-      runAt: 'document_idle',
-      allFrames: true,
-      matchOriginAsFallback: true,
-      persistAcrossSessions: true,
-      world: 'ISOLATED',
-    },
-  ];
-}
-
-function sameRegistration(
-  actual: chrome.scripting.RegisteredContentScript,
-  desired: chrome.scripting.RegisteredContentScript,
-): boolean {
-  return actual.id === desired.id
-    && sameStrings(actual.matches, desired.matches ?? [])
-    && sameStrings(actual.js, desired.js ?? [])
-    && actual.runAt === desired.runAt
-    && actual.allFrames === desired.allFrames
-    && actual.matchOriginAsFallback === desired.matchOriginAsFallback
-    && actual.persistAcrossSessions === desired.persistAcrossSessions
-    && actual.world === desired.world;
 }
 
 export function sitePatternForUrl(input: string | undefined): string | null {
@@ -90,37 +44,26 @@ export async function removeSiteAccessPatterns(patterns: string[]): Promise<bool
 }
 
 export async function migrateLegacyBroadSiteAccess(): Promise<void> {
-  const stored = await chrome.storage.local.get(SITE_ACCESS_MIGRATION_KEY);
-  if (stored[SITE_ACCESS_MIGRATION_KEY] === true) return;
-
-  const granted = await getGrantedSitePatterns();
-  const legacy = LEGACY_BROAD_PATTERNS.filter(pattern => granted.includes(pattern));
-  if (legacy.length > 0) await chrome.permissions.remove({ origins: legacy });
-  await chrome.storage.local.set({ [SITE_ACCESS_MIGRATION_KEY]: true });
+  // Content scripts are now declared directly in manifest.json with
+  // host_permissions for all sites. The legacy migration that removed broad
+  // optional permissions is no longer needed and must not run, otherwise it
+  // would strip the host_permissions that the manifest-declared scripts rely on.
 }
 
 export async function synchronizeRegisteredContentScripts(): Promise<void> {
-  const matches = await getGrantedSitePatterns();
-  const existing = await chrome.scripting.getRegisteredContentScripts({
-    ids: [...REGISTERED_SCRIPT_IDS],
-  });
-
-  if (matches.length === 0) {
+  // Content scripts are declared in manifest.json. Dynamic registration via
+  // chrome.scripting is no longer used. Clean up any stale registrations from
+  // previous versions so they don't conflict with the manifest-declared ones.
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts({
+      ids: [...REGISTERED_SCRIPT_IDS],
+    });
     if (existing.length > 0) {
       await chrome.scripting.unregisterContentScripts({ ids: existing.map(script => script.id) });
     }
-    return;
+  } catch {
+    // Ignore errors during cleanup.
   }
-
-  const desired = desiredContentScripts(matches);
-  const isCurrent = existing.length === desired.length
-    && desired.every(script => existing.some(candidate => sameRegistration(candidate, script)));
-  if (isCurrent) return;
-
-  if (existing.length > 0) {
-    await chrome.scripting.unregisterContentScripts({ ids: existing.map(script => script.id) });
-  }
-  await chrome.scripting.registerContentScripts(desired);
 }
 
 export async function injectSiteScripts(tabId: number): Promise<void> {

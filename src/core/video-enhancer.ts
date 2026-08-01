@@ -1,4 +1,8 @@
-import { ANIME4K_APPLIED_ATTR, ANIME4K_FULLSCREEN_AUTO_ATTR } from '../constants';
+import {
+  ANIME4K_APPLIED_ATTR,
+  ANIME4K_FULLSCREEN_AUTO_ATTR,
+  ANIME4K_PROTECTED_PLAYBACK_ATTR,
+} from '../constants';
 import type {
   Anime4KWebExtSettings,
   Dimensions,
@@ -12,7 +16,7 @@ import {
 } from '../shared/presets';
 import {
   allowsNativeFallback,
-  isKnownProtectedPlaybackHost,
+  hasProtectedPlaybackSignal,
   selectInitialBackend,
 } from '../shared/backend-selection';
 import type { SelectedBackend } from '../shared/backend-selection';
@@ -115,7 +119,6 @@ export class VideoEnhancer {
     if (!ended) return;
     const retryCaptureAfterFailedExit = detail.type === 'stopped'
       && detail.reason === 'capture_window_closed'
-      && Boolean(this.currentSettings?.autoFullscreenEnabled)
       && isVideoInFullscreenContext(this.video);
     if (this.switchingFromNative) {
       this.nativeActive = false;
@@ -149,11 +152,21 @@ export class VideoEnhancer {
     void this.handleEncryptedPlayback();
   };
 
+  private readonly pageProtectedPlaybackHandler = () => {
+    if (this.encryptedDetected) return;
+    this.encryptedDetected = true;
+    void this.handleEncryptedPlayback();
+  };
+
   private constructor(private video: HTMLVideoElement) {
     this.videoId = crypto.randomUUID?.() ?? `anime4k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     this.video.dataset.anime4kVideoId = this.videoId;
     VideoEnhancer.managedEnhancers.add(this);
     this.video.addEventListener('encrypted', this.encryptedHandler);
+    window.addEventListener('anime4k-protected-playback', this.pageProtectedPlaybackHandler);
+    if (document.documentElement?.hasAttribute(ANIME4K_PROTECTED_PLAYBACK_ATTR)) {
+      this.encryptedDetected = true;
+    }
     this.overlay = OverlayManager.create(this.video);
     this.fullscreenLayout = new FullscreenLayoutManager(this.video);
     this.targetResizeObserver = new ResizeObserver(this.targetChangeHandler);
@@ -179,7 +192,7 @@ export class VideoEnhancer {
       if (this.destroyed) return;
       this.currentSettings = settings;
       this.applyFullscreenMarker(
-        settings.autoFullscreenEnabled && isProcessingEnabled(settings.mode, settings.frameGenerationEnabled),
+        isProcessingEnabled(settings.mode, settings.frameGenerationEnabled),
       );
       this.scheduleFullscreenReconcile(0);
     }).catch(error => {
@@ -201,9 +214,14 @@ export class VideoEnhancer {
   }
 
   private isProtectedPlayback(): boolean {
-    return this.encryptedDetected
-      || Boolean(this.video.mediaKeys)
-      || isKnownProtectedPlaybackHost(location.hostname);
+    return hasProtectedPlaybackSignal({
+      encryptedDetected: this.encryptedDetected,
+      hasMediaKeys: Boolean(this.video.mediaKeys),
+      pageProtectedPlaybackDetected: Boolean(
+        document.documentElement?.hasAttribute(ANIME4K_PROTECTED_PLAYBACK_ATTR),
+      ),
+      hostname: location.hostname,
+    });
   }
 
   private selectBackend(settings: Anime4KWebExtSettings): SelectedBackend {
@@ -569,7 +587,7 @@ export class VideoEnhancer {
     const previousOversharpenWarning = this.oversharpenWarning;
     this.currentSettings = newSettings;
     this.currentModeId = processingEnabled ? MODE_TO_ID[newSettings.mode] : null;
-    this.applyFullscreenMarker(newSettings.autoFullscreenEnabled && processingEnabled);
+    this.applyFullscreenMarker(processingEnabled);
 
     if (!processingEnabled) {
       this.automaticSession = false;
@@ -582,12 +600,6 @@ export class VideoEnhancer {
       return;
     }
 
-    if (!newSettings.autoFullscreenEnabled) {
-      this.automaticSession = false;
-      if (this.renderer || this.nativeActive || this.startingRevision !== null
-          || this.pendingNativeStarts.size > 0) await this.stopEnhancement();
-      return;
-    }
     if (!this.renderer && !this.nativeActive) {
       if (this.startingRevision !== null || this.pendingNativeStarts.size > 0) {
         await this.stopEnhancement();
@@ -620,10 +632,10 @@ export class VideoEnhancer {
           if (!this.isTransitionCurrent(revision)) return;
           this.currentSettings = previousSettings;
           this.currentModeId = previousModeId;
-          this.applyFullscreenMarker(Boolean(
-            previousSettings?.autoFullscreenEnabled
+          this.applyFullscreenMarker(
+            previousSettings !== null
               && isProcessingEnabled(previousSettings.mode, previousSettings.frameGenerationEnabled),
-          ));
+          );
           throw error;
         }
         return;
@@ -708,10 +720,10 @@ export class VideoEnhancer {
       this.currentModeId = previousModeId;
       this.oversharpenWarning = previousOversharpenWarning;
       this.updateWarningDisplay();
-      this.applyFullscreenMarker(Boolean(
-        previousSettings?.autoFullscreenEnabled
+      this.applyFullscreenMarker(
+        previousSettings !== null
           && isProcessingEnabled(previousSettings.mode, previousSettings.frameGenerationEnabled),
-      ));
+      );
       if (this.renderer === renderer && renderer.isDestroyed()) await this.stopEnhancement(false);
       throw error;
     }
@@ -743,10 +755,10 @@ export class VideoEnhancer {
     this.fullscreenLayout.updateVideo(newVideo);
     this.video.dataset.anime4kVideoId = this.videoId;
     this.video.addEventListener('encrypted', this.encryptedHandler);
-    this.applyFullscreenMarker(Boolean(
-      this.currentSettings?.autoFullscreenEnabled
+    this.applyFullscreenMarker(
+      this.currentSettings !== null
         && isProcessingEnabled(this.currentSettings.mode, this.currentSettings.frameGenerationEnabled),
-    ));
+    );
     this.targetResizeObserver.disconnect();
     this.targetResizeObserver.observe(this.video);
     this.overlay.reattach(newVideo);
@@ -774,6 +786,7 @@ export class VideoEnhancer {
     this.destroyed = true;
     VideoEnhancer.managedEnhancers.delete(this);
     this.video.removeEventListener('encrypted', this.encryptedHandler);
+    window.removeEventListener('anime4k-protected-playback', this.pageProtectedPlaybackHandler);
     this.targetResizeObserver.disconnect();
     window.removeEventListener('resize', this.targetChangeHandler);
     document.removeEventListener('fullscreenchange', this.fullscreenChangeHandler);
@@ -873,7 +886,7 @@ export class VideoEnhancer {
     if (this.destroyed || revision !== this.fullscreenRevision) return;
     this.currentSettings = settings;
     const processingEnabled = isProcessingEnabled(settings.mode, settings.frameGenerationEnabled);
-    this.applyFullscreenMarker(settings.autoFullscreenEnabled && processingEnabled);
+    this.applyFullscreenMarker(processingEnabled);
     const preferredFullscreenVideo = this.isPreferredFullscreenVideo();
     if (!hasFullscreenContext(
       getFullscreenElement(),
@@ -886,8 +899,7 @@ export class VideoEnhancer {
       },
       window.top !== window,
     )) this.nativeRetryBlocked = false;
-    const shouldRun = settings.autoFullscreenEnabled
-      && processingEnabled
+    const shouldRun = processingEnabled
       && preferredFullscreenVideo
       && !this.nativeRetryBlocked;
 

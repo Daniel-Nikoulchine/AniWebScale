@@ -42,7 +42,17 @@ export class FullscreenLayoutManager {
     if (!fullscreen || this.state) return;
     activeManager?.exit();
 
-    const root = choosePlayerSurface(this.video, fullscreen);
+    // Use the browser's fullscreen element itself as the layout root instead
+    // of choosePlayerSurface()'s tight video wrapper. Player control bars
+    // (progress bar, pause button, volume …) are frequently SIBLINGS of that
+    // tight wrapper, not descendants. With the tight wrapper as root, the
+    // visibility:hidden rule below permanently hid them — even when the player
+    // tried to reveal them on mouse movement. The fullscreen element already
+    // fills the viewport in native fullscreen, so making it the root keeps every
+    // player control visible and interactive while the video CSS still fills it.
+    const root = fullscreen instanceof HTMLElement
+      ? fullscreen
+      : choosePlayerSurface(this.video, fullscreen);
     const ancestors = playerAncestorPath(root, fullscreen);
     const state: LayoutState = { root, video: this.video, ancestors };
     this.state = state;

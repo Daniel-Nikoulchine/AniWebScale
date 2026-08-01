@@ -7,7 +7,14 @@ import { initializeOnPage, handleSettingsUpdate } from './core/video-manager';
 import { getEnhancer } from './core/enhancer-map';
 import { selectNativeSurfacePointerAction } from './shared/native-pointer-controls';
 import { selectPointerMediaFallback, type DirectMediaCommand } from './shared/pointer-fallback';
-import { isVideoInFullscreenContext } from './shared/fullscreen-video';
+import {
+  fullscreenContainsVideo,
+  isVideoInFullscreenContext,
+} from './shared/fullscreen-video';
+import {
+  choosePlayerSurface,
+  selectNativeCaptureSurfaceScope,
+} from './shared/player-surface';
 import {
   calculateIntrinsicCaptureStage,
   type IntrinsicCaptureStage,
@@ -132,25 +139,17 @@ function selectVideo(videoId?: string): HTMLVideoElement | null {
 }
 
 function chooseCaptureRoot(video: HTMLVideoElement): HTMLElement {
-  const videoRect = video.getBoundingClientRect();
   const fullscreenElement = document.fullscreenElement;
-  let candidate: HTMLElement = video;
-  let current = video.parentElement;
-  let depth = 0;
-
-  while (current && current !== document.body && current !== document.documentElement && depth < 8) {
-    // Browsers force the top-layer fullscreen element to fill the viewport
-    // with user-agent !important rules. Stage its nearest suitable child so
-    // the decoded video and caption layer can actually be resized together.
-    if (current === fullscreenElement) break;
-    const rect = current.getBoundingClientRect();
-    const containsVideo = rect.width >= videoRect.width * 0.85 && rect.height >= videoRect.height * 0.85;
-    const playerSized = rect.width <= videoRect.width * 1.5 && rect.height <= videoRect.height * 1.8;
-    if (containsVideo && playerSized) candidate = current;
-    current = current.parentElement;
-    depth++;
-  }
-  return candidate;
+  const scope = selectNativeCaptureSurfaceScope({
+    hasLocalFullscreenElement: fullscreenElement instanceof HTMLElement,
+    fullscreenContainsVideo: fullscreenContainsVideo(fullscreenElement, video),
+  });
+  // If this document owns a fullscreen subtree containing the selected video,
+  // capture the whole subtree so site controls remain part of the frame. For
+  // embedded/cross-origin players, choose the compact local player surface;
+  // their document.fullscreenElement may be null or unrelated to the video.
+  if (scope === 'fullscreen' && fullscreenElement instanceof HTMLElement) return fullscreenElement;
+  return choosePlayerSurface(video, fullscreenElement);
 }
 
 function intrinsicCaptureStage(video: HTMLVideoElement): IntrinsicCaptureStage {
@@ -573,12 +572,29 @@ function dispatchPointer(message: Record<string, unknown>): void {
     composed: true,
     clientX,
     clientY,
-    button: typeof message.button === 'number' ? message.button : -1,
+    // MouseEvent.button must be >= 0 per the DOM spec; -1 is only valid for
+    // PointerEvent. The native protocol sends -1 for "no button changed" on
+    // move events, so clamp it to 0 here and default to 0 when absent.
+    button: typeof message.button === 'number' ? Math.max(0, message.button) : 0,
     buttons: typeof message.buttons === 'number' ? message.buttons : 0,
     shiftKey: message.shiftKey === true,
     ctrlKey: message.ctrlKey === true,
     altKey: message.altKey === true,
   }));
+  // Players typically reveal their control bar on pointerover / mouseover,
+  // not on every move. Dispatch the corresponding over-events so synthetic
+  // pointer traffic from the native output window still triggers the UI.
+  if (message.event === 'move') {
+    target.dispatchEvent(new PointerEvent('pointerover', {
+      bubbles: true, cancelable: true, composed: true,
+      pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      clientX, clientY, button: 0, buttons: 0,
+    }));
+    target.dispatchEvent(new MouseEvent('mouseover', {
+      bubbles: true, cancelable: true, composed: true,
+      clientX, clientY, button: 0, buttons: 0,
+    }));
+  }
   if (message.event === 'up' && message.button === 0) {
     target.dispatchEvent(new MouseEvent('click', {
       bubbles: true,

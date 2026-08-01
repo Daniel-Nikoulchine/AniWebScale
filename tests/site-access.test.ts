@@ -67,41 +67,20 @@ describe('site access', () => {
     expect(sitePatternForUrl(undefined)).toBeNull();
   });
 
-  it('removes legacy all-sites grants only during the one-time migration', async () => {
-    const first = installChromeMock({ origins: ['http://*/*', 'https://*/*'] });
+  it('migration is a no-op now that scripts are manifest-declared', async () => {
+    const mock = installChromeMock({ origins: ['http://*/*', 'https://*/*'] });
     await migrateLegacyBroadSiteAccess();
-
-    expect(first.remove).toHaveBeenCalledWith({ origins: ['http://*/*', 'https://*/*'] });
-    expect(first.storageSet).toHaveBeenCalledWith({ anime4kGranularSiteAccessV1: true });
-
-    vi.unstubAllGlobals();
-    const migrated = installChromeMock({ origins: ['https://*/*'], migrated: true });
-    await migrateLegacyBroadSiteAccess();
-    expect(migrated.remove).not.toHaveBeenCalled();
+    expect(mock.remove).not.toHaveBeenCalled();
+    expect(mock.storageSet).not.toHaveBeenCalled();
   });
 
-  it('registers both scripts only for explicitly granted origins', async () => {
+  it('does not register scripts dynamically; manifest handles injection', async () => {
     const mock = installChromeMock({ origins: ['https://video.example/*'] });
     await synchronizeRegisteredContentScripts();
-
-    expect(mock.registerContentScripts).toHaveBeenCalledOnce();
-    const scripts = mock.registerContentScripts.mock.calls[0][0];
-    expect(scripts).toHaveLength(2);
-    expect(scripts[0]).toMatchObject({
-      id: 'aniwebscale-fullscreen-bridge',
-      matches: ['https://video.example/*'],
-      world: 'MAIN',
-      runAt: 'document_start',
-    });
-    expect(scripts[1]).toMatchObject({
-      id: 'aniwebscale-content',
-      matches: ['https://video.example/*'],
-      world: 'ISOLATED',
-      runAt: 'document_idle',
-    });
+    expect(mock.registerContentScripts).not.toHaveBeenCalled();
   });
 
-  it('unregisters stale scripts after the final site grant is removed', async () => {
+  it('cleans up stale dynamic registrations from previous versions', async () => {
     const mock = installChromeMock({
       registered: [{ id: 'aniwebscale-content', matches: ['https://video.example/*'] }],
     });

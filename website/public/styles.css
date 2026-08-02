@@ -230,3 +230,10 @@ h1 em, h2 em { color: var(--primary); font-style: normal; }
 .step-number { font-size: 11px; }
 
 .availability-note { font-size: 12px !important; }
+
+/* Coming-soon store badges: gentle pulse so the placeholder reads as intentional. */
+.store-status { animation: store-badge-pulse 2.6s ease-in-out infinite; }
+@keyframes store-badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}

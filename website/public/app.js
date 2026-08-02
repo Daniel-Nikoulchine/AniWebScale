@@ -80,8 +80,8 @@ document.querySelectorAll('.store-link').forEach(link => {
   link.addEventListener('click', event => {
     event.preventDefault();
     const msg = document.documentElement.lang === 'de'
-      ? 'Store-Listing folgt bald – die Erweiterung ist noch nicht im Store verfügbar.'
-      : 'Store listing coming soon – the extension is not yet available in the store.';
+      ? 'Store-Listing folgt bald. Die Erweiterung ist noch nicht im Store verfügbar.'
+      : 'Store listing coming soon. The extension is not yet available in the store.';
     showToast(msg);
   });
 });

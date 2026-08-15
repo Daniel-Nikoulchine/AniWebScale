@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   NATIVE_PROTOCOL_VERSION,
+  clampNativePointerCoords,
   isNativeConfiguration,
   isNativeEnhancementMode,
   isNativeEvent,
+  isNativeMediaCommandName,
+  isNativePointerEventPayload,
+  isNativePointerEventType,
   isNativeQuality,
   isWindowNonce,
+  NATIVE_MEDIA_COMMAND_NAMES,
+  NATIVE_POINTER_EVENT_TYPES,
 } from '../src/native/protocol';
 
 describe('native messaging protocol', () => {
@@ -74,5 +80,36 @@ describe('native messaging protocol', () => {
       requestId: 'request-1',
     })).toBe(false);
     expect(isNativeEvent(null)).toBe(false);
+  });
+
+  it('validates the shared media-command vocabulary', () => {
+    for (const command of NATIVE_MEDIA_COMMAND_NAMES) {
+      expect(isNativeMediaCommandName(command)).toBe(true);
+    }
+    expect(isNativeMediaCommandName('bogus')).toBe(false);
+    expect(isNativeMediaCommandName(undefined)).toBe(false);
+    expect(NATIVE_MEDIA_COMMAND_NAMES).toContain('exitFullscreen');
+    expect(NATIVE_MEDIA_COMMAND_NAMES).toContain('playPause');
+  });
+
+  it('validates the shared pointer event types', () => {
+    for (const type of NATIVE_POINTER_EVENT_TYPES) {
+      expect(isNativePointerEventType(type)).toBe(true);
+    }
+    expect(isNativePointerEventType('hover')).toBe(false);
+    expect(isNativePointerEventType(7)).toBe(false);
+  });
+
+  it('validates native pointer payloads and clamps coordinates', () => {
+    expect(isNativePointerEventPayload({ event: 'move', x: 0.5, y: 0.5 })).toBe(true);
+    expect(isNativePointerEventPayload({ event: 'down', x: 1, y: 0, button: 0, buttons: 1 })).toBe(true);
+    expect(isNativePointerEventPayload({ event: 'move', x: 1.5, y: 0.5 })).toBe(false);
+    expect(isNativePointerEventPayload({ event: 'move', x: -0.1, y: 0.5 })).toBe(false);
+    expect(isNativePointerEventPayload({ event: 'hover', x: 0.5, y: 0.5 })).toBe(false);
+    expect(isNativePointerEventPayload({ event: 'move', x: 'not-a-number', y: 0.5 })).toBe(false);
+
+    expect(clampNativePointerCoords(1.5, -0.2)).toEqual({ x: 1, y: 0 });
+    expect(clampNativePointerCoords(0.3, 0.7)).toEqual({ x: 0.3, y: 0.7 });
+    expect(clampNativePointerCoords(Number.NaN, 0.5)).toEqual({ x: 0, y: 0.5 });
   });
 });

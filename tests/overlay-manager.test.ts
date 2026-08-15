@@ -1,14 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OverlayManager } from '../src/core/overlay-manager';
+import { applyTemporaryProperty } from '../src/shared/temporary-restyle';
 
 function bareOverlay(): any {
   const overlay = Object.create(OverlayManager.prototype) as any;
   overlay.canvas = undefined;
   overlay.canvasVisible = false;
-  overlay.originalOpacity = '';
-  overlay.originalOpacityPriority = '';
-  overlay.appliedOpacity = '';
-  overlay.appliedOpacityPriority = '';
+  overlay.opacitySnapshot = new Map();
   overlay.opacityManaged = false;
   overlay.destroyed = false;
   overlay.positionUpdateFrame = null;
@@ -51,12 +49,9 @@ describe('overlay lifecycle', () => {
   it('restores the exact site opacity after hiding a visible canvas', () => {
     const overlay = bareOverlay();
     const remove = vi.fn();
-    const style = opacityStyle('0', 'important');
+    const style = opacityStyle('0.65');
     overlay.video = { style };
-    overlay.originalOpacity = '0.65';
-    overlay.originalOpacityPriority = 'important';
-    overlay.appliedOpacity = '0';
-    overlay.appliedOpacityPriority = 'important';
+    overlay.opacitySnapshot = applyTemporaryProperty(overlay.video, 'opacity', '0');
     overlay.opacityManaged = true;
     overlay.canvasVisible = true;
     overlay.canvas = { remove };
@@ -64,19 +59,16 @@ describe('overlay lifecycle', () => {
     overlay.hideCanvas();
 
     expect(overlay.video.style.opacity).toBe('0.65');
-    expect(style.getPropertyPriority('opacity')).toBe('important');
+    expect(style.getPropertyPriority('opacity')).toBe('');
     expect(remove).toHaveBeenCalledOnce();
     expect(overlay.canvasVisible).toBe(false);
   });
 
   it('preserves a site opacity change made while the canvas is visible', () => {
     const overlay = bareOverlay();
-    const style = opacityStyle('0', 'important');
+    const style = opacityStyle('0.65');
     overlay.video = { style };
-    overlay.originalOpacity = '0.65';
-    overlay.originalOpacityPriority = '';
-    overlay.appliedOpacity = '0';
-    overlay.appliedOpacityPriority = 'important';
+    overlay.opacitySnapshot = applyTemporaryProperty(overlay.video, 'opacity', '0');
     overlay.opacityManaged = true;
     overlay.canvasVisible = true;
     style.setProperty('opacity', '0.8');

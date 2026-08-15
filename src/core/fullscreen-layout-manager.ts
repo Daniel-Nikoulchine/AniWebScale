@@ -5,6 +5,11 @@ import {
   ANIME4K_FULLSCREEN_VIDEO_ATTR,
 } from '../constants';
 import { choosePlayerSurface, playerAncestorPath } from '../shared/player-surface';
+import {
+  applyTemporaryStyles,
+  restoreTemporaryStyles,
+  type TemporaryInlineStyles,
+} from '../shared/temporary-restyle';
 
 const STYLE_ID = 'anime4k-fullscreen-layout-style';
 let activeManager: FullscreenLayoutManager | null = null;
@@ -16,15 +21,6 @@ interface LayoutState {
   rootStyles?: TemporaryInlineStyles;
   videoStyles?: TemporaryInlineStyles;
 }
-
-interface TemporaryInlineStyle {
-  originalValue: string;
-  originalPriority: string;
-  appliedValue: string;
-  appliedPriority: string;
-}
-
-type TemporaryInlineStyles = Map<string, TemporaryInlineStyle>;
 
 export class FullscreenLayoutManager {
   private state: LayoutState | null = null;
@@ -73,7 +69,7 @@ export class FullscreenLayoutManager {
         'margin-top': '0', 'margin-right': '0', 'margin-bottom': '0', 'margin-left': '0',
         transform: 'none', overflow: 'hidden', 'background-color': '#000', visibility: 'visible',
       };
-      state.rootStyles = this.applyTemporaryStyles(root, properties);
+      state.rootStyles = applyTemporaryStyles(root, properties);
     }
     if (this.video.getRootNode() instanceof ShadowRoot) {
       const properties: Record<string, string> = {
@@ -83,7 +79,7 @@ export class FullscreenLayoutManager {
         'margin-bottom': '0', 'margin-left': '0', transform: 'none',
         'background-color': '#000', visibility: 'visible',
       };
-      state.videoStyles = this.applyTemporaryStyles(this.video, properties);
+      state.videoStyles = applyTemporaryStyles(this.video, properties);
     }
   }
 
@@ -93,41 +89,13 @@ export class FullscreenLayoutManager {
     state.root.removeAttribute(ANIME4K_FULLSCREEN_ROOT_ATTR);
     state.video.removeAttribute(ANIME4K_FULLSCREEN_VIDEO_ATTR);
     state.ancestors.forEach(element => element.removeAttribute(ANIME4K_FULLSCREEN_KEEP_ATTR));
-    if (state.rootStyles) this.restoreTemporaryStyles(state.root, state.rootStyles);
-    if (state.videoStyles) this.restoreTemporaryStyles(state.video, state.videoStyles);
+    if (state.rootStyles) restoreTemporaryStyles(state.root, state.rootStyles);
+    if (state.videoStyles) restoreTemporaryStyles(state.video, state.videoStyles);
     this.state = null;
     if (activeManager === this) {
       activeManager = null;
       document.documentElement.removeAttribute(ANIME4K_FULLSCREEN_DOCUMENT_ATTR);
       document.getElementById(STYLE_ID)?.remove();
-    }
-  }
-
-  private applyTemporaryStyles(
-    element: HTMLElement,
-    properties: Readonly<Record<string, string>>,
-  ): TemporaryInlineStyles {
-    const snapshots: TemporaryInlineStyles = new Map();
-    for (const [name, value] of Object.entries(properties)) {
-      const originalValue = element.style.getPropertyValue(name);
-      const originalPriority = element.style.getPropertyPriority(name);
-      element.style.setProperty(name, value, 'important');
-      snapshots.set(name, {
-        originalValue,
-        originalPriority,
-        appliedValue: element.style.getPropertyValue(name),
-        appliedPriority: element.style.getPropertyPriority(name),
-      });
-    }
-    return snapshots;
-  }
-
-  private restoreTemporaryStyles(element: HTMLElement, snapshots: TemporaryInlineStyles): void {
-    for (const [name, snapshot] of snapshots) {
-      if (element.style.getPropertyValue(name) !== snapshot.appliedValue
-          || element.style.getPropertyPriority(name) !== snapshot.appliedPriority) continue;
-      if (!snapshot.originalValue && !snapshot.originalPriority) element.style.removeProperty(name);
-      else element.style.setProperty(name, snapshot.originalValue, snapshot.originalPriority);
     }
   }
 

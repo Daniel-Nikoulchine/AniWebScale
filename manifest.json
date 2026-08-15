@@ -3,7 +3,7 @@
   "name": "__MSG_extensionName__",
   "description": "__MSG_description__",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7/QBCSx1Jb4tZw70g6/O9SVeevG/1uO8ZePp+j+BQsoa4xw4FeadS4FakMb4bqrcu69tEhmlkd2XbWS7W5s80Z2B9Qe+HCqrn/ZUgbFBB+CKMKUVVH93JTZXu6PxYWkD6k7hjad1K6oKHWZ929r+u8PHjqAk4XyoKYKDH59/7oNkFsEVvtT+PwfqAhRSFRxrR8Ef8SDDVnbaiQfaAHbxXStCG7GnunMaDt5AWU3oRJumbi5HfrQVf3ktraF4BWICqoX97OWOSch2oeYImVxFQK4jI3cdcYPrvQiaWtRaH7wpXrxQnWlFzCQrgRUodt3oLt/ouHXkbXszFwMG+bR0NQIDAQAB",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

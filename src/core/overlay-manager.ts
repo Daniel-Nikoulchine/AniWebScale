@@ -1,6 +1,11 @@
 import type { RenderStats } from '../types';
 import { fullscreenContainsVideo, getFullscreenElement } from '../shared/fullscreen-video';
 import { choosePlayerSurface } from '../shared/player-surface';
+import {
+  applyTemporaryProperty,
+  restoreTemporaryStyles,
+  type TemporaryInlineStyles,
+} from '../shared/temporary-restyle';
 
 const MIN_VIDEO_WIDTH = 240;
 const MIN_VIDEO_HEIGHT = 135;
@@ -13,10 +18,7 @@ export class OverlayManager {
   private readonly warningPanel: HTMLDivElement;
   private canvas?: HTMLCanvasElement;
   private canvasVisible = false;
-  private originalOpacity = '';
-  private originalOpacityPriority = '';
-  private appliedOpacity = '';
-  private appliedOpacityPriority = '';
+  private opacitySnapshot: TemporaryInlineStyles = new Map();
   private opacityManaged = false;
   private destroyed = false;
   private positionUpdateFrame: number | null = null;
@@ -245,21 +247,13 @@ export class OverlayManager {
   }
 
   private hideVideoForCanvas(): void {
-    this.originalOpacity = this.video.style.getPropertyValue('opacity');
-    this.originalOpacityPriority = this.video.style.getPropertyPriority('opacity');
-    this.video.style.setProperty('opacity', '0', 'important');
-    this.appliedOpacity = this.video.style.getPropertyValue('opacity');
-    this.appliedOpacityPriority = this.video.style.getPropertyPriority('opacity');
+    this.opacitySnapshot = applyTemporaryProperty(this.video, 'opacity', '0');
     this.opacityManaged = true;
   }
 
   private restoreVideoOpacity(): void {
     if (!this.opacityManaged) return;
-    if (this.video.style.getPropertyValue('opacity') === this.appliedOpacity
-        && this.video.style.getPropertyPriority('opacity') === this.appliedOpacityPriority) {
-      if (!this.originalOpacity && !this.originalOpacityPriority) this.video.style.removeProperty('opacity');
-      else this.video.style.setProperty('opacity', this.originalOpacity, this.originalOpacityPriority);
-    }
+    restoreTemporaryStyles(this.video, this.opacitySnapshot);
     this.opacityManaged = false;
   }
 

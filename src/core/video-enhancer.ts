@@ -31,6 +31,8 @@ import {
 } from '../shared/fullscreen-video';
 import { OverlayManager } from './overlay-manager';
 import { FullscreenLayoutManager } from './fullscreen-layout-manager';
+import { BackendState } from './backend-state';
+import { OverloadTracker } from './render-stats';
 import type { Renderer } from './renderer';
 
 interface NativeFallbackResponse {
@@ -45,7 +47,7 @@ export class VideoEnhancer {
   private static readonly managedEnhancers = new Set<VideoEnhancer>();
 
   private renderer: Renderer | null = null;
-  private nativeActive = false;
+  private readonly backend = new BackendState();
   private nativeSessionId: string | null = null;
   private currentModeId: string | null = null;
   private currentSettings: Anime4KWebExtSettings | null = null;
@@ -55,8 +57,8 @@ export class VideoEnhancer {
   private encryptedDetected = false;
   private performanceWarning = false;
   private oversharpenWarning = false;
-  private nativeOverloadedSince: number | null = null;
   private lastNativeDroppedFrames = 0;
+  private readonly nativeOverloadTracker = new OverloadTracker();
   private lastRenderStats: RenderStats | null = null;
   private destroyed = false;
   private switchingFromNative = false;
@@ -66,8 +68,6 @@ export class VideoEnhancer {
   private fullscreenDebounceTimer?: number;
   private fullscreenRevision = 0;
   private fullscreenTransition: Promise<void> = Promise.resolve();
-  private transitionRevision = 0;
-  private startingRevision: number | null = null;
   private readonly pendingNativeStarts = new Map<number, { stopRequested: boolean }>();
   private settingsUpdateChain: Promise<void> = Promise.resolve();
   private automaticSession = false;
@@ -80,7 +80,7 @@ export class VideoEnhancer {
   private readonly fullscreenChangeHandler = () => this.scheduleFullscreenReconcile();
 
   private readonly nativeSessionHandler = (event: Event) => {
-    if (!this.nativeActive) return;
+    if (!this.backend.isNativeActive) return;
     const detail = (event as CustomEvent<Record<string, unknown>>).detail;
     if (!detail || typeof detail.type !== 'string') return;
     if (!matchesExpectedNativeEvent(this.nativeSessionId, detail.sessionId)) return;
@@ -90,16 +90,12 @@ export class VideoEnhancer {
       const renderMs = Number(detail.frameTimeMs) || 0;
       const droppedFrames = Number(detail.droppedFrames) || 0;
       const budgetMs = 1000 / Math.max(24, fps || 24);
-      const overloaded = renderMs > budgetMs || droppedFrames > this.lastNativeDroppedFrames;
       const now = performance.now();
-      if (overloaded) {
-        if (this.nativeOverloadedSince === null) this.nativeOverloadedSince = now;
-      } else {
-        this.nativeOverloadedSince = null;
-      }
+      this.performanceWarning = this.nativeOverloadTracker.recordSample(
+        renderMs > budgetMs || droppedFrames > this.lastNativeDroppedFrames,
+        now,
+      );
       this.lastNativeDroppedFrames = droppedFrames;
-      this.performanceWarning = this.nativeOverloadedSince !== null
-        && now - this.nativeOverloadedSince >= 2000;
       const stats: RenderStats = {
         fps,
         renderMs,
@@ -121,18 +117,18 @@ export class VideoEnhancer {
       && detail.reason === 'capture_window_closed'
       && isVideoInFullscreenContext(this.video);
     if (this.switchingFromNative) {
-      this.nativeActive = false;
+      this.backend.markIdle();
       this.nativeSessionId = null;
       this.stopNativePlaybackHeartbeat();
       return;
     }
-    this.nativeActive = false;
+    this.backend.markIdle();
     this.nativeSessionId = null;
     this.stopNativePlaybackHeartbeat();
     this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
     this.currentModeId = null;
     this.performanceWarning = false;
-    this.nativeOverloadedSince = null;
+    this.nativeOverloadTracker.reset();
     this.lastNativeDroppedFrames = 0;
     this.lastRenderStats = null;
     this.overlay.setStats(null);
@@ -205,12 +201,11 @@ export class VideoEnhancer {
   }
 
   private beginTransition(): number {
-    this.transitionRevision += 1;
-    return this.transitionRevision;
+    return this.backend.beginTransition();
   }
 
   private isTransitionCurrent(revision: number): boolean {
-    return !this.destroyed && revision === this.transitionRevision;
+    return this.backend.isTransitionCurrent(revision);
   }
 
   private isProtectedPlayback(): boolean {
@@ -233,9 +228,8 @@ export class VideoEnhancer {
   }
 
   private async startEnhancement(settings?: Anime4KWebExtSettings): Promise<void> {
-    if (this.renderer || this.nativeActive || this.destroyed || this.startingRevision !== null) return;
+    if (this.renderer || this.backend.isNativeActive || this.destroyed || this.backend.isStarting) return;
     const revision = this.beginTransition();
-    this.startingRevision = revision;
     try {
       settings ??= this.currentSettings ?? await getSettings();
       if (!this.isTransitionCurrent(revision)) return;
@@ -243,6 +237,7 @@ export class VideoEnhancer {
         this.currentSettings = settings;
         this.currentModeId = null;
         this.applyFullscreenMarker(false);
+        this.backend.markIdle();
         return;
       }
       const selectedBackend = this.selectBackend(settings);
@@ -286,7 +281,9 @@ export class VideoEnhancer {
         this.showNotification(error instanceof Error ? error.message : 'Anime4K could not be started.');
       }
     } finally {
-      if (this.startingRevision === revision) this.startingRevision = null;
+      // If no backend committed (e.g. disabled processing, aborted transition),
+      // leave the starting phase so later start attempts are not blocked.
+      if (this.backend.isStarting && this.isTransitionCurrent(revision)) this.backend.markIdle();
     }
   }
 
@@ -373,6 +370,7 @@ export class VideoEnhancer {
         return false;
       }
       this.renderer = renderer;
+      this.backend.markWebGPUActive();
       if (renderer.hasRenderedCurrentSource()) this.overlay.showCanvas();
       return true;
     } catch (error) {
@@ -449,7 +447,7 @@ export class VideoEnhancer {
     if (!response?.ok || typeof response.sessionId !== 'string') {
       throw new Error(response?.message || 'The native Anime4K renderer is unavailable.');
     }
-    this.nativeActive = true;
+    this.backend.markNativeActive();
     this.nativeSessionId = response.sessionId;
     this.startNativePlaybackHeartbeat();
     this.currentModeId = MODE_TO_ID[settings.mode];
@@ -457,8 +455,8 @@ export class VideoEnhancer {
   }
 
   private async handleEncryptedPlayback(): Promise<void> {
-    if (this.destroyed || (!this.renderer && !this.nativeActive)) return;
-    if (this.nativeActive) return;
+    if (this.destroyed || (!this.renderer && !this.backend.isNativeActive)) return;
+    if (this.backend.isNativeActive) return;
     const revision = this.beginTransition();
     const settings = this.currentSettings ?? await getSettings();
     if (!this.isTransitionCurrent(revision)) return;
@@ -532,15 +530,9 @@ export class VideoEnhancer {
   }
 
   private updateWarningDisplay(): void {
-    const messages: string[] = [];
-    if (this.oversharpenWarning) messages.push('A+A, B+B and C+A may oversharpen below 2x output.');
-    if (this.performanceWarning) {
-      const stats = this.lastRenderStats;
-      messages.push(stats
-        ? `Frame budget exceeded: ${stats.renderMs.toFixed(1)} ms, ${stats.fps.toFixed(1)} FPS, ${stats.droppedFrames} dropped.`
-        : 'The selected preset exceeds the frame budget; frames are being dropped.');
-    }
-    this.overlay.setWarning(messages.length > 0 ? messages.join(' ') : null);
+    // All in-page warnings removed: the user never asked for diagnostics and
+    // they only add a persistent corner nag. The renderer keeps working.
+    this.overlay.setWarning(null);
   }
 
   private scheduleAutoTargetUpdate(): void {
@@ -591,7 +583,7 @@ export class VideoEnhancer {
 
     if (!processingEnabled) {
       this.automaticSession = false;
-      if (this.renderer || this.nativeActive || this.startingRevision !== null
+      if (this.renderer || this.backend.isNativeActive || this.backend.isStarting
           || this.pendingNativeStarts.size > 0) await this.stopEnhancement();
       else {
         this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
@@ -600,8 +592,8 @@ export class VideoEnhancer {
       return;
     }
 
-    if (!this.renderer && !this.nativeActive) {
-      if (this.startingRevision !== null || this.pendingNativeStarts.size > 0) {
+    if (!this.renderer && !this.backend.isNativeActive) {
+      if (this.backend.isStarting || this.pendingNativeStarts.size > 0) {
         await this.stopEnhancement();
         if (this.destroyed) return;
       }
@@ -609,9 +601,9 @@ export class VideoEnhancer {
       return;
     }
 
-    if (this.nativeActive) {
+    if (this.backend.isNativeActive) {
       if (selectedBackend === 'native') {
-        const revision = this.transitionRevision;
+        const revision = this.backend.beginTransition();
         try {
           const response = await chrome.runtime.sendMessage({
             type: 'NATIVE_UPDATE_CONFIGURATION',
@@ -628,8 +620,10 @@ export class VideoEnhancer {
           if (!response?.ok) {
             throw new Error(response?.message || 'The native renderer could not apply the selected configuration.');
           }
+          this.backend.markNativeActive();
         } catch (error) {
           if (!this.isTransitionCurrent(revision)) return;
+          this.backend.markNativeActive();
           this.currentSettings = previousSettings;
           this.currentModeId = previousModeId;
           this.applyFullscreenMarker(
@@ -644,10 +638,9 @@ export class VideoEnhancer {
       const revision = this.beginTransition();
       this.switchingFromNative = true;
       const nativeSessionId = this.nativeSessionId;
-      this.nativeActive = false;
       this.nativeSessionId = null;
       this.stopNativePlaybackHeartbeat();
-      this.nativeOverloadedSince = null;
+      this.nativeOverloadTracker.reset();
       this.lastNativeDroppedFrames = 0;
       this.lastRenderStats = null;
       this.overlay.setStats(null);
@@ -676,13 +669,13 @@ export class VideoEnhancer {
         return;
       } catch (error) {
         if (!this.isTransitionCurrent(revision)) return;
-        await this.stopEnhancement(this.nativeActive);
+        await this.stopEnhancement(this.backend.isNativeActive);
         if (!this.destroyed) {
           this.showNotification(error instanceof Error ? error.message : 'The backend could not be changed.');
         }
         throw error;
       } finally {
-        if (this.transitionRevision === revision) this.switchingFromNative = false;
+        if (this.isTransitionCurrent(revision)) this.switchingFromNative = false;
       }
     }
     if (!this.renderer) return;
@@ -777,13 +770,14 @@ export class VideoEnhancer {
       }
     }
     if (this.destroyed) return;
-    if (this.renderer || this.nativeActive) this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+    if (this.renderer || this.backend.isNativeActive) this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
     this.scheduleFullscreenReconcile(0);
   }
 
   public destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.backend.destroy();
     VideoEnhancer.managedEnhancers.delete(this);
     this.video.removeEventListener('encrypted', this.encryptedHandler);
     window.removeEventListener('anime4k-protected-playback', this.pageProtectedPlaybackHandler);
@@ -814,8 +808,7 @@ export class VideoEnhancer {
 
   public async stopEnhancement(stopNative = true, releaseClaim = true): Promise<void> {
     this.beginTransition();
-    this.startingRevision = null;
-    const wasNativeActive = this.nativeActive;
+    const wasNativeActive = this.backend.isNativeActive;
     const nativeSessionId = this.nativeSessionId;
     let pendingNativeStop = false;
     for (const pending of this.pendingNativeStarts.values()) {
@@ -824,7 +817,7 @@ export class VideoEnhancer {
       pendingNativeStop = true;
     }
     this.releaseWebGPUResources();
-    this.nativeActive = false;
+    this.backend.markIdle();
     this.nativeSessionId = null;
     this.switchingFromNative = false;
     this.stopNativePlaybackHeartbeat();
@@ -834,7 +827,7 @@ export class VideoEnhancer {
     this.currentModeId = null;
     this.performanceWarning = false;
     this.oversharpenWarning = false;
-    this.nativeOverloadedSince = null;
+    this.nativeOverloadTracker.reset();
     this.lastNativeDroppedFrames = 0;
     this.lastRenderStats = null;
     this.updateWarningDisplay();
@@ -904,18 +897,18 @@ export class VideoEnhancer {
       && !this.nativeRetryBlocked;
 
     if (shouldRun) {
-      if (!this.renderer && !this.nativeActive && this.startingRevision === null
+      if (!this.renderer && !this.backend.isNativeActive && !this.backend.isStarting
           && this.pendingNativeStarts.size === 0) {
         this.fullscreenLayout.enter();
         this.automaticSession = true;
         await this.startEnhancement(settings);
-        if (!this.renderer && !this.nativeActive) this.automaticSession = false;
+        if (!this.renderer && !this.backend.isNativeActive) this.automaticSession = false;
       }
       return;
     }
 
-    if (this.automaticSession || this.renderer || this.nativeActive
-        || this.startingRevision !== null || this.pendingNativeStarts.size > 0) {
+    if (this.automaticSession || this.renderer || this.backend.isNativeActive
+        || this.backend.isStarting || this.pendingNativeStarts.size > 0) {
       this.automaticSession = false;
       await this.stopEnhancement();
     }
@@ -937,7 +930,7 @@ export class VideoEnhancer {
 
   private startNativePlaybackHeartbeat(): void {
     this.stopNativePlaybackHeartbeat();
-    if (!this.nativeActive || this.destroyed) return;
+    if (!this.backend.isNativeActive || this.destroyed) return;
     void this.sendNativePlaybackState();
     this.nativePlaybackTimer = window.setInterval(() => void this.sendNativePlaybackState(), 1000);
   }
@@ -950,7 +943,7 @@ export class VideoEnhancer {
   }
 
   private async sendNativePlaybackState(): Promise<void> {
-    if (!this.nativeActive || this.destroyed) return;
+    if (!this.backend.isNativeActive || this.destroyed) return;
     await chrome.runtime.sendMessage({
       type: 'NATIVE_PLAYBACK_STATE',
       ...(this.nativeSessionId ? { sessionId: this.nativeSessionId } : {}),

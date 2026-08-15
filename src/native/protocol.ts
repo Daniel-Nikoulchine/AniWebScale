@@ -73,15 +73,63 @@ interface NativeStatusRequest extends NativeSessionRequestBase {
   mediaTime?: number;
 }
 
-export type NativeMediaCommandName =
-  | 'playPause'
-  | 'play'
-  | 'pause'
-  | 'seekBy'
-  | 'volumeBy'
-  | 'toggleMute'
-  | 'toggleFullscreen'
-  | 'exitFullscreen';
+export const NATIVE_MEDIA_COMMAND_NAMES = [
+  'playPause',
+  'play',
+  'pause',
+  'seekBy',
+  'volumeBy',
+  'toggleMute',
+  'toggleFullscreen',
+  'exitFullscreen',
+] as const;
+
+export type NativeMediaCommandName = (typeof NATIVE_MEDIA_COMMAND_NAMES)[number];
+
+export function isNativeMediaCommandName(value: unknown): value is NativeMediaCommandName {
+  return typeof value === 'string' && (NATIVE_MEDIA_COMMAND_NAMES as readonly string[]).includes(value);
+}
+
+export const NATIVE_POINTER_EVENT_TYPES = ['move', 'down', 'up', 'wheel'] as const;
+
+export type NativePointerEventType = (typeof NATIVE_POINTER_EVENT_TYPES)[number];
+
+export function isNativePointerEventType(value: unknown): value is NativePointerEventType {
+  return typeof value === 'string' && (NATIVE_POINTER_EVENT_TYPES as readonly string[]).includes(value);
+}
+
+/** The core fields a pointer payload must carry (all optional extras included). */
+export interface NativePointerPayload {
+  event: NativePointerEventType;
+  x: number;
+  y: number;
+  button?: number;
+  buttons?: number;
+  deltaX?: number;
+  deltaY?: number;
+  shiftKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+}
+
+/** Validate a native pointer payload's core fields (event, x, y in [0,1]). */
+export function isNativePointerEventPayload(value: unknown): value is NativePointerPayload {
+  if (!value || typeof value !== 'object') return false;
+  const payload = value as Record<string, unknown>;
+  const x = Number(payload.x);
+  const y = Number(payload.y);
+  return isNativePointerEventType(payload.event)
+    && Number.isFinite(x) && x >= 0 && x <= 1
+    && Number.isFinite(y) && y >= 0 && y <= 1;
+}
+
+/** Clamp normalized coordinates into [0,1] (defensive, used on the content side). */
+export function clampNativePointerCoords(x: number, y: number): { x: number; y: number } {
+  return {
+    x: Math.min(1, Math.max(0, Number.isFinite(x) ? x : 0)),
+    y: Math.min(1, Math.max(0, Number.isFinite(y) ? y : 0)),
+  };
+}
 
 interface NativeMediaCommandRequest extends NativeSessionRequestBase {
   type: 'mediaCommand';
@@ -248,12 +296,11 @@ export function isNativeEvent(value: unknown): value is NativeEvent {
       return hasRequestId && hasSessionId && typeof event.reason === 'string';
     case 'mediaCommand':
       return hasSessionId && typeof event.requestId === 'string'
-        && typeof event.command === 'string'
-        && ['playPause', 'play', 'pause', 'seekBy', 'volumeBy', 'toggleMute', 'toggleFullscreen', 'exitFullscreen'].includes(event.command)
+        && isNativeMediaCommandName(event.command)
         && (event.value === undefined || (typeof event.value === 'number' && Number.isFinite(event.value)));
     case 'pointer':
       return hasSessionId && typeof event.requestId === 'string'
-        && typeof event.event === 'string' && ['move', 'down', 'up', 'wheel'].includes(event.event)
+        && isNativePointerEventType(event.event)
         && typeof event.x === 'number' && Number.isFinite(event.x) && event.x >= 0 && event.x <= 1
         && typeof event.y === 'number' && Number.isFinite(event.y) && event.y >= 0 && event.y <= 1
         && (event.button === undefined

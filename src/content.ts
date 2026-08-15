@@ -7,6 +7,7 @@ import { initializeOnPage, handleSettingsUpdate } from './core/video-manager';
 import { getEnhancer } from './core/enhancer-map';
 import { selectNativeSurfacePointerAction } from './shared/native-pointer-controls';
 import { selectPointerMediaFallback, type DirectMediaCommand } from './shared/pointer-fallback';
+import { clampNativePointerCoords } from './native/protocol';
 import {
   fullscreenContainsVideo,
   isVideoInFullscreenContext,
@@ -433,8 +434,10 @@ function dispatchPointer(message: Record<string, unknown>): void {
   if (!video) return;
   const root = isolation?.root ?? isolation?.video ?? video;
   const rect = root.getBoundingClientRect();
-  const normalizedX = Math.min(1, Math.max(0, Number(message.x)));
-  const normalizedY = Math.min(1, Math.max(0, Number(message.y)));
+  const { x: normalizedX, y: normalizedY } = clampNativePointerCoords(
+    Number(message.x),
+    Number(message.y),
+  );
   const clientX = rect.left + normalizedX * rect.width;
   const clientY = rect.top + normalizedY * rect.height;
   let target: Element | null = document.elementFromPoint(clientX, clientY);
@@ -648,11 +651,6 @@ async function runMediaCommand(command: string, value?: number): Promise<{ fulls
 
 async function handleRuntimeMessage(request: Record<string, unknown>): Promise<unknown> {
   switch (request.type) {
-    case 'SETTINGS_UPDATED':
-      return new Promise(resolve => {
-        void handleSettingsUpdate(request as { type: string; modifiedModeId?: string }, resolve);
-      });
-
     case 'ANIME4K_FORCE_STOP': {
       const videoId = typeof request.videoId === 'string' ? request.videoId : '';
       const video = findVideosDeep().find(candidate => candidate.dataset.anime4kVideoId === videoId);
@@ -858,6 +856,22 @@ async function handleRuntimeMessage(request: Record<string, unknown>): Promise<u
 if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
   contentGlobal[CONTENT_INSTANCE_KEY] = true;
 
+  let settingsApplyTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Coalesce storage.onChanged bursts into a single settings re-apply. A save
+   * writes several keys and fires once per key; without this the renderer
+   * would rebuild once per key.
+   */
+  function scheduleSettingsApply(): void {
+    if (settingsApplyTimer !== null) return;
+    settingsApplyTimer = setTimeout(() => {
+      settingsApplyTimer = null;
+      void handleSettingsUpdate({ type: 'SETTINGS_UPDATED' }, () => undefined).catch(error => {
+        console.info('[AniWebScale] Could not apply changed fullscreen settings:', error instanceof Error ? error.message : String(error));
+      });
+    }, 0);
+  }
+
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     void handleRuntimeMessage(request as Record<string, unknown>).then(sendResponse, error => {
       console.error('[AniWebScale] Content message handler failed.', error);
@@ -871,9 +885,10 @@ if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
       setVerboseLogging(changes.verboseLogging.newValue === true);
     }
     if (!shouldApplySettingsChange(changes, areaName)) return;
-    void handleSettingsUpdate({ type: 'SETTINGS_UPDATED' }, () => undefined).catch(error => {
-      console.info('[AniWebScale] Could not apply changed fullscreen settings:', error instanceof Error ? error.message : String(error));
-    });
+    // A single settings save writes several keys; storage.onChanged fires once
+    // per key. Coalesce the burst into one re-apply so the renderer is not
+    // rebuilt once per key.
+    scheduleSettingsApply();
   });
 
   void initDebugLogging();

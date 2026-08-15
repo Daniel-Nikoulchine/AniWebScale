@@ -3,6 +3,8 @@ import { ANIME4K_APPLIED_ATTR } from '../src/constants';
 import { Renderer } from '../src/core/renderer';
 import type { RendererOptions } from '../src/core/renderer';
 import { VideoEnhancer } from '../src/core/video-enhancer';
+import { BackendState } from '../src/core/backend-state';
+import { OverloadTracker } from '../src/core/render-stats';
 import { DEFAULT_SETTINGS } from '../src/utils/settings';
 
 function deferred<T>() {
@@ -62,7 +64,7 @@ function createBareEnhancer() {
     video,
     videoId: 'video-1',
     renderer: null,
-    nativeActive: false,
+    backend: new BackendState(),
     nativeSessionId: null,
     currentModeId: null,
     currentSettings: null,
@@ -71,7 +73,7 @@ function createBareEnhancer() {
     encryptedDetected: false,
     performanceWarning: false,
     oversharpenWarning: false,
-    nativeOverloadedSince: null,
+    nativeOverloadTracker: new OverloadTracker(),
     lastNativeDroppedFrames: 0,
     lastRenderStats: null,
     destroyed: false,
@@ -79,8 +81,6 @@ function createBareEnhancer() {
     targetResizeObserver,
     fullscreenRevision: 0,
     fullscreenTransition: Promise.resolve(),
-    transitionRevision: 0,
-    startingRevision: null,
     pendingNativeStarts: new Map(),
     settingsUpdateChain: Promise.resolve(),
     automaticSession: false,
@@ -167,12 +167,12 @@ describe('VideoEnhancer lifecycle transitions', () => {
       expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'NATIVE_FALLBACK_REQUEST' }));
     });
 
-    enhancer.nativeActive = true;
+    enhancer.backend.markNativeActive();
     enhancer.nativePlaybackTimer = 41;
     (VideoEnhancer as any).activeEnhancer = enhancer;
     const stopping = enhancer.stopEnhancement();
 
-    expect(enhancer.nativeActive).toBe(false);
+    expect(enhancer.backend.isNativeActive).toBe(false);
     expect(enhancer.nativePlaybackTimer).toBeUndefined();
     expect(clearIntervalSpy).toHaveBeenCalledWith(41);
     expect(video.removeAttribute).toHaveBeenCalledWith(ANIME4K_APPLIED_ATTR);
@@ -182,7 +182,7 @@ describe('VideoEnhancer lifecycle transitions', () => {
     nativeStart.resolve({ ok: true, status: 'started', sessionId: 'session-late' });
     await starting;
 
-    expect(enhancer.nativeActive).toBe(false);
+    expect(enhancer.backend.isNativeActive).toBe(false);
     expect(enhancer.currentModeId).toBeNull();
     expect(video.setAttribute).not.toHaveBeenCalledWith(ANIME4K_APPLIED_ATTR, 'true');
     expect(setIntervalSpy).not.toHaveBeenCalled();
@@ -247,7 +247,7 @@ describe('VideoEnhancer lifecycle transitions', () => {
     enhancer.renderer = renderer;
     enhancer.handleRendererError = vi.fn(async () => {
       enhancer.renderer = null;
-      enhancer.nativeActive = true;
+      enhancer.backend.markNativeActive();
     });
 
     await expect(enhancer.reattach(replacement)).resolves.toBeUndefined();

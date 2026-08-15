@@ -1,10 +1,7 @@
-export type DirectMediaCommand =
-  | 'playPause'
-  | 'seekBy'
-  | 'volumeBy'
-  | 'toggleMute'
-  | 'toggleFullscreen'
-  | 'exitFullscreen';
+import type { NativeMediaCommandName } from '../native/protocol';
+
+/** Direct media commands that can be issued without a native session. */
+export type DirectMediaCommand = Exclude<NativeMediaCommandName, 'play' | 'pause'>;
 
 export interface PointerFallbackInput {
   event: 'move' | 'down' | 'up' | 'wheel';

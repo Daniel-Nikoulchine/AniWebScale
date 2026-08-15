@@ -7,6 +7,12 @@ import { createAnime4KShaderDevice } from '../shared/wgsl-fidelity';
 import { RendererInitializationError, RendererRuntimeError } from './errors';
 import { loadPipelineConstructor } from './pipeline-loader';
 import type { Anime4KPipeline } from './pipeline-types';
+import { OverloadTracker } from './render-stats';
+import {
+  PRESENT_CURRENT_FRAME,
+  PRESENT_PREVIOUS_FRAME,
+  PRESENT_INTERMEDIATE_FRAME,
+} from './presentation-protocol';
 
 const fullscreenQuadWGSL = `
 struct VertexOutput {
@@ -191,10 +197,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 }
 `;
 
-const PRESENT_CURRENT_FRAME = new Float32Array([1, 0, 0, 0]);
-const PRESENT_PREVIOUS_FRAME = new Float32Array([0, 0, 0, 0]);
-const PRESENT_INTERMEDIATE_FRAME = new Float32Array([0.5, 0, 0, 0]);
-
 export interface RendererOptions {
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
@@ -268,7 +270,7 @@ export class Renderer {
   private lastStatsEmit = 0;
   private lastCallbackMediaTime: number | null = null;
   private frameBudgetMs = 1000 / 24;
-  private overloadedSince: number | null = null;
+  private readonly overloadTracker = new OverloadTracker();
   private warning = false;
 
   private constructor(options: RendererOptions) {
@@ -751,13 +753,10 @@ export class Renderer {
       : this.smoothedRenderMs * 0.8 + renderMs * 0.2;
     this.renderedSinceSample += 1;
 
-    if (this.smoothedRenderMs > this.frameBudgetMs) {
-      if (this.overloadedSince === null) this.overloadedSince = now;
-      if (now - this.overloadedSince >= 2000) this.warning = true;
-    } else {
-      this.overloadedSince = null;
-      this.warning = false;
-    }
+    this.warning = this.overloadTracker.recordSample(
+      this.smoothedRenderMs > this.frameBudgetMs,
+      now,
+    );
 
     if (now - this.lastStatsEmit >= 500) {
       const elapsed = Math.max(1, now - this.statsWindowStarted);

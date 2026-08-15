@@ -1,6 +1,6 @@
 {
   "name": "aniwebscale-extension",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "AniWebScale provides real-time anime video enhancement powered by Anime4K and additional upscalers.",
   "scripts": {
     "generate:anime4k-vendor": "node scripts/prune-anime4k-webgpu.mjs",
@@ -37,9 +37,10 @@
     "watch:firefox": "npm run generate:presets && cross-env TARGET_BROWSER=firefox webpack --mode development --watch"
   },
   "devDependencies": {
-    "@eslint/js": "10.0.1",
     "@axe-core/playwright": "4.10.2",
+    "@eslint/js": "10.0.1",
     "@playwright/test": "^1.61.1",
+    "@rolldown/binding-linux-x64-gnu": "^1.2.4",
     "@types/chrome": "^0.0.326",
     "@types/node": "^24.10.1",
     "@webgpu/types": "^0.1.71",

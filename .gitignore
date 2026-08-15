@@ -148,6 +148,7 @@ dist
 /artifacts/*
 !/artifacts/native-rx6750xt-benchmark.json
 !/artifacts/shader-golden-report.json
+/build-artifacts/
 /backups/
 /.generated/
 /native/build*/

@@ -5,21 +5,20 @@ import {
   isQualityTier,
   legacyTierToQuality,
 } from '../shared/presets';
+import { RENDER_SETTING_KEYS } from './settings-change';
 
 const CURRENT_CONFIG_VERSION = 10;
 
-const PREFERENCE_KEYS = [
-  'extensionEnabled',
-  'mode',
-  'quality',
-  'output',
-  'backend',
-  'statsEnabled',
-  'autoFullscreenEnabled',
-  'frameGenerationEnabled',
+/**
+ * Every preference key the migration pass preserves. Derived from the render
+ * setting keys (the source of truth for what content scripts watch) plus the
+ * non-render keys the migration still carries across config versions.
+ */
+const PREFERENCE_KEYS = new Set<string>([
+  ...RENDER_SETTING_KEYS,
   'theme',
   '_configVersion',
-];
+]);
 
 function isBackend(value: unknown): value is RenderBackend {
   return value === 'auto' || value === 'webgpu' || value === 'native';

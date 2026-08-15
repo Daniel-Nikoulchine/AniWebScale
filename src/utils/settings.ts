@@ -8,6 +8,7 @@ import type {
 } from '../types';
 import { ID_TO_MODE, isEnhancementMode, isQualityTier } from '../shared/presets';
 import { resolveEnhancementGraph } from './effect-chain-templates';
+import { RENDER_SETTING_KEYS } from './settings-change';
 
 export const DEFAULT_SETTINGS: Anime4KWebExtSettings = {
   extensionEnabled: true,
@@ -27,16 +28,7 @@ function isBackend(value: unknown): value is RenderBackend {
 export async function getSettings(): Promise<Anime4KWebExtSettings> {
   // selectedModeId is read only so a content script opened during a 0.x → 1.x
   // update can still choose the user's former built-in mode before migration.
-  const data = await chrome.storage.local.get([
-    'extensionEnabled',
-    'mode',
-    'quality',
-    'backend',
-    'statsEnabled',
-    'autoFullscreenEnabled',
-    'frameGenerationEnabled',
-    'selectedModeId',
-  ]);
+  const data = await chrome.storage.local.get([...RENDER_SETTING_KEYS]);
   const mode = isEnhancementMode(data.mode)
     ? data.mode
     : ID_TO_MODE[data.selectedModeId] ?? DEFAULT_SETTINGS.mode;

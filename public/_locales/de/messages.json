@@ -18,7 +18,7 @@
     "message": "Website-Zugriff"
   },
   "websiteAccessDescription": {
-    "message": "AniWebScale ist auf jeder HTTP(S)-Website aktiv; der Zugriff ist in der Erweiterung eingebaut."
+    "message": "AniWebScale läuft nur auf Websites, die du im Popup ausdrücklich freigibst."
   },
   "sitePermissions": {
     "message": "Website-Berechtigungen"
@@ -30,13 +30,7 @@
     "message": "Zugriff entfernen"
   },
   "siteAccessGranted": {
-    "message": "AniWebScale ist auf allen Websites aktiv."
-  },
-  "siteAccessAllMissing": {
-    "message": "AniWebScale hat in diesem Browser noch keinen Website-Zugriff."
-  },
-  "allowAllWebsites": {
-    "message": "Auf allen Websites erlauben"
+    "message": "AniWebScale kann Videos auf {site} verbessern."
   },
   "siteAccessMissing": {
     "message": "Erlaube nur {site}, damit Videos dort verbessert werden können."

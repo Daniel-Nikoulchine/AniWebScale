@@ -466,30 +466,60 @@ export class VideoEnhancer {
     return true;
   }
 
+  /**
+   * Switch from the WebGPU renderer to the native host. Consolidates the
+   * sequence that handleEncryptedPlayback, handleRendererError and the
+   * webgpu-to-native settings branch used to copy: release WebGPU, check the
+   * fallback policy, request the native session, and on failure stop with a
+   * notification. Returns true when the native backend committed.
+   */
+  private async switchToNative(
+    reason: NativeFallbackReason,
+    settings: Anime4KWebExtSettings,
+    options: {
+      blockedMessage?: string;
+      fallbackErrorMessage: string;
+      throwOnFailure?: boolean;
+    },
+  ): Promise<boolean> {
+    const revision = this.beginTransition();
+    this.releaseWebGPUResources();
+    this.overlay.hideCanvas();
+    if (!allowsNativeFallback(settings.backend)) {
+      await this.stopEnhancement(false);
+      const blockedMessage = options.blockedMessage
+        ?? 'The native fallback is disabled while Backend is forced to WebGPU.';
+      if (!this.destroyed) this.showNotification(blockedMessage);
+      if (options.throwOnFailure) throw new Error(blockedMessage);
+      return false;
+    }
+    try {
+      if (!await this.requestNativeFallback(reason, settings, revision)) return false;
+    } catch (error) {
+      if (!this.isTransitionCurrent(revision)) return false;
+      await this.stopEnhancement(false);
+      if (!this.destroyed) {
+        this.showNotification(error instanceof Error ? error.message : options.fallbackErrorMessage);
+      }
+      if (options.throwOnFailure) throw error;
+      return false;
+    }
+    if (!this.isTransitionCurrent(revision)) return false;
+    VideoEnhancer.activeEnhancer = this;
+    this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+    return true;
+  }
+
   private async handleEncryptedPlayback(): Promise<void> {
     if (this.destroyed || (!this.renderer && !this.backend.isNativeActive)) return;
     if (this.backend.isNativeActive) return;
     const revision = this.beginTransition();
     const settings = this.currentSettings ?? await getSettings();
     if (!this.isTransitionCurrent(revision)) return;
-    this.releaseWebGPUResources();
-    this.overlay.hideCanvas();
-    if (!allowsNativeFallback(settings.backend)) {
-      await this.stopEnhancement(false);
-      if (!this.destroyed) {
-        this.showNotification('Protected playback cannot use the forced WebGPU backend. Select Auto or Native instead.');
-      }
-      return;
-    }
-    try {
-      await this.requestNativeFallback('eme', settings, revision);
-    } catch (error) {
-      if (!this.isTransitionCurrent(revision)) return;
-      await this.stopEnhancement(false);
-      if (!this.destroyed) {
-        this.showNotification(error instanceof Error ? error.message : 'Protected playback cannot be captured.');
-      }
-    }
+    await this.switchToNative('eme', settings, {
+      blockedMessage: 'Protected playback cannot use the forced WebGPU backend. Select Auto or Native instead.',
+      fallbackErrorMessage: 'Protected playback cannot be captured.',
+    });
   }
 
   private async handleRendererError(error: Error): Promise<void> {
@@ -502,26 +532,10 @@ export class VideoEnhancer {
     const settings = this.currentSettings ?? await getSettings();
     if (!this.isTransitionCurrent(revision)) return;
     const reason = this.classifyFallbackReason(error);
-    this.releaseWebGPUResources();
-    this.overlay.hideCanvas();
-    if (!allowsNativeFallback(settings.backend)) {
-      await this.stopEnhancement(false);
-      if (!this.destroyed) {
-        this.showNotification(error.message || 'The video frame cannot be processed with WebGPU.');
-      }
-      return;
-    }
-    try {
-      await this.requestNativeFallback(reason, settings, revision);
-    } catch (fallbackError) {
-      if (!this.isTransitionCurrent(revision)) return;
-      await this.stopEnhancement(false);
-      if (!this.destroyed) {
-        this.showNotification(
-          fallbackError instanceof Error ? fallbackError.message : 'Video frames cannot be processed on this site.',
-        );
-      }
-    }
+    await this.switchToNative(reason, settings, {
+      blockedMessage: error.message || 'The video frame cannot be processed with WebGPU.',
+      fallbackErrorMessage: 'Video frames cannot be processed on this site.',
+    });
   }
 
   private handleStats(stats: RenderStats): void {
@@ -692,22 +706,10 @@ export class VideoEnhancer {
     }
     if (!this.renderer) return;
     if (selectedBackend === 'native') {
-      const revision = this.beginTransition();
-      this.releaseWebGPUResources();
-      this.overlay.hideCanvas();
-      try {
-        if (!await this.requestNativeFallback('native-selected', newSettings, revision)) return;
-      } catch (error) {
-        if (!this.isTransitionCurrent(revision)) return;
-        await this.stopEnhancement(false);
-        if (!this.destroyed) {
-          this.showNotification(error instanceof Error ? error.message : 'The native renderer could not be started.');
-        }
-        throw error;
-      }
-      if (!this.isTransitionCurrent(revision)) return;
-      VideoEnhancer.activeEnhancer = this;
-      this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+      await this.switchToNative('native-selected', newSettings, {
+        fallbackErrorMessage: 'The native renderer could not be started.',
+        throwOnFailure: true,
+      });
       return;
     }
 

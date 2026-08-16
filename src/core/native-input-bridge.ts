@@ -3,6 +3,20 @@ import { resolveNativePointerGesture } from '../shared/native-gesture-resolution
 import type { DirectMediaCommand } from '../shared/pointer-fallback';
 import type { NativeIsolationSession } from './native-isolation';
 
+/** The pointer payload forwarded from the native output window. */
+export interface NativePointerInput {
+  event: string;
+  x: number;
+  y: number;
+  button?: number;
+  buttons?: number;
+  deltaX?: number;
+  deltaY?: number;
+  shiftKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+}
+
 /**
  * Forwards pointer and media gestures from the native output window to the
  * page. Owns the DOM hit-test, the gesture resolution order, the synthetic
@@ -19,7 +33,7 @@ export class NativeInputBridge {
   }
 
   /** Resolve one forwarded pointer event and act on it. */
-  dispatchPointer(message: Record<string, unknown>): void {
+  dispatchPointer(message: NativePointerInput): void {
     const video = this.isolation.activeVideo ?? this.isolation.selectVideo();
     if (!video) return;
     const root = this.isolation.activeRoot ?? this.isolation.activeVideo ?? video;
@@ -55,11 +69,11 @@ export class NativeInputBridge {
 
     const resolution = resolveNativePointerGesture({
       event: message.event as 'move' | 'down' | 'up' | 'wheel',
-      button: typeof message.button === 'number' ? message.button : 0,
-      buttons: typeof message.buttons === 'number' ? message.buttons : 0,
+      button: message.button ?? 0,
+      buttons: message.buttons ?? 0,
       normalizedX,
       normalizedY,
-      deltaY: typeof message.deltaY === 'number' ? message.deltaY : 0,
+      deltaY: message.deltaY ?? 0,
       duration: video.duration,
       currentTime: video.currentTime,
       volume: video.volume,
@@ -120,8 +134,8 @@ export class NativeInputBridge {
         cancelable: true,
         clientX,
         clientY,
-        deltaX: typeof message.deltaX === 'number' ? message.deltaX : 0,
-        deltaY: typeof message.deltaY === 'number' ? message.deltaY : 0,
+        deltaX: message.deltaX ?? 0,
+        deltaY: message.deltaY ?? 0,
         shiftKey: message.shiftKey === true,
         ctrlKey: message.ctrlKey === true,
         altKey: message.altKey === true,
@@ -142,8 +156,8 @@ export class NativeInputBridge {
       isPrimary: true,
       clientX,
       clientY,
-      button: typeof message.button === 'number' ? message.button : 0,
-      buttons: typeof message.buttons === 'number' ? message.buttons : 0,
+      button: message.button ?? 0,
+      buttons: message.buttons ?? 0,
       shiftKey: message.shiftKey === true,
       ctrlKey: message.ctrlKey === true,
       altKey: message.altKey === true,
@@ -160,8 +174,8 @@ export class NativeInputBridge {
       // MouseEvent.button must be >= 0 per the DOM spec; -1 is only valid for
       // PointerEvent. The native protocol sends -1 for "no button changed" on
       // move events, so clamp it to 0 here and default to 0 when absent.
-      button: typeof message.button === 'number' ? Math.max(0, message.button) : 0,
-      buttons: typeof message.buttons === 'number' ? message.buttons : 0,
+      button: message.button !== undefined ? Math.max(0, message.button) : 0,
+      buttons: message.buttons ?? 0,
       shiftKey: message.shiftKey === true,
       ctrlKey: message.ctrlKey === true,
       altKey: message.altKey === true,

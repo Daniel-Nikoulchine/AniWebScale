@@ -8,16 +8,13 @@
  */
 import { ensureLatestConfig } from './utils/migration';
 import { createAsyncSerializer } from './shared/async-serializer';
+import { isNativeConfiguration } from './native/protocol';
 import {
-  isNativeConfiguration,
-  isNativeMediaCommandName,
-  type NativeConfiguration,
-  type NativeMediaCommandName,
-} from './native/protocol';
+  parseRuntimeRequest,
+  type NativePointerRequest,
+} from './shared/runtime-messages';
 import { parseNativeConsentResponse } from './shared/native-session-messages';
 import { isNativePlaybackStateAuthorized, isNativeSessionControlAuthorized } from './shared/native-session-messages';
-import { isHttpOrigin } from './shared/native-session-messages';
-import { isNativeFallbackRequest } from './shared/native-fallback-request';
 import {
   migrateLegacyBroadSiteAccess,
   synchronizeRegisteredContentScripts,
@@ -99,38 +96,30 @@ async function checkOnboarding(): Promise<void> {
 }
 
 async function handleMessage(request: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
-  if (!request || typeof request !== 'object') return undefined;
-  const message = request as Record<string, unknown>;
+  const parsed = parseRuntimeRequest(request);
+  if (parsed.kind === 'unknown') return undefined;
+  if (parsed.kind === 'invalid') {
+    return { ok: false, ...(parsed.status ? { status: parsed.status } : {}), message: parsed.message };
+  }
+  const message = parsed.message;
 
   switch (message.type) {
     case 'ENHANCEMENT_CLAIM':
-      if (typeof message.videoId !== 'string') return { ok: false, message: 'Missing video ID.' };
-      return nativeSession.claimEnhancement(message.videoId as string, sender);
+      return nativeSession.claimEnhancement(message.videoId, sender);
 
     case 'ENHANCEMENT_RELEASE':
       if (typeof message.videoId === 'string') {
-        await nativeSession.releaseEnhancement(message.videoId as string, sender);
+        await nativeSession.releaseEnhancement(message.videoId, sender);
       }
       return { ok: true };
 
     case 'NATIVE_FALLBACK_REQUEST':
-      if (!isNativeFallbackRequest(request)) {
-        return { ok: false, status: 'denied', message: 'The native fallback request was invalid.' };
-      }
       if (!await isExtensionEnabled()) {
         return { ok: false, status: 'denied', message: 'AniWebScale is disabled.' };
       }
-      return nativeSession.startNativeFallback(request, sender);
+      return nativeSession.startNativeFallback(message, sender);
 
     case 'NATIVE_UPDATE_CONFIGURATION': {
-      const configuration = message.configuration ?? {
-        mode: message.mode,
-        quality: message.quality,
-        frameGenerationEnabled: message.frameGenerationEnabled,
-      };
-      if (!isNativeConfiguration(configuration)) {
-        return { ok: false, message: 'Invalid native enhancement configuration.' };
-      }
       try {
         await serialized(async () => {
           const session = nativeSession.activeSession;
@@ -140,7 +129,7 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
           })) {
             throw new Error('The native configuration update did not come from the active video.');
           }
-          await nativeSession.updateNativeConfiguration(configuration as NativeConfiguration);
+          await nativeSession.updateNativeConfiguration(message.configuration);
         });
         return { ok: true };
       } catch (error) {
@@ -167,33 +156,26 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
 
     case 'NATIVE_PLAYBACK_STATE': {
       const session = nativeSession.activeSession;
-      const playbackActive = message.playbackActive;
-      const mediaTime = message.mediaTime;
       if (!session || !isNativePlaybackStateAuthorized(session, message, {
         tabId: sender.tab?.id,
         frameId: sender.frameId,
-      }) || typeof playbackActive !== 'boolean'
-          || typeof mediaTime !== 'number' || !Number.isFinite(mediaTime) || mediaTime < 0) {
+      })) {
         return { ok: false, message: 'Invalid native playback state.' };
       }
-      await nativeSession.sendPlaybackState(session.sessionId, playbackActive, mediaTime);
+      await nativeSession.sendPlaybackState(session.sessionId, message.playbackActive, message.mediaTime);
       return { ok: true };
     }
 
     case 'NATIVE_MEDIA_COMMAND':
-      if (!isNativeMediaCommandName(message.command)) {
-        return { ok: false, message: 'Invalid media command.' };
-      }
-      await nativeSession.forwardMediaCommand(message.command as NativeMediaCommandName,
-        typeof message.value === 'number' ? message.value : undefined);
+      await nativeSession.forwardMediaCommand(message.command, message.value);
       return { ok: true };
 
     case 'NATIVE_POINTER':
-      await nativeSession.forwardPointer(message);
+      await nativeSession.forwardPointer(message as NativePointerRequest);
       return { ok: true };
 
     case 'NATIVE_RESET_CONSENT': {
-      if (typeof message.origin === 'string' && isHttpOrigin(message.origin)) {
+      if (typeof message.origin === 'string') {
         const stored = await chrome.storage.local.get(CONSENT_STORAGE_KEY);
         const consents = (stored[CONSENT_STORAGE_KEY] ?? {}) as Record<string, boolean>;
         delete consents[message.origin];
@@ -243,9 +225,6 @@ async function handleMessage(request: unknown, sender: chrome.runtime.MessageSen
 
     case 'OPEN_ONBOARDING':
       await chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
-      return undefined;
-
-    default:
       return undefined;
   }
 }

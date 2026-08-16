@@ -29,7 +29,6 @@ import {
   type NativePointerEventType,
   type NativeStatusEvent,
   NATIVE_PROTOCOL_VERSION,
-  isNativePointerEventPayload,
 } from '../native/protocol';
 import { calculateVideoCaptureRegion } from '../shared/popup-geometry';
 import {
@@ -667,31 +666,35 @@ export class NativeSession {
   }
 
   /** Forward a pointer event to the native host. */
-  async forwardPointer(request: Record<string, unknown>): Promise<void> {
+  async forwardPointer(request: {
+    event: string;
+    x: number;
+    y: number;
+    button?: number;
+    buttons?: number;
+    deltaX?: number;
+    deltaY?: number;
+    shiftKey?: boolean;
+    ctrlKey?: boolean;
+    altKey?: boolean;
+  }): Promise<void> {
     const session = this.store.activeSession;
     if (!session) throw new Error('No native session is active.');
-    const payload = request as Record<string, unknown>;
-    if (!isNativePointerEventPayload(payload)) {
-      throw new Error('Invalid native pointer event.');
-    }
-    const event = payload.event as NativePointerEventType;
-    const x = Number(payload.x);
-    const y = Number(payload.y);
     const client = await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));
     client.post({
       ...nativeRequestBase(),
       type: 'pointer',
       sessionId: session.sessionId,
-      event,
-      x,
-      y,
-      ...(typeof payload.button === 'number' ? { button: payload.button } : {}),
-      ...(typeof payload.buttons === 'number' ? { buttons: payload.buttons } : {}),
-      ...(typeof payload.deltaX === 'number' ? { deltaX: payload.deltaX } : {}),
-      ...(typeof payload.deltaY === 'number' ? { deltaY: payload.deltaY } : {}),
-      ...(typeof payload.shiftKey === 'boolean' ? { shiftKey: payload.shiftKey } : {}),
-      ...(typeof payload.ctrlKey === 'boolean' ? { ctrlKey: payload.ctrlKey } : {}),
-      ...(typeof payload.altKey === 'boolean' ? { altKey: payload.altKey } : {}),
+      event: request.event as NativePointerEventType,
+      x: request.x,
+      y: request.y,
+      ...(typeof request.button === 'number' ? { button: request.button } : {}),
+      ...(typeof request.buttons === 'number' ? { buttons: request.buttons } : {}),
+      ...(typeof request.deltaX === 'number' ? { deltaX: request.deltaX } : {}),
+      ...(typeof request.deltaY === 'number' ? { deltaY: request.deltaY } : {}),
+      ...(typeof request.shiftKey === 'boolean' ? { shiftKey: request.shiftKey } : {}),
+      ...(typeof request.ctrlKey === 'boolean' ? { ctrlKey: request.ctrlKey } : {}),
+      ...(typeof request.altKey === 'boolean' ? { altKey: request.altKey } : {}),
     });
   }
 

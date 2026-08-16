@@ -10,6 +10,7 @@ import { NativeIsolationSession } from './core/native-isolation';
 import { NativeInputBridge, showNotice } from './core/native-input-bridge';
 import { isVideoInFullscreenContext } from './shared/fullscreen-video';
 import { calculateRenderedVideoRect } from './shared/video-content-rect';
+import { parseFrameMessage } from './shared/runtime-messages';
 import { shouldApplySettingsChange } from './utils/settings-change';
 import { initDebugLogging, setVerboseLogging } from './utils/debug-log';
 
@@ -52,11 +53,15 @@ function installLocalE2ETestBridge(): void {
   });
 }
 
-async function handleRuntimeMessage(request: Record<string, unknown>): Promise<unknown> {
-  switch (request.type) {
+async function handleRuntimeMessage(request: unknown): Promise<unknown> {
+  const parsed = parseFrameMessage(request);
+  if (parsed.kind === 'unknown') return undefined;
+  if (parsed.kind === 'invalid') return { ok: false, message: parsed.message };
+  const message = parsed.message;
+
+  switch (message.type) {
     case 'ANIME4K_FORCE_STOP': {
-      const videoId = typeof request.videoId === 'string' ? request.videoId : '';
-      const video = isolation.findVideosDeep().find(candidate => candidate.dataset.anime4kVideoId === videoId);
+      const video = isolation.findVideosDeep().find(candidate => candidate.dataset.anime4kVideoId === message.videoId);
       const enhancer = video ? getEnhancer(video) : undefined;
       if (!enhancer) return { ok: true, alreadyStopped: true };
       await enhancer.stopEnhancement(true, false);
@@ -68,7 +73,7 @@ async function handleRuntimeMessage(request: Record<string, unknown>): Promise<u
       return { ok: true };
 
     case 'NATIVE_CONSENT_REQUEST': {
-      const origin = typeof request.origin === 'string' ? request.origin : 'this website';
+      const origin = message.origin ?? 'this website';
       const allowed = window.confirm(
         `Allow AniWebScale to capture this browser tab with the local Windows renderer for ${origin}?\n\n`
         + 'DRM playback requires browser hardware acceleration to be disabled and the browser restarted. '
@@ -78,13 +83,10 @@ async function handleRuntimeMessage(request: Record<string, unknown>): Promise<u
     }
 
     case 'NATIVE_PREPARE_SESSION': {
-      if (typeof request.sessionId !== 'string' || typeof request.nonce !== 'string') {
-        return { ok: false, message: 'Invalid native session.' };
-      }
-      const video = isolation.selectVideo(typeof request.videoId === 'string' ? request.videoId : undefined);
+      const video = isolation.selectVideo(message.videoId);
       if (!video) return { ok: false, message: 'The selected video is no longer available.' };
       const root = isolation.chooseCaptureRoot(video);
-      const state = isolation.activate(request.sessionId, request.nonce, root, video);
+      const state = isolation.activate(message.sessionId, message.nonce, root, video);
       const currentScreen = screen as Screen & { availLeft?: number; availTop?: number };
       return {
         ok: true,
@@ -100,17 +102,14 @@ async function handleRuntimeMessage(request: Record<string, unknown>): Promise<u
     }
 
     case 'NATIVE_PREPARE_FULLSCREEN': {
-      if (typeof request.sessionId !== 'string' || typeof request.nonce !== 'string') {
-        return { ok: false, message: 'Invalid native session.' };
-      }
-      const video = isolation.selectVideo(typeof request.videoId === 'string' ? request.videoId : undefined);
+      const video = isolation.selectVideo(message.videoId);
       if (!video || !isVideoInFullscreenContext(video)) {
         return { ok: false, message: 'The selected video is not in player fullscreen.' };
       }
       const stage = isolation.intrinsicCaptureStage(video);
       const state = isolation.activate(
-        request.sessionId,
-        request.nonce,
+        message.sessionId,
+        message.nonce,
         isolation.chooseCaptureRoot(video),
         video,
         stage,
@@ -126,9 +125,9 @@ async function handleRuntimeMessage(request: Record<string, unknown>): Promise<u
     }
 
     case 'NATIVE_MEASURE_FULLSCREEN': {
-      const video = isolation.selectVideo(typeof request.videoId === 'string' ? request.videoId : undefined);
-      const stagedSession = typeof request.sessionId === 'string'
-        && isolation.active?.sessionId === request.sessionId
+      const video = isolation.selectVideo(message.videoId);
+      const stagedSession = message.sessionId !== undefined
+        && isolation.active?.sessionId === message.sessionId
         && isolation.activeVideo === video;
       if (!video || (!stagedSession && !isVideoInFullscreenContext(video))) {
         return { ok: false, message: 'Player fullscreen ended before capture started.' };
@@ -179,10 +178,7 @@ async function handleRuntimeMessage(request: Record<string, unknown>): Promise<u
     }
 
     case 'NATIVE_PREPARE_TOP_FRAME': {
-      if (typeof request.sessionId !== 'string' || typeof request.nonce !== 'string') {
-        return { ok: false, message: 'Invalid native session.' };
-      }
-      const frame = isolation.selectSourceFrame(typeof request.sourceUrl === 'string' ? request.sourceUrl : '');
+      const frame = isolation.selectSourceFrame(message.sourceUrl ?? '');
       if (!frame) {
         return {
           ok: false,
@@ -190,57 +186,44 @@ async function handleRuntimeMessage(request: Record<string, unknown>): Promise<u
           message: 'The embedded player frame could not be isolated for native fullscreen capture.',
         };
       }
-      isolation.activate(request.sessionId, request.nonce, frame, null);
+      isolation.activate(message.sessionId, message.nonce, frame, null);
       return { ok: true, isolatedFrame: true };
     }
 
     case 'NATIVE_SET_TITLE_NONCE': {
-      if (typeof request.sessionId !== 'string' || typeof request.nonce !== 'string') return { ok: false };
       const { originalTitle } = isolation.applyNonceTitle(
-        request.sessionId,
-        request.nonce,
-        typeof request.captureKind === 'string' ? request.captureKind : undefined,
+        message.sessionId,
+        message.nonce,
+        message.captureKind,
       );
       return { ok: true, originalTitle };
     }
 
     case 'NATIVE_RESTORE_SESSION':
-      isolation.restore(
-        typeof request.sessionId === 'string' ? request.sessionId : undefined,
-        typeof request.originalTitle === 'string' ? request.originalTitle : undefined,
-      );
+      isolation.restore(message.sessionId, message.originalTitle);
       return { ok: true };
 
     case 'NATIVE_RESTORE_TITLE':
-      isolation.restoreDirectTitle(
-        typeof request.sessionId === 'string' ? request.sessionId : undefined,
-        typeof request.originalTitle === 'string' ? request.originalTitle : undefined,
-      );
+      isolation.restoreDirectTitle(message.sessionId, message.originalTitle);
       return { ok: true };
 
     case 'NATIVE_POINTER_EVENT':
-      inputBridge.dispatchPointer(request);
+      inputBridge.dispatchPointer(message);
       return { ok: true };
 
     case 'NATIVE_MEDIA_COMMAND_EVENT':
       return {
         ok: true,
-        ...await inputBridge.runMediaCommand(
-          String(request.command ?? ''),
-          typeof request.value === 'number' ? request.value : undefined,
-        ),
+        ...await inputBridge.runMediaCommand(message.command, message.value),
       };
 
     case 'NATIVE_SESSION_EVENT': {
-      const event = request.event as Record<string, unknown> | undefined;
+      const event = message.event as Record<string, unknown> | undefined;
       if (event?.type === 'error') showNotice(String(event.message ?? 'Native renderer error.'), true);
       else if (event?.type === 'status' && event.state === 'capturing') showNotice('AniWebScale native rendering is active.');
       window.dispatchEvent(new CustomEvent('anime4k-native-session', { detail: event }));
       return { ok: true };
     }
-
-    default:
-      return undefined;
   }
 }
 
@@ -264,7 +247,7 @@ if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
   }
 
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-    void handleRuntimeMessage(request as Record<string, unknown>).then(sendResponse, error => {
+    void handleRuntimeMessage(request).then(sendResponse, error => {
       console.error('[AniWebScale] Content message handler failed.', error);
       sendResponse({ ok: false, message: error instanceof Error ? error.message : String(error) });
     });

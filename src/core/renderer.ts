@@ -8,11 +8,7 @@ import { RendererInitializationError, RendererRuntimeError } from './errors';
 import { loadPipelineConstructor } from './pipeline-loader';
 import type { Anime4KPipeline } from './pipeline-types';
 import { OverloadTracker } from './render-stats';
-import {
-  PRESENT_CURRENT_FRAME,
-  PRESENT_PREVIOUS_FRAME,
-  PRESENT_INTERMEDIATE_FRAME,
-} from './presentation-protocol';
+import { FrameGeneration, type FrameGenerationHost } from './frame-generation';
 
 const fullscreenQuadWGSL = `
 struct VertexOutput {
@@ -136,14 +132,24 @@ fn sampleMotionIntermediate(uv: vec2f, factor: f32, dimensions: vec2f) -> vec4f 
   let texel = 1.0 / dimensions;
   var bestOffset = vec2f(0.0);
   var bestError = 1000.0;
-  for (var y: i32 = -2; y <= 2; y += 2) {
-    for (var x: i32 = -2; x <= 2; x += 2) {
-      let candidate = vec2f(f32(x), f32(y));
-      let error = motionError(uv, candidate, texel);
-      if (error < bestError) {
-        bestError = error;
-        bestOffset = candidate;
-      }
+  // Separable search: resolve the horizontal component first, then refine the
+  // vertical one around that winner. Five error evaluations instead of nine
+  // still cover pure horizontal/vertical offsets plus the dominant diagonal;
+  // an off-axis diagonal only degrades to the low-confidence blend.
+  for (var x: i32 = -2; x <= 2; x += 2) {
+    let candidate = vec2f(f32(x), 0.0);
+    let error = motionError(uv, candidate, texel);
+    if (error < bestError) {
+      bestError = error;
+      bestOffset = candidate;
+    }
+  }
+  for (var y: i32 = -2; y <= 2; y += 4) {
+    let candidate = vec2f(bestOffset.x, f32(y));
+    let error = motionError(uv, candidate, texel);
+    if (error < bestError) {
+      bestError = error;
+      bestOffset = candidate;
     }
   }
   let motion = bestOffset * texel;
@@ -185,18 +191,6 @@ fn fragmentMain(@location(0) uv: vec2f) -> @location(0) vec4f {
 }
 `;
 
-const historyCopyWGSL = `
-@group(0) @binding(0) var sourceTexture: texture_2d<f32>;
-@group(0) @binding(1) var targetTexture: texture_storage_2d<rgba16float, write>;
-
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3u) {
-  let dimensions = textureDimensions(targetTexture);
-  if (id.x >= dimensions.x || id.y >= dimensions.y) { return; }
-  textureStore(targetTexture, id.xy, textureLoad(sourceTexture, vec2i(id.xy), 0));
-}
-`;
-
 export interface RendererOptions {
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
@@ -230,27 +224,20 @@ export class Renderer {
   private renderPipeline!: GPURenderPipeline;
   private renderBindGroup!: GPUBindGroup;
   private renderBindGroupLayout!: GPUBindGroupLayout;
-  private historyPresentationBindGroups: [GPUBindGroup, GPUBindGroup] | null = null;
-  private historyPresentationIndex = 0;
   private sampler!: GPUSampler;
   private presentationUniform!: GPUBuffer;
-  private historyPipeline!: GPUComputePipeline;
-  private historyTextures: [GPUTexture, GPUTexture] | null = null;
-  private previousHistoryTexture: GPUTexture | null = null;
-  private currentHistoryTexture: GPUTexture | null = null;
-  private currentHistoryBindGroup: GPUBindGroup | null = null;
-  private previousHistoryBindGroup: GPUBindGroup | null = null;
-  private historyReady = false;
-  private generatedFrameAnimationId: number | null = null;
-  private frameGenerationStartedAt = 0;
-  private playbackFlushPending = false;
+  private readonly frameGeneration: FrameGeneration;
   private pipelineTextures = new Set<GPUTexture>();
   private buildingPipelineTextures: Set<GPUTexture> | null = null;
   private pipelineEffectKey = '';
 
   private destroyed = false;
   private frameCallbackId: number | null = null;
+  private frameCompletion: Promise<void> | null = null;
   private videoSourceRevision = 0;
+  private sourceTextureFormat: GPUTextureFormat = 'rgba8unorm';
+  private sourceDepthChecked = false;
+  private sourceFormatStale = false;
   private videoFrameHandler: VideoFrameRequestCallback;
   private frameProcessing = false;
   private pendingFrame = false;
@@ -286,6 +273,25 @@ export class Renderer {
     this.videoFrameHandler = this.createVideoFrameHandler(this.video, this.videoSourceRevision);
     this.video.addEventListener('pause', this.playbackStoppedHandler);
     this.video.addEventListener('ended', this.playbackStoppedHandler);
+    // The host adapter reads through getters so device/texture swaps made
+    // after construction (device recovery, source rebuilds) are always live.
+    const thisRef = this;
+    const host: FrameGenerationHost = {
+      get device() { return thisRef.device; },
+      get presentationUniform() { return thisRef.presentationUniform; },
+      get renderBindGroupLayout() { return thisRef.renderBindGroupLayout; },
+      get sampler() { return thisRef.sampler; },
+      get video() { return thisRef.video; },
+      get finalTexture() { return thisRef.finalTexture; },
+      get frameBudgetMs() { return thisRef.frameBudgetMs; },
+      get frameGenerationEnabled() { return thisRef.frameGenerationEnabled; },
+      isDestroyed: () => thisRef.isDestroyed(),
+      isRebuilding: () => thisRef.rebuilding,
+      isFrameProcessing: () => thisRef.frameProcessing,
+      refreshPresentationBindGroup: () => thisRef.createPresentationBindGroup(),
+      encodePresentation: encoder => thisRef.encodePresentation(encoder),
+    };
+    this.frameGeneration = new FrameGeneration(host);
   }
 
   public static async create(options: RendererOptions): Promise<Renderer> {
@@ -391,11 +397,48 @@ export class Renderer {
     this.videoFrameTexture = this.device.createTexture({
       label: 'Anime4K video frame',
       size: [Math.max(1, this.video.videoWidth), Math.max(1, this.video.videoHeight), 1],
-      format: 'rgba16float',
+      // rgba8unorm halves the copy and first-pass sampling cost for the
+      // 8-bit sources streaming serves; see detectSourceTextureFormat for the
+      // 10/12-bit exception. COPY_SRC keeps the frame usable as the history
+      // copy source when the schedule produces zero pipelines.
+      format: this.sourceTextureFormat,
       usage: GPUTextureUsage.TEXTURE_BINDING
         | GPUTextureUsage.COPY_DST
-        | GPUTextureUsage.RENDER_ATTACHMENT,
+        | GPUTextureUsage.COPY_SRC,
     });
+    this.sourceFormatStale = false;
+  }
+
+  /**
+   * 8-bit video loses nothing in rgba8unorm, but 10/12-bit sources would be
+   * quantized before the restore passes ever see them. The bit depth is read
+   * once per source from a snapshot frame; DRM-protected videos and browsers
+   * without the VideoFrame constructor throw and conservatively stay 8-bit.
+   */
+  private async detectSourceTextureFormat(): Promise<GPUTextureFormat> {
+    if (this.video.readyState < this.video.HAVE_CURRENT_DATA) return this.sourceTextureFormat;
+    try {
+      const frame = new VideoFrame(this.video);
+      try {
+        return /P1[02]$/.test(frame.format ?? '') ? 'rgba16float' : 'rgba8unorm';
+      } finally {
+        frame.close();
+      }
+    } catch {
+      return 'rgba8unorm';
+    }
+  }
+
+  private probeSourceTextureFormat(): void {
+    if (this.sourceDepthChecked) return;
+    this.sourceDepthChecked = true;
+    void this.detectSourceTextureFormat().then(format => {
+      // The rebuild runs through processFrame's serialized frame path on the
+      // next callback, so no texture is ever swapped under an in-flight frame.
+      if (this.destroyed || format === this.videoFrameTexture.format) return;
+      this.sourceTextureFormat = format;
+      this.sourceFormatStale = true;
+    }, () => undefined);
   }
 
   private async buildPipelines(): Promise<void> {
@@ -496,77 +539,24 @@ export class Renderer {
       size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.historyPipeline = await this.device.createComputePipelineAsync({
-      label: 'Frame generation history copy',
-      layout: 'auto',
-      compute: { module: this.device.createShaderModule({ code: historyCopyWGSL }), entryPoint: 'main' },
-    });
-    this.createHistoryResources();
-  }
-
-  private createPresentationBinding(previous: GPUTexture, current: GPUTexture): GPUBindGroup {
-    return this.device.createBindGroup({
-      layout: this.renderBindGroupLayout,
-      entries: [
-        { binding: 0, resource: this.sampler },
-        { binding: 1, resource: previous.createView() },
-        { binding: 2, resource: current.createView() },
-        { binding: 3, resource: { buffer: this.presentationUniform } },
-      ],
-    });
+    this.frameGeneration.createResources();
   }
 
   private createPresentationBindGroup(): void {
-    if (this.frameGenerationEnabled && this.historyPresentationBindGroups) {
-      this.renderBindGroup = this.historyPresentationBindGroups[this.historyPresentationIndex];
+    const historyBindGroup = this.frameGeneration.activeBindGroup;
+    if (historyBindGroup) {
+      this.renderBindGroup = historyBindGroup;
       return;
     }
-    this.renderBindGroup = this.createPresentationBinding(this.finalTexture, this.finalTexture);
-  }
-
-  private destroyHistoryResources(): void {
-    this.stopGeneratedFrameAnimation();
-    this.historyTextures?.forEach(texture => texture.destroy());
-    this.historyTextures = null;
-    this.previousHistoryTexture = null;
-    this.currentHistoryTexture = null;
-    this.previousHistoryBindGroup = null;
-    this.currentHistoryBindGroup = null;
-    this.historyPresentationBindGroups = null;
-    this.historyPresentationIndex = 0;
-    this.historyReady = false;
-  }
-
-  private createHistoryResources(): void {
-    this.destroyHistoryResources();
-    if (!this.frameGenerationEnabled || !this.historyPipeline || !this.finalTexture) return;
-    const descriptor: GPUTextureDescriptor = {
-      label: 'Frame generation history',
-      size: [this.finalTexture.width, this.finalTexture.height, 1],
-      format: 'rgba16float',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
-    };
-    this.historyTextures = [this.device.createTexture(descriptor), this.device.createTexture(descriptor)];
-    [this.previousHistoryTexture, this.currentHistoryTexture] = this.historyTextures;
-    const layout = this.historyPipeline.getBindGroupLayout(0);
-    this.previousHistoryBindGroup = this.device.createBindGroup({
-      layout,
+    this.renderBindGroup = this.device.createBindGroup({
+      layout: this.renderBindGroupLayout,
       entries: [
-        { binding: 0, resource: this.finalTexture.createView() },
-        { binding: 1, resource: this.previousHistoryTexture.createView() },
+        { binding: 0, resource: this.sampler },
+        { binding: 1, resource: this.finalTexture.createView() },
+        { binding: 2, resource: this.finalTexture.createView() },
+        { binding: 3, resource: { buffer: this.presentationUniform } },
       ],
     });
-    this.currentHistoryBindGroup = this.device.createBindGroup({
-      layout,
-      entries: [
-        { binding: 0, resource: this.finalTexture.createView() },
-        { binding: 1, resource: this.currentHistoryTexture.createView() },
-      ],
-    });
-    this.historyPresentationBindGroups = [
-      this.createPresentationBinding(this.historyTextures[0], this.historyTextures[1]),
-      this.createPresentationBinding(this.historyTextures[1], this.historyTextures[0]),
-    ];
   }
 
   private isSecurityError(error: unknown): boolean {
@@ -603,46 +593,6 @@ export class Renderer {
     }
   }
 
-  private encodeHistoryCopy(encoder: GPUCommandEncoder, bindGroup: GPUBindGroup): void {
-    const pass = encoder.beginComputePass({ label: 'Frame generation history copy' });
-    pass.setPipeline(this.historyPipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(
-      Math.ceil(this.finalTexture.width / 8),
-      Math.ceil(this.finalTexture.height / 8),
-    );
-    pass.end();
-  }
-
-  private prepareFrameGenerationHistory(encoder: GPUCommandEncoder): boolean {
-    if (!this.frameGenerationEnabled || !this.previousHistoryBindGroup || !this.currentHistoryBindGroup) {
-      this.device.queue.writeBuffer(this.presentationUniform, 0, PRESENT_CURRENT_FRAME);
-      return false;
-    }
-    this.stopGeneratedFrameAnimation();
-    if (!this.historyReady) {
-      this.encodeHistoryCopy(encoder, this.previousHistoryBindGroup);
-      this.encodeHistoryCopy(encoder, this.currentHistoryBindGroup);
-      this.historyReady = true;
-      this.device.queue.writeBuffer(this.presentationUniform, 0, PRESENT_CURRENT_FRAME);
-      return false;
-    }
-
-    [this.previousHistoryTexture, this.currentHistoryTexture] = [
-      this.currentHistoryTexture,
-      this.previousHistoryTexture,
-    ];
-    [this.previousHistoryBindGroup, this.currentHistoryBindGroup] = [
-      this.currentHistoryBindGroup,
-      this.previousHistoryBindGroup,
-    ];
-    this.encodeHistoryCopy(encoder, this.currentHistoryBindGroup);
-    this.historyPresentationIndex = this.historyPresentationIndex === 0 ? 1 : 0;
-    this.createPresentationBindGroup();
-    this.device.queue.writeBuffer(this.presentationUniform, 0, PRESENT_PREVIOUS_FRAME);
-    return true;
-  }
-
   private encodePresentation(encoder: GPUCommandEncoder): void {
     const renderPass = encoder.beginRenderPass({
       colorAttachments: [{
@@ -658,69 +608,15 @@ export class Renderer {
     renderPass.end();
   }
 
-  private renderHistoryFrame(factor: Float32Array, label: string): void {
-    if (this.destroyed || !this.frameGenerationEnabled || !this.historyReady || this.rebuilding) return;
-    this.device.queue.writeBuffer(this.presentationUniform, 0, factor);
-    const encoder = this.device.createCommandEncoder({ label });
-    this.encodePresentation(encoder);
-    this.device.queue.submit([encoder.finish()]);
-  }
-
-  private renderGeneratedIntermediate(): void {
-    this.renderHistoryFrame(PRESENT_INTERMEDIATE_FRAME, 'Generated intermediate frame');
-  }
-
   private handlePlaybackStopped(): void {
-    this.stopGeneratedFrameAnimation();
-    this.playbackFlushPending = true;
-    this.flushStoppedPlayback();
-  }
-
-  private flushStoppedPlayback(): void {
-    if (!this.playbackFlushPending) return;
-    if (!this.video.paused && !this.video.ended) {
-      this.playbackFlushPending = false;
-      return;
-    }
-    if (this.destroyed || !this.frameGenerationEnabled || !this.historyReady) {
-      this.playbackFlushPending = false;
-      return;
-    }
-    if (this.frameProcessing || this.rebuilding) return;
-    this.playbackFlushPending = false;
-    this.renderHistoryFrame(PRESENT_CURRENT_FRAME, 'Frame generation pause flush');
-  }
-
-  private scheduleGeneratedFrame(): void {
-    if (!this.frameGenerationEnabled || this.destroyed || this.video.paused || this.video.ended) return;
-    this.frameGenerationStartedAt = performance.now();
-    const tick = (now: number) => {
-      this.generatedFrameAnimationId = null;
-      if (this.destroyed || !this.frameGenerationEnabled || this.rebuilding) return;
-      if (this.video.paused || this.video.ended) {
-        this.handlePlaybackStopped();
-        return;
-      }
-      if (now - this.frameGenerationStartedAt >= this.frameBudgetMs * 0.5) {
-        this.renderGeneratedIntermediate();
-        return;
-      }
-      this.generatedFrameAnimationId = requestAnimationFrame(tick);
-    };
-    this.generatedFrameAnimationId = requestAnimationFrame(tick);
-  }
-
-  private stopGeneratedFrameAnimation(): void {
-    if (this.generatedFrameAnimationId !== null) {
-      cancelAnimationFrame(this.generatedFrameAnimationId);
-      this.generatedFrameAnimationId = null;
-    }
+    this.frameGeneration.onPlaybackStopped();
   }
 
   private async processFrame(): Promise<boolean> {
     if (this.destroyed || this.rebuilding || this.video.readyState < this.video.HAVE_CURRENT_DATA) return false;
     if (this.video.videoWidth !== this.videoFrameTexture.width
-      || this.video.videoHeight !== this.videoFrameTexture.height) {
+        || this.video.videoHeight !== this.videoFrameTexture.height
+        || this.sourceFormatStale) {
       await this.rebuildForSourceResize();
       return false;
     }
@@ -730,19 +626,24 @@ export class Renderer {
     if (this.destroyed) return false;
     const encoder = this.device.createCommandEncoder({ label: 'Anime4K frame' });
     this.pipelines.forEach(pipeline => pipeline.pass(encoder));
-    const generateIntermediate = this.prepareFrameGenerationHistory(encoder);
+    const generateIntermediate = this.frameGeneration.prepareFrame(encoder);
     this.encodePresentation(encoder);
     this.device.queue.submit([encoder.finish()]);
-    await this.device.queue.onSubmittedWorkDone();
-    if (this.destroyed) return false;
-    if (generateIntermediate) this.scheduleGeneratedFrame();
-
-    const renderMs = performance.now() - started;
-    this.recordStats(renderMs);
-    if (!this.firstFrameRendered) {
-      this.firstFrameRendered = true;
-      this.onFirstFrameRendered?.(this.video);
-    }
+    // Awaiting GPU completion here serialised CPU and GPU work: the next
+    // video frame could not be copied or encoded while the queue drained,
+    // capping throughput at one frame per GPU round trip. Track completion
+    // instead and run frame-bound bookkeeping from it; the rVFC pacing plus
+    // the pendingFrame coalescing keep the queue bounded to ~2 frames.
+    this.frameCompletion = this.device.queue.onSubmittedWorkDone().then(() => {
+      if (this.destroyed) return;
+      if (generateIntermediate) this.frameGeneration.scheduleIntermediate();
+      this.recordStats(performance.now() - started);
+      if (!this.firstFrameRendered) {
+        this.firstFrameRendered = true;
+        this.onFirstFrameRendered?.(this.video);
+        this.probeSourceTextureFormat();
+      }
+    }, () => undefined);
     return true;
   }
 
@@ -808,8 +709,7 @@ export class Renderer {
     // real frame for a final current-frame presentation, but still process it:
     // browsers also deliver legitimate rVFCs while scrubbing a paused video.
     if (this.video.paused || this.video.ended) {
-      this.stopGeneratedFrameAnimation();
-      this.playbackFlushPending = true;
+      this.frameGeneration.markPausedForSeek();
     }
     if (this.lastCallbackMediaTime !== null && metadata.mediaTime > this.lastCallbackMediaTime) {
       const interval = (metadata.mediaTime - this.lastCallbackMediaTime) * 1000;
@@ -845,7 +745,7 @@ export class Renderer {
       this.onError?.(runtimeError);
     } finally {
       this.frameProcessing = false;
-      this.flushStoppedPlayback();
+      this.frameGeneration.flush();
     }
   }
 
@@ -875,13 +775,17 @@ export class Renderer {
     try {
       await this.device.queue.onSubmittedWorkDone();
       if (this.destroyed) return;
+      // Adaptive stream switches can change the bit depth together with the
+      // resolution; pick the new format up while the pipeline is down anyway.
+      this.sourceTextureFormat = await this.detectSourceTextureFormat();
+      if (this.destroyed) return;
       this.createSourceTexture();
       await this.buildPipelines();
-      this.createHistoryResources();
+      this.frameGeneration.createResources();
       this.createPresentationBindGroup();
     } finally {
       this.rebuilding = false;
-      this.flushStoppedPlayback();
+      this.frameGeneration.flush();
     }
   }
 
@@ -929,12 +833,12 @@ export class Renderer {
         await this.device.queue.onSubmittedWorkDone();
         await this.buildPipelines();
         gpuStateChanged = true;
-        this.createHistoryResources();
+        this.frameGeneration.createResources();
         this.createPresentationBindGroup();
       } else if (frameGenerationChanged) {
         await this.device.queue.onSubmittedWorkDone();
         gpuStateChanged = true;
-        this.createHistoryResources();
+        this.frameGeneration.createResources();
         this.createPresentationBindGroup();
       }
       this.canvas.width = options.targetDimensions.width;
@@ -983,7 +887,7 @@ export class Renderer {
         // remains active; waiting for another callback could freeze the frame.
         await this.drainFrames(pendingMetadata);
       }
-      this.flushStoppedPlayback();
+      this.frameGeneration.flush();
       this.startFrameCallbacks();
     }
     if (postConfigurationError) throw postConfigurationError;
@@ -1018,6 +922,7 @@ export class Renderer {
     this.video.addEventListener('ended', this.playbackStoppedHandler);
     this.useImageBitmap = false;
     this.firstFrameRendered = false;
+    this.sourceDepthChecked = false;
     this.lastCallbackMediaTime = null;
     this.frameBudgetMs = 1000 / 24;
     // A replacement node often lacks metadata; rebuilding against its 0x0
@@ -1043,6 +948,11 @@ export class Renderer {
     await this.waitForFrameIdle();
     if (this.destroyed) return;
     try {
+      // The lost device's resources are being rebuilt from scratch below.
+      // Destroy it explicitly so its GPU allocations do not linger until
+      // garbage collection; the lost handler ignores reason "destroyed".
+      this.frameCompletion = null;
+      this.device?.destroy();
       await this.createDevice();
       this.configureContext();
       this.createSourceTexture();
@@ -1061,16 +971,20 @@ export class Renderer {
     this.video.removeEventListener('pause', this.playbackStoppedHandler);
     this.video.removeEventListener('ended', this.playbackStoppedHandler);
     this.stopFrameCallbacks();
-    this.stopGeneratedFrameAnimation();
-    this.playbackFlushPending = false;
+    this.frameGeneration.destroy();
     if (this.cleanupScheduled) return;
     this.cleanupScheduled = true;
-    void this.waitForFrameIdle().then(() => this.releaseResources());
+    void this.waitForFrameIdle().then(async () => {
+      // Frames return before their GPU work completes; keep the resources
+      // alive until the queue has drained so destruction cannot race the GPU.
+      await this.frameCompletion?.catch(() => undefined);
+      this.releaseResources();
+    });
   }
 
   private releaseResources(): void {
     try {
-      this.destroyHistoryResources();
+      this.frameGeneration.destroyResources();
       this.destroyPipelineTextures(this.pipelineTextures);
       if (this.buildingPipelineTextures) this.destroyPipelineTextures(this.buildingPipelineTextures);
       this.videoFrameTexture?.destroy();

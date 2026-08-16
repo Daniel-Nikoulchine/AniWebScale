@@ -22,7 +22,12 @@ function configurableRenderer(): any {
   renderer.stopFrameCallbacks = vi.fn();
   renderer.waitForFrameIdle = vi.fn(() => Promise.resolve());
   renderer.startFrameCallbacks = vi.fn();
-  renderer.createHistoryResources = vi.fn();
+  renderer.frameGeneration = {
+    createResources: vi.fn(),
+    flush: vi.fn(),
+    markPausedForSeek: vi.fn(),
+    activeBindGroup: {} as GPUBindGroup,
+  };
   renderer.createPresentationBindGroup = vi.fn();
   renderer.processFrame = vi.fn(async () => {
     renderer.firstFrameRendered = true;
@@ -55,7 +60,7 @@ describe('renderer configuration transactions', () => {
   it('destroys the renderer if a failure happens after GPU resources were committed', async () => {
     const renderer = configurableRenderer();
     renderer.buildPipelines = vi.fn(() => Promise.resolve());
-    renderer.createHistoryResources = vi.fn(() => { throw new Error('history allocation failed'); });
+    renderer.frameGeneration.createResources = vi.fn(() => { throw new Error('history allocation failed'); });
     renderer.destroy = vi.fn(() => { renderer.destroyed = true; });
 
     await expect(renderer.applyConfiguration({
@@ -95,9 +100,6 @@ describe('renderer configuration transactions', () => {
     renderer.frameProcessing = false;
     renderer.pendingFrame = false;
     renderer.latestMetadata = null;
-    renderer.playbackFlushPending = false;
-    renderer.stopGeneratedFrameAnimation = vi.fn();
-    renderer.flushStoppedPlayback = vi.fn();
     renderer.drainFrames = vi.fn(() => Promise.resolve());
     renderer.buildPipelines = vi.fn(() => {
       renderer.handleVideoFrame(renderer.video, 6, 0, metadata);

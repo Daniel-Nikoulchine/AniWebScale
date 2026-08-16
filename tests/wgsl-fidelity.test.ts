@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clampTextureLoadCoordinates,
   createAnime4KShaderDevice,
@@ -6,6 +6,8 @@ import {
 } from '../src/shared/wgsl-fidelity';
 
 describe('WGSL texture-load fidelity patch', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it('clamps signed and unsigned two-dimensional coordinates', () => {
     const source = `
 fn first(tex: texture_2d<f32>, pos: vec2u) -> vec4f {
@@ -92,7 +94,9 @@ fn load(tex: texture_2d<f32>, pos: vec2u) -> vec4f {
   });
 
   it('patches shader modules while preserving GPUDevice receivers and descriptors', () => {
+    vi.stubGlobal('GPUTextureUsage', { COPY_SRC: 1 });
     let shaderDescriptor: GPUShaderModuleDescriptor | undefined;
+    let textureDescriptor: GPUTextureDescriptor | undefined;
     let textureReceiver: unknown;
     let trackedTexture: GPUTexture | undefined;
     const shaderModule = {} as GPUShaderModule;
@@ -102,7 +106,8 @@ fn load(tex: texture_2d<f32>, pos: vec2u) -> vec4f {
         shaderDescriptor = descriptor;
         return shaderModule;
       },
-      createTexture() {
+      createTexture(descriptor: GPUTextureDescriptor) {
+        textureDescriptor = descriptor;
         textureReceiver = this;
         return texture;
       },
@@ -126,8 +131,11 @@ fn load(tex: texture_2d<f32>, pos: vec2u) -> vec4f {
     expect(proxy.createTexture({
       size: [1, 1],
       format: 'rgba8unorm',
-      usage: 1,
+      usage: 0x04,
     })).toBe(texture);
+    // COPY_SRC is injected so the final pipeline output can feed the frame
+    // generation history copy; GPUTextureUsage.COPY_SRC === 0x01.
+    expect(textureDescriptor?.usage).toBe(0x04 | 0x01);
     expect(textureReceiver).toBe(device);
     expect(trackedTexture).toBe(texture);
   });

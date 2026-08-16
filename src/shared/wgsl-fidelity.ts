@@ -277,7 +277,14 @@ export function createAnime4KShaderDevice(
       }
       if (property === 'createTexture') {
         return (descriptor: GPUTextureDescriptor): GPUTexture => {
-          const texture = createTexture(descriptor);
+          // The frame generation history copies the final pipeline output with
+          // copyTextureToTexture, which requires COPY_SRC on it. The output of
+          // the chain is only known after construction, so every pipeline
+          // texture carries the flag; intermediates simply never use it.
+          const texture = createTexture({
+            ...descriptor,
+            usage: descriptor.usage | GPUTextureUsage.COPY_SRC,
+          });
           onTextureCreated?.(texture);
           return texture;
         };

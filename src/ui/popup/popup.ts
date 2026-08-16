@@ -6,6 +6,7 @@ import {
   modeUsesQuality,
 } from '../../shared/presets';
 import { getSettings, saveSettings } from '../../utils/settings';
+import { hasAllWebsiteAccess, requestAllWebsiteAccess } from '../../site-access';
 import { populateModeSelect, renderModeDescription } from '../mode-select';
 import { themeManager } from '../theme-manager';
 import { localizeDocument, message } from '../i18n';
@@ -29,11 +30,39 @@ document.addEventListener('DOMContentLoaded', async () => {
   const siteAccessSummary = document.getElementById('site-access-summary') as HTMLElement;
   const siteAccessButton = document.getElementById('site-access') as HTMLButtonElement;
 
-  // Content scripts are declared in manifest.json with host_permissions for
-  // all sites. Per-site access grants are no longer needed.
-  siteAccessCard.dataset.state = 'granted';
-  siteAccessSummary.textContent = message('siteAccessGranted', 'AniWebScale is active on all websites.');
-  siteAccessButton.style.display = 'none';
+  // Content scripts are declared in manifest.json for all sites. Chrome
+  // grants those host permissions automatically, but Firefox treats MV3 host
+  // permissions like optional ones and leaves them ungranted until the user
+  // agrees — offer the runtime request instead of sending people to
+  // about:addons.
+  const updateSiteAccessUi = async () => {
+    if (await hasAllWebsiteAccess()) {
+      siteAccessCard.dataset.state = 'granted';
+      siteAccessSummary.textContent = message('siteAccessGranted', 'AniWebScale is active on all websites.');
+      siteAccessButton.style.display = 'none';
+      return;
+    }
+    siteAccessCard.dataset.state = 'unavailable';
+    siteAccessSummary.textContent = message(
+      'siteAccessAllMissing',
+      'AniWebScale has no website access in this browser yet.',
+    );
+    siteAccessButton.style.display = '';
+    siteAccessButton.disabled = false;
+    siteAccessButton.textContent = message('allowAllWebsites', 'Allow on all websites');
+  };
+  siteAccessButton.addEventListener('click', async () => {
+    siteAccessButton.disabled = true;
+    try {
+      await requestAllWebsiteAccess();
+    } catch (error) {
+      console.error('[AniWebScale] Could not request website access:', error);
+    } finally {
+      await updateSiteAccessUi();
+      siteAccessButton.disabled = false;
+    }
+  });
+  await updateSiteAccessUi();
 
   version.textContent = chrome.runtime.getManifest().version;
   const settings = await getSettings();

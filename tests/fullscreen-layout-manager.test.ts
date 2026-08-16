@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { FullscreenLayoutManager } from '../src/core/fullscreen-layout-manager';
 import { applyTemporaryStyles, restoreTemporaryStyles } from '../src/shared/temporary-restyle';
 
 class FakeStyle {

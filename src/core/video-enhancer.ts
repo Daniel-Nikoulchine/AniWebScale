@@ -79,6 +79,17 @@ export class VideoEnhancer {
   };
   private readonly fullscreenChangeHandler = () => this.scheduleFullscreenReconcile();
 
+  private readonly bfcacheRestoreHandler = (event: Event) => {
+    // The native host session cannot survive a back/forward cache freeze: the
+    // stop event was dropped together with the frozen document, leaving a
+    // native-active enhancer wired to a session that no longer exists.
+    if (!(event as PageTransitionEvent).persisted || !this.backend.isNativeActive) return;
+    void this.stopEnhancement().then(
+      () => this.scheduleFullscreenReconcile(0),
+      () => undefined,
+    );
+  };
+
   private readonly nativeSessionHandler = (event: Event) => {
     if (!this.backend.isNativeActive) return;
     const detail = (event as CustomEvent<Record<string, unknown>>).detail;
@@ -184,6 +195,7 @@ export class VideoEnhancer {
       }
     }
     window.addEventListener('anime4k-native-session', this.nativeSessionHandler);
+    window.addEventListener('pageshow', this.bfcacheRestoreHandler);
     void getSettings().then(settings => {
       if (this.destroyed) return;
       this.currentSettings = settings;
@@ -794,6 +806,7 @@ export class VideoEnhancer {
       }
     }
     window.removeEventListener('anime4k-native-session', this.nativeSessionHandler);
+    window.removeEventListener('pageshow', this.bfcacheRestoreHandler);
     if (this.targetUpdateTimer) window.clearTimeout(this.targetUpdateTimer);
     if (this.fullscreenDebounceTimer) window.clearTimeout(this.fullscreenDebounceTimer);
     this.stopNativePlaybackHeartbeat();

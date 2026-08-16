@@ -1,6 +1,5 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { NativeSession } from '../src/background/native-session';
-import type { NativeFallbackRequest } from '../src/shared/native-fallback-request';
 import type { NativeSessionRecord } from '../src/background-types';
 import { NATIVE_SESSION_VERSION } from '../src/shared/session-recovery';
 import { NATIVE_PROTOCOL_VERSION } from '../src/native/protocol';
@@ -60,18 +59,6 @@ beforeEach(() => {
 
 function config(overrides: Partial<NativeConfiguration> = {}): NativeConfiguration {
   return { mode: 'A', quality: 'M', frameGenerationEnabled: false, ...overrides };
-}
-
-function fallbackRequest(overrides: Partial<NativeFallbackRequest> = {}): NativeFallbackRequest {
-  return {
-    type: 'NATIVE_FALLBACK_REQUEST',
-    videoId: 'video-1',
-    reason: 'webgpu-unavailable',
-    configuration: config(),
-    output: 'auto',
-    videoRect: { x: 0, y: 0, width: 1920, height: 1080, devicePixelRatio: 1 },
-    ...overrides,
-  };
 }
 
 function sender(overrides: Partial<chrome.runtime.MessageSender> = {}): chrome.runtime.MessageSender {

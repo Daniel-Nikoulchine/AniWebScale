@@ -3,8 +3,30 @@ const REGISTERED_SCRIPT_IDS = [
   'aniwebscale-content',
 ] as const;
 
+/**
+ * The broad host permissions declared in manifest.json. Firefox treats MV3
+ * host permissions like optional ones: they are not granted silently on
+ * install/update, so the popup must be able to request them at runtime.
+ */
+export const ALL_WEBSITE_ORIGINS = ['http://*/*', 'https://*/*'] as const;
+
 function isHttpMatchPattern(pattern: string): boolean {
   return /^https?:\/\/[^/]+\/\*$/.test(pattern);
+}
+
+/** True when the extension may run on every http(s) website. */
+export async function hasAllWebsiteAccess(): Promise<boolean> {
+  const granted = await chrome.permissions.getAll();
+  const origins = new Set(granted.origins ?? []);
+  return ALL_WEBSITE_ORIGINS.every(pattern => origins.has(pattern));
+}
+
+/**
+ * Ask the user to grant access to every http(s) website. Must be called from
+ * a user gesture (popup/options button click); resolves false when declined.
+ */
+export async function requestAllWebsiteAccess(): Promise<boolean> {
+  return chrome.permissions.request({ origins: [...ALL_WEBSITE_ORIGINS] });
 }
 
 export function sitePatternForUrl(input: string | undefined): string | null {

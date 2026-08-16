@@ -30,13 +30,16 @@
   // Some players attach MediaKeys before the video node is discovered or swap
   // the node immediately afterwards. Intercept the standardized EME API as an
   // additional website-independent signal while preserving its native call.
-  const nativeSetMediaKeys = HTMLMediaElement.prototype.setMediaKeys;
+  const setMediaKeysDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setMediaKeys');
+  const nativeSetMediaKeys = setMediaKeysDescriptor?.value as
+    | typeof HTMLMediaElement.prototype.setMediaKeys
+    | undefined;
   if (typeof nativeSetMediaKeys === 'function') {
     HTMLMediaElement.prototype.setMediaKeys = function setAnime4KMediaKeys(
       mediaKeys: MediaKeys | null,
     ): Promise<void> {
       if (mediaKeys) markProtectedPlayback();
-      return Reflect.apply(nativeSetMediaKeys, this, [mediaKeys]) as Promise<void>;
+      return Reflect.apply(nativeSetMediaKeys, this, [mediaKeys]);
     };
   }
 

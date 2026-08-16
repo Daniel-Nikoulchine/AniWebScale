@@ -896,13 +896,25 @@ if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
   if (__ANIME4K_E2E__) installLocalE2ETestBridge();
   window.addEventListener('anime4k-video-reattached', handleNativeVideoReattach);
 
+  // pagehide also fires when the page is frozen for the back/forward cache.
+  // Keep this listener installed (no `once`) so a later real unload still
+  // stops a session rebuilt in the meantime.
   window.addEventListener('pagehide', () => {
-    window.removeEventListener('anime4k-video-reattached', handleNativeVideoReattach);
     if (isolation) {
       void chrome.runtime.sendMessage({ type: 'NATIVE_STOP', sessionId: isolation.sessionId }).catch(() => undefined);
     }
     if (directTitle) {
       void chrome.runtime.sendMessage({ type: 'NATIVE_STOP', sessionId: directTitle.sessionId }).catch(() => undefined);
     }
-  }, { once: true });
+  });
+
+  // Restore messages delivered while the document was frozen cannot reach it.
+  // Clear the local isolation state so a page restored from the back/forward
+  // cache is usable again instead of staying black with a nonce title.
+  window.addEventListener('pageshow', event => {
+    if (!(event as PageTransitionEvent).persisted) return;
+    if (isolation) restoreIsolation(isolation.sessionId);
+    if (directTitle) restoreDirectTitle(directTitle.sessionId);
+    void initializeOnPage();
+  });
 }

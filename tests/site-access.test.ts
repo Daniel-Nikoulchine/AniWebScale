@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  hasAllWebsiteAccess,
   injectSiteScripts,
   migrateLegacyBroadSiteAccess,
+  requestAllWebsiteAccess,
   sitePatternForUrl,
   synchronizeRegisteredContentScripts,
 } from '../src/site-access';
@@ -10,11 +12,13 @@ interface ChromeMockOptions {
   origins?: string[];
   registered?: chrome.scripting.RegisteredContentScript[];
   migrated?: boolean;
+  requestResult?: boolean;
 }
 
 function installChromeMock(options: ChromeMockOptions = {}) {
   const getAll = vi.fn(async () => ({ origins: options.origins ?? [], permissions: [] }));
   const remove = vi.fn(async () => true);
+  const request = vi.fn(async () => options.requestResult ?? true);
   const storageGet = vi.fn(async () => ({
     anime4kGranularSiteAccessV1: options.migrated ?? false,
   }));
@@ -30,6 +34,7 @@ function installChromeMock(options: ChromeMockOptions = {}) {
     permissions: {
       getAll,
       remove,
+      request,
     },
     storage: {
       local: {
@@ -50,6 +55,7 @@ function installChromeMock(options: ChromeMockOptions = {}) {
     getRegisteredContentScripts,
     registerContentScripts,
     remove,
+    request,
     storageSet,
     unregisterContentScripts,
   };
@@ -98,5 +104,26 @@ describe('site access', () => {
       [{ target: { tabId: 42, allFrames: true }, files: ['fullscreen-bridge.js'], world: 'MAIN' }],
       [{ target: { tabId: 42, allFrames: true }, files: ['content.js'], world: 'ISOLATED' }],
     ]);
+  });
+
+  it('reports full website access only when both broad origins are granted', async () => {
+    installChromeMock({ origins: ['http://*/*', 'https://*/*'] });
+    await expect(hasAllWebsiteAccess()).resolves.toBe(true);
+
+    // The Firefox state after an update: only a leftover per-site grant
+    // (e.g. Crunchyroll) survives, so the broad origins are not covered.
+    installChromeMock({ origins: ['*://*.crunchyroll.com/*'] });
+    await expect(hasAllWebsiteAccess()).resolves.toBe(false);
+
+    installChromeMock({ origins: [] });
+    await expect(hasAllWebsiteAccess()).resolves.toBe(false);
+  });
+
+  it('requests both broad origins at once when asking for website access', async () => {
+    const mock = installChromeMock({ requestResult: true });
+    await expect(requestAllWebsiteAccess()).resolves.toBe(true);
+    expect(mock.request).toHaveBeenCalledWith({
+      origins: ['http://*/*', 'https://*/*'],
+    });
   });
 });

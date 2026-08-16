@@ -1020,7 +1020,15 @@ export class Renderer {
     this.firstFrameRendered = false;
     this.lastCallbackMediaTime = null;
     this.frameBudgetMs = 1000 / 24;
-    await this.rebuildForSourceResize();
+    // A replacement node often lacks metadata; rebuilding against its 0x0
+    // intrinsic size would compile a useless 1x1 pipeline, and an unchanged
+    // resolution needs no rebuild at all. processFrame's size check rebuilds
+    // once the first real frame of the new source arrives.
+    if (this.video.readyState >= this.video.HAVE_METADATA
+        && (this.video.videoWidth !== this.videoFrameTexture.width
+          || this.video.videoHeight !== this.videoFrameTexture.height)) {
+      await this.rebuildForSourceResize();
+    }
     await this.processFrame();
     this.startFrameCallbacks();
   }

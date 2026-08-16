@@ -11,7 +11,9 @@ import { populateModeSelect, renderModeSummary } from '../mode-select';
 import { localizeDocument, message } from '../i18n';
 import {
   getGrantedSitePatterns,
+  hasAllWebsiteAccess,
   removeSiteAccessPatterns,
+  requestAllWebsiteAccess,
 } from '../../site-access';
 
 const CONSENT_KEY = 'anime4kNativeConsentByOrigin';
@@ -89,7 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     quality.disabled = !modeUsesQuality(selectedMode);
     backend.disabled = processingDisabled;
     const intensive = frameGeneration.checked;
-    compatibilityHint.hidden = !intensive && !processingDisabled;
+    compatibilityHint.hidden = !intensive;
     compatibilityHint.textContent = intensive
       ? message('frameGenerationLoad', 'Frame generation increases GPU memory use and processing load.')
       : '';
@@ -154,19 +156,46 @@ async function synchronizeSiteAccess(): Promise<void> {
   }
 }
 
+// Host permissions are declared in manifest.json for all sites; the broad
+// patterns cannot be revoked at runtime and must not render remove buttons
+// that silently fail. Only genuinely optional grants are removable.
+const BROAD_MANIFEST_ORIGINS = new Set(['http://*/*', 'https://*/*']);
+
 async function renderWebsitePermissions(): Promise<void> {
   const list = document.getElementById('website-sites') as HTMLDivElement;
   const clear = document.getElementById('clear-website-sites') as HTMLButtonElement;
-  const patterns = await getGrantedSitePatterns();
+  const grant = document.getElementById('grant-website-access') as HTMLButtonElement;
+  const hasAllAccess = await hasAllWebsiteAccess();
+  const granted = await getGrantedSitePatterns();
+  const activeEverywhere = hasAllAccess || granted.some(pattern => BROAD_MANIFEST_ORIGINS.has(pattern));
+  const patterns = granted.filter(pattern => !BROAD_MANIFEST_ORIGINS.has(pattern));
   list.textContent = '';
   clear.disabled = patterns.length === 0;
+  // Firefox leaves MV3 host permissions ungranted until the user agrees;
+  // surface the runtime request instead of an empty, misleading list.
+  grant.hidden = hasAllAccess;
+  grant.onclick = async () => {
+    grant.disabled = true;
+    try {
+      await requestAllWebsiteAccess();
+    } finally {
+      grant.disabled = false;
+      await renderWebsitePermissions();
+    }
+  };
 
-  if (patterns.length === 0) {
+  if (activeEverywhere) {
+    const all = document.createElement('p');
+    all.className = 'empty';
+    all.textContent = message('siteAccessGranted', 'AniWebScale is active on all websites.');
+    list.appendChild(all);
+  } else if (patterns.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'empty';
     empty.textContent = message('noWebsiteSites', 'No websites can run AniWebScale yet.');
     list.appendChild(empty);
-  } else {
+  }
+  if (patterns.length > 0) {
     patterns.forEach(pattern => {
       const row = document.createElement('div');
       row.className = 'site-row';

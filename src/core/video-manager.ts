@@ -137,6 +137,16 @@ function handlePageUnload(): void {
   initialized = false;
 }
 
+function handlePageHide(event: PageTransitionEvent): void {
+  // A persisted pagehide only freezes the document for the back/forward
+  // cache; its enhancers must survive so playback resumes enhanced after the
+  // user navigates back. Teardown also must not run when a beforeunload
+  // dialog is cancelled, so it runs on the real unload path only.
+  if (event.persisted) return;
+  window.removeEventListener('pagehide', handlePageHide);
+  handlePageUnload();
+}
+
 export async function initializeOnPage(): Promise<void> {
   if (initialized) return;
   const revision = initializationRevision;
@@ -144,7 +154,7 @@ export async function initializeOnPage(): Promise<void> {
   if (revision !== initializationRevision || !settings.extensionEnabled || initialized) return;
   initialized = true;
   observeRoot(document, 'initial-scan');
-  window.addEventListener('beforeunload', handlePageUnload, { once: true });
+  window.addEventListener('pagehide', handlePageHide);
 }
 
 export async function handleSettingsUpdate(
@@ -197,6 +207,6 @@ export async function handleSettingsUpdate(
 }
 
 function deinitializeOnPage(): void {
-  window.removeEventListener('beforeunload', handlePageUnload);
+  window.removeEventListener('pagehide', handlePageHide);
   handlePageUnload();
 }

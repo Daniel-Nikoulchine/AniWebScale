@@ -177,10 +177,15 @@ describe('frame-generation presentation resources', () => {
     } as unknown as HTMLVideoElement;
     const replacement = {
       addEventListener: vi.fn(),
+      readyState: 4,
+      HAVE_METADATA: 1,
+      videoWidth: 640,
+      videoHeight: 360,
     } as unknown as HTMLVideoElement;
     const renderer = Object.create(Renderer.prototype) as any;
     renderer.destroyed = false;
     renderer.video = oldSource;
+    renderer.videoFrameTexture = texture(1280, 720);
     renderer.videoSourceRevision = 2;
     renderer.firstFrameRendered = true;
     renderer.playbackStoppedHandler = vi.fn();
@@ -210,10 +215,15 @@ describe('frame-generation presentation resources', () => {
     } as unknown as HTMLVideoElement;
     const replacement = {
       addEventListener: vi.fn(),
+      readyState: 4,
+      HAVE_METADATA: 1,
+      videoWidth: 640,
+      videoHeight: 360,
     } as unknown as HTMLVideoElement;
     const renderer = Object.create(Renderer.prototype) as any;
     renderer.destroyed = false;
     renderer.video = oldSource;
+    renderer.videoFrameTexture = texture(1280, 720);
     renderer.videoSourceRevision = 8;
     renderer.frameCallbackId = 31;
     renderer.firstFrameRendered = true;

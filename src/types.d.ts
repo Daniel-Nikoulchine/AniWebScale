@@ -39,6 +39,8 @@ interface Anime4KWebExtSettings {
 
 interface LocalSettings {
   hasCompletedOnboarding: boolean;
+  /** Set when the user last completed onboarding under the per-site access model. */
+  siteAccessModelAcknowledged: boolean;
   verboseLogging: boolean;
 }
 
@@ -51,8 +53,9 @@ interface RenderStats {
 
 interface VideoEnhancer {
   destroy: () => void;
-  stopEnhancement: (stopNative?: boolean, releaseClaim?: boolean) => Promise<void>;
+  stopEnhancement: (options?: { stopNative?: boolean; releaseClaim?: boolean }) => Promise<void>;
   getCurrentModeId: () => string | null;
+  isActive: () => boolean;
   updateSettings: (settings: Anime4KWebExtSettings) => Promise<void>;
   getVideoElement: () => HTMLVideoElement;
   detach: () => void;

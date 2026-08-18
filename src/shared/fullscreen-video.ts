@@ -9,6 +9,21 @@ import { ANIME4K_APPLIED_ATTR, ANIME4K_FULLSCREEN_DOCUMENT_ATTR } from '../const
  */
 let fullscreenApiActive = false;
 
+// Reset the flag from the event, as documented above, so that consecutive
+// predicate calls after one explicit exit agree instead of the first caller
+// consuming the reset. Cross-origin frames never see this event fire locally;
+// the per-call reset below remains as their fallback. Registered lazily: this
+// module is also imported by DOM-less unit tests.
+let fullscreenChangeListenerInstalled = false;
+function ensureFullscreenChangeListener(): void {
+  if (fullscreenChangeListenerInstalled) return;
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  fullscreenChangeListenerInstalled = true;
+  document.addEventListener('fullscreenchange', () => {
+    if (!getFullscreenElement()) fullscreenApiActive = false;
+  });
+}
+
 /** Reset the fullscreen API tracking state. Used by tests. */
 export function resetFullscreenApiTracking(): void {
   fullscreenApiActive = false;
@@ -98,6 +113,34 @@ export function hasFullscreenContext(
     || allowGeometryFallback && viewportOccupiesScreen(viewport, display);
 }
 
+/**
+ * Whether a visible video covers (nearly) all of its own frame's viewport.
+ * Embedded hoster players (VOE, Doodstream, Filemoon, Vidmoly, ...) fill
+ * their iframe exactly, so this is the embedded counterpart of an explicit
+ * fullscreen context: a geometry signal the enhancement election can use
+ * when the Fullscreen API element is never set — or lives in a parent
+ * document this frame cannot read.
+ */
+export function videoFillsOwnViewport(video: HTMLVideoElement): boolean {
+  if (!video.isConnected) return false;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  if (!(viewportWidth > 0) || !(viewportHeight > 0)) return false;
+  const rect = video.getBoundingClientRect();
+  const fillsViewport = rect.width >= viewportWidth * 0.88
+    && rect.height >= viewportHeight * 0.88
+    && rect.left <= viewportWidth * 0.08
+    && rect.top <= viewportHeight * 0.08
+    && rect.right >= viewportWidth * 0.92
+    && rect.bottom >= viewportHeight * 0.92;
+  if (!fillsViewport) return false;
+  if (typeof getComputedStyle !== 'function') return true;
+  const style = getComputedStyle(video);
+  return style.display !== 'none'
+    && style.visibility !== 'hidden'
+    && style.opacity !== '0';
+}
+
 export function rectOccupiesViewport(rect: ElementRect, viewport: ViewportMetrics): boolean {
   if (viewport.width <= 0 || viewport.height <= 0) return false;
   const horizontalInset = viewport.width * 0.05;
@@ -144,6 +187,7 @@ export function isVideoInFullscreenContext(
   video: HTMLVideoElement,
   allowGeometryFallback = window.top !== window,
 ): boolean {
+  ensureFullscreenChangeListener();
   // A player may request Fullscreen from the top-level document while its
   // <video> lives in a (possibly cross-origin) iframe. The local
   // document.fullscreenElement is then null, so resolve the authoritative
@@ -172,23 +216,37 @@ export function isVideoInFullscreenContext(
   if (!isVisibleVideo(video, video.getAttribute(ANIME4K_APPLIED_ATTR) === 'true')) return false;
   // When the visible fullscreen element belongs to the top-level document,
   // measure against the top-level viewport rather than the (clipped) iframe.
-  const topDocument = window.top?.document;
-  const viewport = topDocument
-    ? { width: topDocument.documentElement.clientWidth, height: topDocument.documentElement.clientHeight }
-    : { width: window.innerWidth, height: window.innerHeight };
-  const display = topDocument
-    ? {
-        width: window.top!.screen.width,
-        height: window.top!.screen.height,
-        availWidth: window.top!.screen.availWidth,
-        availHeight: window.top!.screen.availHeight,
-      }
-    : {
-        width: screen.width,
-        height: screen.height,
-        availWidth: screen.availWidth,
-        availHeight: screen.availHeight,
+  // Every property read on a cross-origin top window throws, so guarded
+  // access keeps this predicate working inside cross-origin player frames.
+  let topLevel: { viewport: ViewportMetrics; display: ScreenMetrics } | null = null;
+  try {
+    const top = window.top;
+    if (top && top !== window) {
+      topLevel = {
+        viewport: {
+          width: top.document.documentElement.clientWidth,
+          height: top.document.documentElement.clientHeight,
+        },
+        display: {
+          width: top.screen.width,
+          height: top.screen.height,
+          availWidth: top.screen.availWidth,
+          availHeight: top.screen.availHeight,
+        },
       };
+    }
+  } catch {
+    // Cross-origin top documents deny these reads; local metrics apply.
+  }
+  const viewport = topLevel?.viewport
+    ?? { width: window.innerWidth, height: window.innerHeight };
+  const display = topLevel?.display
+    ?? {
+      width: screen.width,
+      height: screen.height,
+      availWidth: screen.availWidth,
+      availHeight: screen.availHeight,
+    };
   return viewportOccupiesScreen(viewport, display)
     && rectOccupiesViewport(video.getBoundingClientRect(), viewport);
 }

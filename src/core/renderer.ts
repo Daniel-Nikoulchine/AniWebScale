@@ -191,12 +191,19 @@ fn fragmentMain(@location(0) uv: vec2f) -> @location(0) vec4f {
 }
 `;
 
+/** The slice of navigator.gpu the renderer needs; injectable for tests. */
+export interface RendererGpuProvider {
+  requestAdapter(options?: GPURequestAdapterOptions): Promise<GPUAdapter | null>;
+}
+
 export interface RendererOptions {
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
   effects: EnhancementEffect[];
   targetDimensions: Dimensions;
   frameGenerationEnabled: boolean;
+  /** Defaults to navigator.gpu; a fake provider is the second adapter at this seam. */
+  gpu?: RendererGpuProvider;
   onError?: (error: Error) => void;
   onFirstFrameRendered?: (source: HTMLVideoElement) => void;
   onProgress?: (stage: string | null, current?: number, total?: number) => void;
@@ -216,6 +223,7 @@ export class Renderer {
 
   private device!: GPUDevice;
   private anime4kDevice!: GPUDevice;
+  private readonly gpu: RendererGpuProvider;
   private context!: GPUCanvasContext;
   private format!: GPUTextureFormat;
   private videoFrameTexture!: GPUTexture;
@@ -266,6 +274,7 @@ export class Renderer {
     this.effects = options.effects;
     this.targetDimensions = options.targetDimensions;
     this.frameGenerationEnabled = options.frameGenerationEnabled;
+    this.gpu = options.gpu ?? navigator.gpu;
     this.onError = options.onError;
     this.onFirstFrameRendered = options.onFirstFrameRendered;
     this.onProgress = options.onProgress;
@@ -345,7 +354,7 @@ export class Renderer {
     try {
       // A default request is the most compatible option on Windows. Explicit
       // power preferences can be rejected by fallback/software adapters.
-      adapter = await navigator.gpu.requestAdapter();
+      adapter = await this.gpu.requestAdapter();
     } catch (error) {
       throw new RendererInitializationError(
         'WebGPU could not request an adapter. Use the Auto or Native backend when browser hardware acceleration is disabled.',

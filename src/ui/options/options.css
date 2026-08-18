@@ -104,7 +104,9 @@ select:focus-visible, button:focus-visible, input:focus-visible + .check-control
 .note-card p { margin: 0; color: var(--ink); font-size: 10px; line-height: 1.5; }
 .note-card strong { display: block; margin-bottom: 2px; color: var(--ink); font-size: 11px; }
 .mint-note { border-color: var(--mint); background: var(--mint-soft); }.mint-note > span { background: var(--mint); color: #275b4e; }
+:root.dark .mint-note > span { color: #b8e6d8; }
 .pink-note { border-color: var(--pink); background: var(--pink-soft); }.pink-note > span { background: var(--pink); color: #663b48; }
+:root.dark .pink-note > span { color: #e8b4c0; }
 .tiny-note { margin: 13px 2px; color: var(--on-surface-variant); font-size: 9.5px; line-height: 1.5; }
 .note.warning { padding: 9px 10px; border: 1px dashed color-mix(in srgb, var(--yellow) 70%, var(--outline-variant)); border-radius: 11px; background: var(--yellow-soft); color: var(--on-surface); }
 
@@ -117,6 +119,8 @@ h3 { margin: 0; color: var(--ink); font: 800 14px var(--font-family-display); }
 .site-row button { justify-self: end; min-height: 30px; padding: 5px 9px; }
 .permission { justify-self: center; min-width: 56px; padding: 3px 7px; border-radius: 999px; font-size: 9px; font-weight: 800; text-align: center; }
 .permission.allowed { color: #2b6e58; background: var(--mint-soft); }.permission.blocked { color: #8b4351; background: var(--pink-soft); }
+:root.dark .permission.allowed { color: #b8e6d8; }
+:root.dark .permission.blocked { color: #e8b4c0; }
 .empty { color: var(--on-surface-variant); font-size: 11px; }
 button { min-height: 40px; border: 1px solid var(--outline-variant); border-radius: 12px; padding: 8px 13px; color: var(--on-surface); cursor: pointer; font-size: 11px; font-weight: 800; transition: transform .16s ease, box-shadow .16s ease; }
 button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-1); }

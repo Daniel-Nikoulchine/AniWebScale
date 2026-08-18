@@ -32,6 +32,15 @@
   "siteAccessGranted": {
     "message": "AniWebScale can enhance videos on {site}."
   },
+  "siteAccessViaAllowAll": {
+    "message": "AniWebScale is allowed on every site through an allow-all grant."
+  },
+  "removeAllowAllSiteAccess": {
+    "message": "Remove allow-all access"
+  },
+  "siteAccessGrantedReload": {
+    "message": "Site access granted. Reload the page to activate AniWebScale."
+  },
   "siteAccessMissing": {
     "message": "Allow access only for {site} to enhance its videos."
   },

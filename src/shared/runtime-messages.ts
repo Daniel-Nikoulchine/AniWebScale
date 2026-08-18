@@ -72,8 +72,8 @@ export interface NativeMediaCommandRequest {
   value?: number;
 }
 
-export interface NativePointerRequest {
-  type: 'NATIVE_POINTER';
+/** The pointer payload as it crosses the seam in both directions. */
+export interface NativePointerPayload {
   event: string;
   x: number;
   y: number;
@@ -86,6 +86,10 @@ export interface NativePointerRequest {
   altKey?: boolean;
 }
 
+export interface NativePointerRequest extends NativePointerPayload {
+  type: 'NATIVE_POINTER';
+}
+
 export interface NativeResetConsentRequest {
   type: 'NATIVE_RESET_CONSENT';
   origin?: string;
@@ -93,12 +97,21 @@ export interface NativeResetConsentRequest {
 
 export interface SettingsUpdatedRequest {
   type: 'SETTINGS_UPDATED';
-  settings?: unknown;
-  modifiedModeId?: string;
 }
 
 export interface SiteAccessSyncRequest {
   type: 'SITE_ACCESS_SYNC';
+}
+
+/**
+ * Sent by a content script when a cross-origin player iframe enters
+ * fullscreen. The background decides whether the player origin already has
+ * site access ('injected'), a permission prompt is on its way ('prompting'),
+ * or a recent prompt makes this request redundant ('suppressed').
+ */
+export interface SiteAccessIframeRequest {
+  type: 'SITE_ACCESS_IFRAME_REQUEST';
+  origin: string;
 }
 
 export interface OpenOptionsPageRequest {
@@ -122,6 +135,7 @@ export type RuntimeRequest =
   | NativeResetConsentRequest
   | SettingsUpdatedRequest
   | SiteAccessSyncRequest
+  | SiteAccessIframeRequest
   | OpenOptionsPageRequest
   | OpenOnboardingRequest;
 
@@ -263,16 +277,15 @@ export function parseRuntimeRequest(value: unknown): RuntimeRequestParseResult {
       return { kind: 'message', message: { type, origin } };
     }
     case 'SETTINGS_UPDATED':
-      return {
-        kind: 'message',
-        message: {
-          type,
-          settings: value.settings,
-          modifiedModeId: asString(value.modifiedModeId),
-        },
-      };
+      return { kind: 'message', message: { type } };
     case 'SITE_ACCESS_SYNC':
       return { kind: 'message', message: { type } };
+    case 'SITE_ACCESS_IFRAME_REQUEST': {
+      const origin = asString(value.origin);
+      return origin !== undefined && isHttpOrigin(origin)
+        ? { kind: 'message', message: { type, origin } }
+        : invalid(type, 'Invalid player origin.');
+    }
     case 'OPEN_OPTIONS_PAGE':
       return { kind: 'message', message: { type } };
     case 'OPEN_ONBOARDING':
@@ -299,13 +312,6 @@ export interface NativeConsentRequestMessage {
   origin?: string;
 }
 
-export interface NativePrepareSessionMessage {
-  type: 'NATIVE_PREPARE_SESSION';
-  sessionId: string;
-  nonce: string;
-  videoId?: string;
-}
-
 export interface NativePrepareFullscreenMessage {
   type: 'NATIVE_PREPARE_FULLSCREEN';
   sessionId: string;
@@ -317,17 +323,6 @@ export interface NativeMeasureFullscreenMessage {
   type: 'NATIVE_MEASURE_FULLSCREEN';
   sessionId?: string;
   videoId?: string;
-}
-
-export interface NativeMeasurePopupMessage {
-  type: 'NATIVE_MEASURE_POPUP';
-}
-
-export interface NativePrepareTopFrameMessage {
-  type: 'NATIVE_PREPARE_TOP_FRAME';
-  sessionId: string;
-  nonce: string;
-  sourceUrl?: string;
 }
 
 export interface NativeSetTitleNonceMessage {
@@ -351,18 +346,8 @@ export interface NativeRestoreTitleMessage {
   originalTitle?: string;
 }
 
-export interface NativePointerEventMessage {
+export interface NativePointerEventMessage extends NativePointerPayload {
   type: 'NATIVE_POINTER_EVENT';
-  event: string;
-  x: number;
-  y: number;
-  button?: number;
-  buttons?: number;
-  deltaX?: number;
-  deltaY?: number;
-  shiftKey?: boolean;
-  ctrlKey?: boolean;
-  altKey?: boolean;
 }
 
 export interface NativeMediaCommandEventMessage {
@@ -376,21 +361,32 @@ export interface NativeSessionEventMessage {
   event?: NativeEvent;
 }
 
+/**
+ * The final result of a fullscreen-triggered player access request. Sent to
+ * the top frame so the page can explain what happened to the user. `applied`
+ * reports whether the scripts were actually injected into the tab for a
+ * granted origin; when false, a reload of the player page is required.
+ */
+export interface SiteAccessResultMessage {
+  type: 'SITE_ACCESS_RESULT';
+  origin: string;
+  outcome: 'granted' | 'denied' | 'failed';
+  applied?: boolean;
+}
+
 export type FrameMessage =
   | Anime4kForceStopMessage
   | UrlUpdatedMessage
   | NativeConsentRequestMessage
-  | NativePrepareSessionMessage
   | NativePrepareFullscreenMessage
   | NativeMeasureFullscreenMessage
-  | NativeMeasurePopupMessage
-  | NativePrepareTopFrameMessage
   | NativeSetTitleNonceMessage
   | NativeRestoreSessionMessage
   | NativeRestoreTitleMessage
   | NativePointerEventMessage
   | NativeMediaCommandEventMessage
-  | NativeSessionEventMessage;
+  | NativeSessionEventMessage
+  | SiteAccessResultMessage;
 
 /**
  * The outcome of parsing a frame message:
@@ -424,7 +420,6 @@ export function parseFrameMessage(value: unknown): FrameMessageParseResult {
       return { kind: 'message', message: { type, url: asString(value.url) } };
     case 'NATIVE_CONSENT_REQUEST':
       return { kind: 'message', message: { type, origin: asString(value.origin) } };
-    case 'NATIVE_PREPARE_SESSION':
     case 'NATIVE_PREPARE_FULLSCREEN': {
       const sessionId = asString(value.sessionId);
       const nonce = asString(value.nonce);
@@ -438,16 +433,6 @@ export function parseFrameMessage(value: unknown): FrameMessageParseResult {
         kind: 'message',
         message: { type, sessionId: asString(value.sessionId), videoId: asString(value.videoId) },
       };
-    case 'NATIVE_MEASURE_POPUP':
-      return { kind: 'message', message: { type } };
-    case 'NATIVE_PREPARE_TOP_FRAME': {
-      const sessionId = asString(value.sessionId);
-      const nonce = asString(value.nonce);
-      if (sessionId === undefined || nonce === undefined) {
-        return frameInvalid(type, 'Invalid native session.');
-      }
-      return { kind: 'message', message: { type, sessionId, nonce, sourceUrl: asString(value.sourceUrl) } };
-    }
     case 'NATIVE_SET_TITLE_NONCE': {
       const sessionId = asString(value.sessionId);
       const nonce = asString(value.nonce);
@@ -504,37 +489,222 @@ export function parseFrameMessage(value: unknown): FrameMessageParseResult {
       };
     case 'NATIVE_SESSION_EVENT':
       return { kind: 'message', message: { type, event: value.event as NativeEvent | undefined } };
+    case 'SITE_ACCESS_RESULT': {
+      const outcome = value.outcome === 'granted' || value.outcome === 'denied' ? value.outcome : 'failed';
+      return {
+        kind: 'message',
+        message: {
+          type,
+          origin: asString(value.origin) ?? '',
+          outcome,
+          ...(typeof value.applied === 'boolean' ? { applied: value.applied } : {}),
+        },
+      };
+    }
     default:
       return { kind: 'unknown' };
   }
 }
 
+// ── Senders: the wire form of every message exists exactly once ──────────
+
+export function enhancementClaimMessage(videoId: string): EnhancementClaimRequest {
+  return { type: 'ENHANCEMENT_CLAIM', videoId };
+}
+
+export function enhancementReleaseMessage(videoId?: string): EnhancementReleaseRequest {
+  return { type: 'ENHANCEMENT_RELEASE', ...(videoId !== undefined ? { videoId } : {}) };
+}
+
+export function nativeStopMessage(ids: { sessionId?: string; videoId?: string } = {}): NativeStopRequest {
+  return { type: 'NATIVE_STOP', ...ids };
+}
+
+export function nativeUpdateConfigurationMessage(payload: {
+  sessionId?: string;
+  videoId?: string;
+  configuration: NativeConfiguration;
+}): NativeUpdateConfigurationRequest {
+  return { type: 'NATIVE_UPDATE_CONFIGURATION', ...payload };
+}
+
+export function nativePlaybackStateMessage(state: {
+  sessionId: string;
+  videoId: string;
+  playbackActive: boolean;
+  mediaTime: number;
+}): NativePlaybackStateRequest {
+  return { type: 'NATIVE_PLAYBACK_STATE', ...state };
+}
+
+export function nativeFallbackRequestMessage(
+  request: Omit<NativeFallbackRequest, 'type'>,
+): NativeFallbackRequest {
+  return { type: 'NATIVE_FALLBACK_REQUEST', ...request };
+}
+
+export function settingsUpdatedMessage(): SettingsUpdatedRequest {
+  return { type: 'SETTINGS_UPDATED' };
+}
+
+export function siteAccessSyncMessage(): SiteAccessSyncRequest {
+  return { type: 'SITE_ACCESS_SYNC' };
+}
+
+export function siteAccessIframeRequestMessage(origin: string): SiteAccessIframeRequest {
+  return { type: 'SITE_ACCESS_IFRAME_REQUEST', origin };
+}
+
+export function siteAccessResultMessage(payload: {
+  origin: string;
+  outcome: 'granted' | 'denied' | 'failed';
+  applied?: boolean;
+}): SiteAccessResultMessage {
+  return { type: 'SITE_ACCESS_RESULT', ...payload };
+}
+
+export function nativeResetConsentMessage(origin?: string): NativeResetConsentRequest {
+  return { type: 'NATIVE_RESET_CONSENT', ...(origin !== undefined ? { origin } : {}) };
+}
+
+export function openOptionsPageMessage(): OpenOptionsPageRequest {
+  return { type: 'OPEN_OPTIONS_PAGE' };
+}
+
+export function openOnboardingMessage(): OpenOnboardingRequest {
+  return { type: 'OPEN_ONBOARDING' };
+}
+
+// ── Frame senders: the wire form of every background→frame message ────────
+
+export function urlUpdatedMessage(url?: string): UrlUpdatedMessage {
+  return { type: 'URL_UPDATED', ...(url !== undefined ? { url } : {}) };
+}
+
+export function nativeConsentRequestMessage(origin?: string): NativeConsentRequestMessage {
+  return { type: 'NATIVE_CONSENT_REQUEST', ...(origin !== undefined ? { origin } : {}) };
+}
+
+export function nativePrepareFullscreenMessage(payload: {
+  sessionId: string;
+  nonce: string;
+  videoId?: string;
+}): NativePrepareFullscreenMessage {
+  return { type: 'NATIVE_PREPARE_FULLSCREEN', ...payload };
+}
+
+export function nativeMeasureFullscreenMessage(payload: {
+  sessionId?: string;
+  videoId?: string;
+}): NativeMeasureFullscreenMessage {
+  return { type: 'NATIVE_MEASURE_FULLSCREEN', ...payload };
+}
+
+export function nativeSetTitleNonceMessage(payload: {
+  sessionId: string;
+  nonce: string;
+  captureKind?: string;
+}): NativeSetTitleNonceMessage {
+  return { type: 'NATIVE_SET_TITLE_NONCE', ...payload };
+}
+
+export function nativeRestoreSessionMessage(payload: {
+  sessionId?: string;
+  nonce?: string;
+  originalTitle?: string;
+}): NativeRestoreSessionMessage {
+  return { type: 'NATIVE_RESTORE_SESSION', ...payload };
+}
+
+export function nativeRestoreTitleMessage(payload: {
+  sessionId?: string;
+  nonce?: string;
+  originalTitle?: string;
+}): NativeRestoreTitleMessage {
+  return { type: 'NATIVE_RESTORE_TITLE', ...payload };
+}
+
+export function nativePointerEventMessage(payload: NativePointerPayload): NativePointerEventMessage {
+  return { type: 'NATIVE_POINTER_EVENT', ...payload };
+}
+
+export function nativeMediaCommandEventMessage(payload: {
+  command: string;
+  value?: number;
+}): NativeMediaCommandEventMessage {
+  return { type: 'NATIVE_MEDIA_COMMAND_EVENT', ...payload };
+}
+
+export function nativeSessionEventMessage(event?: NativeEvent): NativeSessionEventMessage {
+  return { type: 'NATIVE_SESSION_EVENT', ...(event !== undefined ? { event } : {}) };
+}
+
 // ── Response forms ───────────────────────────────────────────────────────
 
-/** The common outcome envelope used across the seam. */
-export interface OkResponse {
+export interface StatusResponse {
   ok: boolean;
   message?: string;
 }
 
-export interface ClaimResponse extends OkResponse {
-  alreadyStopped?: boolean;
+/**
+ * Interpret a handler's response envelope. Handlers that have nothing to
+ * report answer `undefined`; only an explicit `{ ok: false }` counts as a
+ * refusal, so an absent envelope resolves as success — the exact contract
+ * the per-call-site `as { ok?: boolean }` casts implemented.
+ */
+export function parseStatusResponse(value: unknown): StatusResponse {
+  if (!value || typeof value !== 'object') return { ok: true };
+  const record = value as Record<string, unknown>;
+  return {
+    ok: record.ok !== false,
+    ...(typeof record.message === 'string' ? { message: record.message } : {}),
+  };
 }
 
-export interface NativeFallbackResponse extends OkResponse {
+export interface SiteAccessIframeResponseValue {
+  ok: boolean;
+  outcome?: 'injected' | 'prompting' | 'suppressed';
+  message?: string;
+}
+
+/**
+ * Interpret the background's reply to a SITE_ACCESS_IFRAME_REQUEST. The
+ * outcome is only trusted when the envelope is explicitly ok, mirroring the
+ * status-response contract used by the other content-side call sites.
+ */
+export function parseSiteAccessIframeResponse(value: unknown): SiteAccessIframeResponseValue {
+  if (!value || typeof value !== 'object') return { ok: false };
+  const record = value as Record<string, unknown>;
+  const outcome = record.outcome;
+  return {
+    ok: record.ok === true,
+    ...(outcome === 'injected' || outcome === 'prompting' || outcome === 'suppressed'
+      ? { outcome }
+      : {}),
+    ...(typeof record.message === 'string' ? { message: record.message } : {}),
+  };
+}
+
+export interface NativeFallbackResponseValue {
+  ok: boolean;
   status?: 'started' | 'unavailable' | 'denied';
+  message?: string;
   sessionId?: string;
+}
+
+export function parseNativeFallbackResponse(value: unknown): NativeFallbackResponseValue {
+  if (!value || typeof value !== 'object') return { ok: false };
+  const record = value as Record<string, unknown>;
+  return {
+    ok: record.ok === true,
+    ...(typeof record.status === 'string' ? { status: record.status as NativeFallbackResponseValue['status'] } : {}),
+    ...(typeof record.message === 'string' ? { message: record.message } : {}),
+    ...(typeof record.sessionId === 'string' ? { sessionId: record.sessionId } : {}),
+  };
 }
 
 export interface SettingsUpdateResponse {
   ok?: boolean;
   status?: string;
-  message?: string;
-}
-
-export interface NativeStatusResponse extends OkResponse {
-  active?: boolean;
-  sessionId?: string;
-  state?: string;
   message?: string;
 }

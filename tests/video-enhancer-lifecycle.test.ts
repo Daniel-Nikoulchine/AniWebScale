@@ -3,6 +3,7 @@ import { ANIME4K_APPLIED_ATTR } from '../src/constants';
 import { Renderer } from '../src/core/renderer';
 import type { RendererOptions } from '../src/core/renderer';
 import { VideoEnhancer } from '../src/core/video-enhancer';
+import { createNativeSessionClient } from '../src/core/native-session-client';
 import { BackendState } from '../src/core/backend-state';
 import { OverloadTracker } from '../src/core/render-stats';
 import { DEFAULT_SETTINGS } from '../src/utils/settings';
@@ -63,6 +64,7 @@ function createBareEnhancer() {
   Object.assign(enhancer, {
     video,
     videoId: 'video-1',
+    native: createNativeSessionClient(),
     renderer: null,
     backend: new BackendState(),
     nativeSessionId: null,
@@ -79,10 +81,9 @@ function createBareEnhancer() {
     destroyed: false,
     switchingFromNative: false,
     targetResizeObserver,
+    unsubscribeFullscreenContext: () => undefined,
     fullscreenRevision: 0,
-    fullscreenTransition: Promise.resolve(),
-    pendingNativeStarts: new Map(),
-    settingsUpdateChain: Promise.resolve(),
+    transitionChain: Promise.resolve(),
     automaticSession: false,
     nativeRetryBlocked: false,
   });
@@ -186,7 +187,11 @@ describe('VideoEnhancer lifecycle transitions', () => {
     expect(enhancer.currentModeId).toBeNull();
     expect(video.setAttribute).not.toHaveBeenCalledWith(ANIME4K_APPLIED_ATTR, 'true');
     expect(setIntervalSpy).not.toHaveBeenCalled();
-    expect(sendMessage.mock.calls.filter(([message]) => message.type === 'NATIVE_STOP')).toHaveLength(1);
+    // The client ledger absorbs the late session: exactly one effective stop
+    // for the late session id is issued (the marker stop carries no session).
+    const stops = sendMessage.mock.calls.filter(([message]) => message.type === 'NATIVE_STOP');
+    expect(stops.filter(([message]) => message.sessionId === 'session-late')).toHaveLength(1);
+    expect(stops.every(([message]) => message.videoId === 'video-1')).toBe(true);
   });
 
   it('retargets a renderer that completes after the site replaces its video node', async () => {

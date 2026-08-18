@@ -9,10 +9,12 @@ import {
 } from './enhancer-stash';
 import { VideoEnhancer } from './video-enhancer';
 
-const mediaEventsToWatch = ['loadedmetadata', 'play', 'playing'] as const;
+const mediaEventsToWatch = ['loadedmetadata', 'play', 'playing', 'canplay'] as const;
 const observedRoots = new Map<Document | ShadowRoot, MutationObserver>();
 let initialized = false;
 let initializationRevision = 0;
+let lateScanTimer: number | undefined;
+let hosterObserver: MutationObserver | undefined;
 
 function cleanupVideoEnhancer(video: HTMLVideoElement, allowStash = true): void {
   const enhancer = EnhancerMap.getEnhancer(video);
@@ -50,6 +52,20 @@ function handleMediaEvent(event: Event): void {
   if (event.target instanceof HTMLVideoElement) {
     processVideoElement(event.target, `media-event:${event.type}`);
   }
+}
+
+function scanForLatePlayer(): void {
+  if (!initialized) return;
+  scanRoot(document, 'late-player-scan');
+  lateScanTimer = window.setTimeout(scanForLatePlayer, 1500);
+}
+
+function installAniWorldHosterObserver(): void {
+  if (hosterObserver || typeof MutationObserver === 'undefined') return;
+  hosterObserver = new MutationObserver(() => {
+    scanRoot(document, 'aniworld-hoster-update');
+  });
+  hosterObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] });
 }
 
 function removeRootObservation(root: Document | ShadowRoot): void {
@@ -132,6 +148,12 @@ function destroyAllEnhancers(): void {
 
 function handlePageUnload(): void {
   initializationRevision += 1;
+  if (lateScanTimer !== undefined) {
+    window.clearTimeout(lateScanTimer);
+    lateScanTimer = undefined;
+  }
+  hosterObserver?.disconnect();
+  hosterObserver = undefined;
   for (const root of Array.from(observedRoots.keys())) removeRootObservation(root);
   destroyAllEnhancers();
   initialized = false;
@@ -154,29 +176,34 @@ export async function initializeOnPage(): Promise<void> {
   if (revision !== initializationRevision || !settings.extensionEnabled || initialized) return;
   initialized = true;
   observeRoot(document, 'initial-scan');
+  installAniWorldHosterObserver();
+  lateScanTimer = window.setTimeout(scanForLatePlayer, 250);
   window.addEventListener('pagehide', handlePageHide);
 }
 
-export async function handleSettingsUpdate(
-  message: { type: string; modifiedModeId?: string },
-  sendResponse: (response?: { status: string; message: string }) => void,
-): Promise<void> {
+export type SettingsReapplyResult = { status: 'SUCCESS' | 'NO_ACTION' | 'ERROR'; message: string };
+
+/**
+ * Re-apply the persisted settings to this page: initialize or tear down the
+ * enhancer population as needed and push the new settings to every managed
+ * enhancer. The content entry calls this whenever storage.onChanged fires;
+ * the summary is a return value, not a message response.
+ */
+export async function reapplySettings(): Promise<SettingsReapplyResult> {
   const newSettings: Anime4KWebExtSettings = await getSettings();
   initializationRevision += 1;
 
   if (!newSettings.extensionEnabled) {
     const managedCount = EnhancerMap.getAllManagedVideos().length;
     deinitializeOnPage();
-    sendResponse(managedCount > 0
+    return managedCount > 0
       ? { status: 'SUCCESS', message: `Disabled Anime4K on ${managedCount} managed video(s).` }
-      : { status: 'NO_ACTION', message: 'AniWebScale is disabled.' });
-    return;
+      : { status: 'NO_ACTION', message: 'AniWebScale is disabled.' };
   }
 
   if (!initialized) {
     await initializeOnPage();
-    sendResponse({ status: 'SUCCESS', message: 'Anime4K is enabled.' });
-    return;
+    return { status: 'SUCCESS', message: 'Anime4K is enabled.' };
   }
 
   let updatedCount = 0;
@@ -185,8 +212,7 @@ export async function handleSettingsUpdate(
   for (const video of EnhancerMap.getAllManagedVideos()) {
     const enhancer = EnhancerMap.getEnhancer(video);
     if (!enhancer) continue;
-    const isActive = video.getAttribute(ANIME4K_APPLIED_ATTR) === 'true';
-    if (message.modifiedModeId && isActive && enhancer.getCurrentModeId() !== message.modifiedModeId) continue;
+    const isActive = enhancer.isActive();
 
     try {
       await enhancer.updateSettings(newSettings);
@@ -198,12 +224,12 @@ export async function handleSettingsUpdate(
   }
 
   if (updateError) {
-    sendResponse({ status: 'ERROR', message: updateError.message });
-  } else if (updatedCount > 0) {
-    sendResponse({ status: 'SUCCESS', message: `Updated ${updatedCount} active video(s).` });
-  } else {
-    sendResponse({ status: 'NO_ACTION', message: 'No active instance needed an update.' });
+    return { status: 'ERROR', message: updateError.message };
   }
+  if (updatedCount > 0) {
+    return { status: 'SUCCESS', message: `Updated ${updatedCount} active video(s).` };
+  }
+  return { status: 'NO_ACTION', message: 'No active instance needed an update.' };
 }
 
 function deinitializeOnPage(): void {

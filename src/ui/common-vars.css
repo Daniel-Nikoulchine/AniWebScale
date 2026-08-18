@@ -101,6 +101,12 @@
   --shadow-3: 0 7px 0 rgba(9, 12, 23, .15), 0 20px 50px rgba(9, 12, 23, .28);
 }
 
+/* Dark mode badge and permission text: soft backgrounds are dark, so text
+   needs to be light to stay readable. */
+:root.dark .mode-profile[data-tone="recommended"] { color: #b8e6d8; }
+:root.dark .mode-profile[data-tone="strong"] { color: #e8d48a; }
+:root.dark .mode-profile[data-tone="heavy"] { color: #e8b4c0; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;

@@ -4,13 +4,16 @@
  * NativeIsolationSession owns the page marking, NativeInputBridge owns the
  * gesture forwarding.
  */
-import { initializeOnPage, handleSettingsUpdate } from './core/video-manager';
+import { initializeOnPage, reapplySettings } from './core/video-manager';
 import { getEnhancer } from './core/enhancer-map';
 import { NativeIsolationSession } from './core/native-isolation';
 import { NativeInputBridge, showNotice } from './core/native-input-bridge';
+import { installIframeSiteAccessProbe } from './core/iframe-site-access';
 import { isVideoInFullscreenContext } from './shared/fullscreen-video';
 import { calculateRenderedVideoRect } from './shared/video-content-rect';
 import { parseFrameMessage } from './shared/runtime-messages';
+import { nativeStopMessage } from './shared/runtime-messages';
+import { nativeConsentPrompt } from './shared/native-consent';
 import { shouldApplySettingsChange } from './utils/settings-change';
 import { initDebugLogging, setVerboseLogging } from './utils/debug-log';
 
@@ -64,7 +67,7 @@ async function handleRuntimeMessage(request: unknown): Promise<unknown> {
       const video = isolation.findVideosDeep().find(candidate => candidate.dataset.anime4kVideoId === message.videoId);
       const enhancer = video ? getEnhancer(video) : undefined;
       if (!enhancer) return { ok: true, alreadyStopped: true };
-      await enhancer.stopEnhancement(true, false);
+      await enhancer.stopEnhancement({ releaseClaim: false });
       return { ok: true };
     }
 
@@ -73,36 +76,14 @@ async function handleRuntimeMessage(request: unknown): Promise<unknown> {
       return { ok: true };
 
     case 'NATIVE_CONSENT_REQUEST': {
-      const origin = message.origin ?? 'this website';
-      const allowed = window.confirm(
-        `Allow AniWebScale to capture this browser tab with the local Windows renderer for ${origin}?\n\n`
-        + 'DRM playback requires browser hardware acceleration to be disabled and the browser restarted. '
-        + 'Otherwise protected video may appear black. The renderer only receives composited pixels and does not bypass DRM.',
-      );
+      const allowed = window.confirm(nativeConsentPrompt(message.origin ?? 'this website'));
       return { allowed };
-    }
-
-    case 'NATIVE_PREPARE_SESSION': {
-      const video = isolation.selectVideo(message.videoId);
-      if (!video) return { ok: false, message: 'The selected video is no longer available.' };
-      const root = isolation.chooseCaptureRoot(video);
-      const state = isolation.activate(message.sessionId, message.nonce, root, video);
-      const currentScreen = screen as Screen & { availLeft?: number; availTop?: number };
-      return {
-        ok: true,
-        originalTitle: state.originalTitle,
-        intrinsicWidth: video.videoWidth || Math.round(video.getBoundingClientRect().width * devicePixelRatio),
-        intrinsicHeight: video.videoHeight || Math.round(video.getBoundingClientRect().height * devicePixelRatio),
-        screenAvailWidth: screen.availWidth,
-        screenAvailHeight: screen.availHeight,
-        screenAvailLeft: currentScreen.availLeft ?? 0,
-        screenAvailTop: currentScreen.availTop ?? 0,
-        devicePixelRatio,
-      };
     }
 
     case 'NATIVE_PREPARE_FULLSCREEN': {
       const video = isolation.selectVideo(message.videoId);
+      // In strict WebGPU mode the page must still be able to use the native
+      // session seam, but prepare is only meaningful for native capture.
       if (!video || !isVideoInFullscreenContext(video)) {
         return { ok: false, message: 'The selected video is not in player fullscreen.' };
       }
@@ -153,43 +134,6 @@ async function handleRuntimeMessage(request: unknown): Promise<unknown> {
       };
     }
 
-    case 'NATIVE_MEASURE_POPUP': {
-      const currentScreen = screen as Screen & { availLeft?: number; availTop?: number };
-      const video = isolation.activeVideo ?? isolation.selectVideo();
-      const videoRect = video?.getBoundingClientRect();
-      return {
-        ok: true,
-        innerWidth: window.innerWidth,
-        innerHeight: window.innerHeight,
-        outerWidth: window.outerWidth,
-        outerHeight: window.outerHeight,
-        devicePixelRatio,
-        screenAvailWidth: screen.availWidth,
-        screenAvailHeight: screen.availHeight,
-        screenAvailLeft: currentScreen.availLeft ?? 0,
-        screenAvailTop: currentScreen.availTop ?? 0,
-        videoRect: videoRect ? {
-          left: videoRect.left,
-          top: videoRect.top,
-          width: videoRect.width,
-          height: videoRect.height,
-        } : undefined,
-      };
-    }
-
-    case 'NATIVE_PREPARE_TOP_FRAME': {
-      const frame = isolation.selectSourceFrame(message.sourceUrl ?? '');
-      if (!frame) {
-        return {
-          ok: false,
-          isolatedFrame: false,
-          message: 'The embedded player frame could not be isolated for native fullscreen capture.',
-        };
-      }
-      isolation.activate(message.sessionId, message.nonce, frame, null);
-      return { ok: true, isolatedFrame: true };
-    }
-
     case 'NATIVE_SET_TITLE_NONCE': {
       const { originalTitle } = isolation.applyNonceTitle(
         message.sessionId,
@@ -224,6 +168,29 @@ async function handleRuntimeMessage(request: unknown): Promise<unknown> {
       window.dispatchEvent(new CustomEvent('anime4k-native-session', { detail: event }));
       return { ok: true };
     }
+
+    case 'SITE_ACCESS_RESULT': {
+      const host = displayHost(message.origin);
+      if (message.outcome === 'denied') {
+        showNotice(`Access to ${host} was denied. You can allow it later from the AniWebScale popup.`, true);
+      } else if (message.outcome === 'granted') {
+        if (message.applied === false) {
+          showNotice(`AniWebScale has access to ${host}, but the player could not be reached. Reload the page to apply it.`, true);
+        } else {
+          showNotice(`AniWebScale can now enhance this player (${host}).`);
+        }
+      }
+      return { ok: true };
+    }
+  }
+}
+
+/** The display host of an origin, or the origin itself when it is malformed. */
+function displayHost(origin: string): string {
+  try {
+    return new URL(origin).hostname;
+  } catch {
+    return origin;
   }
 }
 
@@ -240,7 +207,7 @@ if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
     if (settingsApplyTimer !== null) return;
     settingsApplyTimer = setTimeout(() => {
       settingsApplyTimer = null;
-      void handleSettingsUpdate({ type: 'SETTINGS_UPDATED' }, () => undefined).catch(error => {
+      void reapplySettings().catch(error => {
         console.info('[AniWebScale] Could not apply changed fullscreen settings:', error instanceof Error ? error.message : String(error));
       });
     }, 0);
@@ -267,6 +234,7 @@ if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
 
   void initDebugLogging();
   void initializeOnPage();
+  installIframeSiteAccessProbe();
   if (__ANIME4K_E2E__) installLocalE2ETestBridge();
   window.addEventListener('anime4k-video-reattached', event => {
     const detail = (event as CustomEvent<{ videoId?: string; video?: HTMLVideoElement }>).detail;
@@ -281,11 +249,11 @@ if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
   window.addEventListener('pagehide', () => {
     const isolationSessionId = isolation.isolationSessionId;
     if (isolationSessionId) {
-      void chrome.runtime.sendMessage({ type: 'NATIVE_STOP', sessionId: isolationSessionId }).catch(() => undefined);
+      void chrome.runtime.sendMessage(nativeStopMessage({ sessionId: isolationSessionId })).catch(() => undefined);
     }
     const directSessionId = isolation.directTitleSessionId;
     if (directSessionId) {
-      void chrome.runtime.sendMessage({ type: 'NATIVE_STOP', sessionId: directSessionId }).catch(() => undefined);
+      void chrome.runtime.sendMessage(nativeStopMessage({ sessionId: directSessionId })).catch(() => undefined);
     }
   });
 

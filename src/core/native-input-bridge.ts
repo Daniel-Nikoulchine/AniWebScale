@@ -1,21 +1,11 @@
 import { clampNativePointerCoords } from '../native/protocol';
 import { resolveNativePointerGesture } from '../shared/native-gesture-resolution';
+import type { NativePointerPayload } from '../shared/runtime-messages';
 import type { DirectMediaCommand } from '../shared/pointer-fallback';
 import type { NativeIsolationSession } from './native-isolation';
 
 /** The pointer payload forwarded from the native output window. */
-export interface NativePointerInput {
-  event: string;
-  x: number;
-  y: number;
-  button?: number;
-  buttons?: number;
-  deltaX?: number;
-  deltaY?: number;
-  shiftKey?: boolean;
-  ctrlKey?: boolean;
-  altKey?: boolean;
-}
+export type NativePointerInput = NativePointerPayload;
 
 /**
  * Forwards pointer and media gestures from the native output window to the

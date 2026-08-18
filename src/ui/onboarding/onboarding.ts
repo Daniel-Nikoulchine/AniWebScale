@@ -2,9 +2,10 @@ import './onboarding.css';
 import '../common-vars.css';
 import type { EnhancementMode, QualityTier, RenderBackend } from '../../types';
 import { modeUsesQuality } from '../../shared/presets';
-import { DEFAULT_SETTINGS, saveLocalSettings, saveSettings } from '../../utils/settings';
+import { DEFAULT_SETTINGS } from '../../utils/settings';
 import { themeManager } from '../theme-manager';
 import { populateModeSelect, renderModeSummary } from '../mode-select';
+import { applySettings } from '../../utils/apply-settings';
 import { localizeDocument, message } from '../i18n';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -35,27 +36,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   finish.addEventListener('click', async () => {
     finish.disabled = true;
     status.textContent = message('savingSetup', 'Saving setup...');
-    try {
-      const update = {
-        mode: mode.value as EnhancementMode,
-        quality: quality.value as QualityTier,
-        output: 'auto' as const,
-        backend: backend.value as RenderBackend,
-        statsEnabled: DEFAULT_SETTINGS.statsEnabled,
-        frameGenerationEnabled: frameGeneration.checked,
-      };
-      await Promise.all([
-        saveSettings(update),
-        saveLocalSettings({ hasCompletedOnboarding: true }),
-      ]);
-      await chrome.runtime.sendMessage({ type: 'SETTINGS_UPDATED', settings: update });
-      status.textContent = message('setupComplete', 'Setup complete. You can close this tab.');
-      finish.textContent = message('done', 'Done');
-    } catch (error) {
-      console.error('[AniWebScale] Setup failed:', error);
+    const update = {
+      mode: mode.value as EnhancementMode,
+      quality: quality.value as QualityTier,
+      output: 'auto' as const,
+      backend: backend.value as RenderBackend,
+      statsEnabled: DEFAULT_SETTINGS.statsEnabled,
+      frameGenerationEnabled: frameGeneration.checked,
+    };
+    // Onboarding has no active renderer to refuse the update, so every
+    // persisted outcome counts as complete.
+    const result = await applySettings(update, {
+      hasCompletedOnboarding: true,
+      siteAccessModelAcknowledged: true,
+    }).catch(() => 'failed' as const);
+    if (result === 'failed') {
+      console.error('[AniWebScale] Setup failed.');
       status.textContent = message('setupSaveFailed', 'Setup could not be saved.');
       finish.disabled = false;
+      return;
     }
+    status.textContent = message('setupComplete', 'Setup complete. You can close this tab.');
+    finish.textContent = message('done', 'Done');
   });
 
   updateModeUi();

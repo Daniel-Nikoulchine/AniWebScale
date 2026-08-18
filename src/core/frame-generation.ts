@@ -86,7 +86,10 @@ export class FrameGeneration {
     const descriptor: GPUTextureDescriptor = {
       label: 'Frame generation history',
       size: [this.host.finalTexture.width, this.host.finalTexture.height, 1],
-      format: 'rgba16float',
+      // copyTextureToTexture requires identical formats on both ends; the
+      // history source is the final pipeline output (or, with no pipelines
+      // scheduled, the 8-bit video frame texture), so inherit its format.
+      format: this.host.finalTexture.format,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     };
     this.historyTextures = [

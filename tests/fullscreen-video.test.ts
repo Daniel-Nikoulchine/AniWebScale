@@ -7,6 +7,7 @@ import {
   isVideoInFullscreenContext,
   rectOccupiesViewport,
   resetFullscreenApiTracking,
+  videoFillsOwnViewport,
   viewportOccupiesScreen,
 } from '../src/shared/fullscreen-video';
 
@@ -139,6 +140,44 @@ describe('fullscreen geometry fallback', () => {
     }
   });
 
+  it('falls back to local geometry when the cross-origin top window denies access', () => {
+    // Reading any property of a cross-origin window.top throws; the
+    // geometry fallback must use local metrics instead of rejecting.
+    const video = {
+      parentNode: null,
+      isConnected: true,
+      getBoundingClientRect: () => ({
+        left: 0, top: 0, right: 1920, bottom: 1080, width: 1920, height: 1080,
+      }),
+      getAttribute: () => null,
+    } as unknown as HTMLVideoElement;
+    const crossOriginTop: Record<string, unknown> = {};
+    Object.defineProperty(crossOriginTop, 'document', {
+      get() { throw new TypeError('Permission denied to access property "document"'); },
+    });
+    vi.stubGlobal('window', {
+      top: crossOriginTop,
+      document: { fullscreenElement: null, webkitFullscreenElement: null },
+      innerWidth: 1920,
+      innerHeight: 1080,
+      screen: { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040 },
+    });
+    vi.stubGlobal('screen', { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040 });
+    vi.stubGlobal('document', {
+      fullscreenElement: null,
+      webkitFullscreenElement: null,
+      documentElement: { hasAttribute: () => false },
+    });
+    vi.stubGlobal('getComputedStyle', () => ({
+      display: 'block', visibility: 'visible', opacity: '1',
+    }));
+    try {
+      expect(isVideoInFullscreenContext(video)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('accepts a top-level CSS-fullscreen video without a Fullscreen API element', () => {
     const video = {
       parentNode: null,
@@ -250,5 +289,56 @@ describe('fullscreen geometry fallback', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('videoFillsOwnViewport (embedded hoster players)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function frameVideo(rect: {
+    left: number; top: number; width: number; height: number;
+  }): HTMLVideoElement {
+    return {
+      isConnected: true,
+      getBoundingClientRect: () => ({
+        left: rect.left,
+        top: rect.top,
+        right: rect.left + rect.width,
+        bottom: rect.top + rect.height,
+        width: rect.width,
+        height: rect.height,
+        x: rect.left,
+        y: rect.top,
+        toJSON: () => ({}),
+      }),
+    } as unknown as HTMLVideoElement;
+  }
+
+  function installHosterFrameViewport(style: Record<string, string> = {
+    display: 'block', visibility: 'visible', opacity: '1',
+  }): void {
+    vi.stubGlobal('window', { top: undefined, innerWidth: 870, innerHeight: 490 });
+    vi.stubGlobal('getComputedStyle', () => style);
+  }
+
+  it('accepts a video that covers its own frame viewport', () => {
+    installHosterFrameViewport();
+    expect(videoFillsOwnViewport(frameVideo({ left: 0, top: 0, width: 870, height: 490 }))).toBe(true);
+    expect(videoFillsOwnViewport(frameVideo({ left: 20, top: 16, width: 840, height: 470 }))).toBe(true);
+  });
+
+  it('rejects a video that only partially occupies its frame', () => {
+    installHosterFrameViewport();
+    expect(videoFillsOwnViewport(frameVideo({ left: 100, top: 300, width: 640, height: 360 }))).toBe(false);
+    expect(videoFillsOwnViewport(frameVideo({ left: 0, top: 0, width: 400, height: 220 }))).toBe(false);
+  });
+
+  it('rejects hidden videos and detached videos', () => {
+    installHosterFrameViewport({ display: 'none', visibility: 'visible', opacity: '1' });
+    expect(videoFillsOwnViewport(frameVideo({ left: 0, top: 0, width: 870, height: 490 }))).toBe(false);
+    const detached = { ...frameVideo({ left: 0, top: 0, width: 870, height: 490 }), isConnected: false };
+    expect(videoFillsOwnViewport(detached as unknown as HTMLVideoElement)).toBe(false);
   });
 });

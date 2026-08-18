@@ -5,16 +5,17 @@ import {
   isProcessingEnabled,
   modeUsesQuality,
 } from '../../shared/presets';
-import { getSettings, saveSettings, saveLocalSettings } from '../../utils/settings';
+import { applySettings } from '../../utils/apply-settings';
+import { getSettings } from '../../utils/settings';
 import { themeManager, type ThemeMode } from '../theme-manager';
 import { populateModeSelect, renderModeSummary } from '../mode-select';
 import { localizeDocument, message } from '../i18n';
+import { nativeResetConsentMessage } from '../../shared/runtime-messages';
 import {
   getGrantedSitePatterns,
-  removeSiteAccessPatterns,
+  revokeSiteAccessPatterns,
 } from '../../site-access';
-
-const CONSENT_KEY = 'anime4kNativeConsentByOrigin';
+import { describeNativeConsents } from '../../shared/native-consent';
 
 document.addEventListener('DOMContentLoaded', async () => {
   localizeDocument();
@@ -106,7 +107,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   save.addEventListener('click', async () => {
     save.disabled = true;
     status.textContent = message('saving', 'Saving...');
-    let settingsSaved = false;
     const update = {
       mode: mode.value as EnhancementMode,
       quality: quality.value as QualityTier,
@@ -116,22 +116,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       autoFullscreenEnabled: true,
       frameGenerationEnabled: frameGeneration.checked,
     };
-    try {
-      await saveSettings(update);
-      await saveLocalSettings({ verboseLogging: verboseLogging.checked });
-      settingsSaved = true;
-      const response = await chrome.runtime.sendMessage({ type: 'SETTINGS_UPDATED', settings: update }) as
-        { ok?: boolean; message?: string } | undefined;
-      if (response?.ok === false) throw new Error(response.message || message('rendererRejectedSettings', 'The active renderer rejected the settings.'));
+    const result = await applySettings(update, { verboseLogging: verboseLogging.checked })
+      .catch(() => 'failed' as const);
+    if (result === 'failed') {
+      console.error('[AniWebScale] Could not save options.');
+      status.textContent = message('settingsSaveFailed', 'Could not save settings.');
+    } else if (result === 'saved-not-applied') {
+      status.textContent = message('settingsSavedNotApplied', 'Settings saved, but could not be applied.');
+    } else {
       status.textContent = message('settingsSaved', 'Settings saved.');
-    } catch (error) {
-      console.error('[AniWebScale] Could not save options:', error);
-      status.textContent = settingsSaved
-        ? message('settingsSavedNotApplied', 'Settings saved, but could not be applied.')
-        : message('settingsSaveFailed', 'Could not save settings.');
-    } finally {
-      save.disabled = false;
     }
+    save.disabled = false;
   });
 
   await Promise.all([
@@ -139,20 +134,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderNativePermissions(),
   ]);
 });
-
-async function getConsent(): Promise<Record<string, boolean>> {
-  const data = await chrome.storage.local.get([CONSENT_KEY]);
-  const value = data[CONSENT_KEY];
-  return value && typeof value === 'object' ? value as Record<string, boolean> : {};
-}
-
-async function synchronizeSiteAccess(): Promise<void> {
-  const response = await chrome.runtime.sendMessage({ type: 'SITE_ACCESS_SYNC' }) as
-    { ok?: boolean; message?: string } | undefined;
-  if (response?.ok === false) {
-    throw new Error(response.message || message('siteAccessSyncFailed', 'Site access could not be applied.'));
-  }
-}
 
 // Every granted pattern is an optional per-site (or leftover broad) grant
 // that can be revoked at runtime; nothing is manifest-mandatory anymore.
@@ -181,8 +162,7 @@ async function renderWebsitePermissions(): Promise<void> {
     remove.type = 'button';
     remove.textContent = message('remove', 'Remove');
     remove.addEventListener('click', async () => {
-      await removeSiteAccessPatterns([pattern]);
-      await synchronizeSiteAccess();
+      await revokeSiteAccessPatterns([pattern]);
       await renderWebsitePermissions();
     });
     row.append(text, state, remove);
@@ -190,8 +170,7 @@ async function renderWebsitePermissions(): Promise<void> {
   });
 
   clear.onclick = async () => {
-    await removeSiteAccessPatterns(granted);
-    await synchronizeSiteAccess();
+    await revokeSiteAccessPatterns(granted);
     await renderWebsitePermissions();
   };
 }
@@ -199,8 +178,7 @@ async function renderWebsitePermissions(): Promise<void> {
 async function renderNativePermissions(): Promise<void> {
   const list = document.getElementById('native-sites') as HTMLDivElement;
   const clear = document.getElementById('clear-native-sites') as HTMLButtonElement;
-  const consent = await getConsent();
-  const entries = Object.entries(consent);
+  const entries = await describeNativeConsents();
   list.textContent = '';
   clear.disabled = entries.length === 0;
 
@@ -210,7 +188,7 @@ async function renderNativePermissions(): Promise<void> {
     empty.textContent = message('noNativeSites', 'No sites have permission to start the native renderer.');
     list.appendChild(empty);
   } else {
-    entries.sort(([a], [b]) => a.localeCompare(b)).forEach(([origin, allowed]) => {
+    entries.forEach(({ origin, allowed }) => {
       const row = document.createElement('div');
       row.className = 'site-row';
       const text = document.createElement('code');
@@ -224,7 +202,7 @@ async function renderNativePermissions(): Promise<void> {
       remove.type = 'button';
       remove.textContent = message('remove', 'Remove');
       remove.addEventListener('click', async () => {
-        await chrome.runtime.sendMessage({ type: 'NATIVE_RESET_CONSENT', origin });
+        await chrome.runtime.sendMessage(nativeResetConsentMessage(origin));
         await renderNativePermissions();
       });
       row.append(text, state, remove);
@@ -233,7 +211,7 @@ async function renderNativePermissions(): Promise<void> {
   }
 
   clear.onclick = async () => {
-    await chrome.runtime.sendMessage({ type: 'NATIVE_RESET_CONSENT' });
+    await chrome.runtime.sendMessage(nativeResetConsentMessage());
     await renderNativePermissions();
   };
 }

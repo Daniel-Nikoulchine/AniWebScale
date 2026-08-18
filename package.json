@@ -1,6 +1,6 @@
 {
   "name": "aniwebscale-extension",
-  "version": "1.0.2",
+  "version": "1.0.5",
   "description": "AniWebScale provides real-time anime video enhancement powered by Anime4K and additional upscalers.",
   "scripts": {
     "generate:anime4k-vendor": "node scripts/prune-anime4k-webgpu.mjs",

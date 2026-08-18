@@ -32,6 +32,15 @@
   "siteAccessGranted": {
     "message": "AniWebScale kann Videos auf {site} verbessern."
   },
+  "siteAccessViaAllowAll": {
+    "message": "AniWebScale ist über eine Freigabe für alle Websites zugelassen."
+  },
+  "removeAllowAllSiteAccess": {
+    "message": "Freigabe für alle Websites aufheben"
+  },
+  "siteAccessGrantedReload": {
+    "message": "Website-Zugriff erteilt. Lade die Seite neu, um AniWebScale zu aktivieren."
+  },
   "siteAccessMissing": {
     "message": "Erlaube nur {site}, damit Videos dort verbessert werden können."
   },

@@ -91,6 +91,7 @@ module.exports = (env, argv) => {
       popup: './src/ui/popup/popup.ts',
       options: './src/ui/options/options.ts',
       onboarding: './src/ui/onboarding/onboarding.ts',
+      grant: './src/ui/grant/grant.ts',
       content: './src/content.ts',
       background: './src/background.ts'
     },
@@ -160,6 +161,11 @@ module.exports = (env, argv) => {
         filename: 'onboarding.html',
         template: './src/ui/onboarding/onboarding.html',
         chunks: ['onboarding'],
+      }),
+      new HtmlWebpackPlugin({
+        filename: 'grant.html',
+        template: './src/ui/grant/grant.html',
+        chunks: ['grant'],
       }),
       new MiniCssExtractPlugin({
         filename: '[name].css',

@@ -5,6 +5,7 @@ import {
   ANIME4K_FULLSCREEN_VIDEO_ATTR,
 } from '../constants';
 import { choosePlayerSurface, playerAncestorPath } from '../shared/player-surface';
+import { fullscreenContext } from './fullscreen-context';
 import {
   applyTemporaryStyles,
   restoreTemporaryStyles,
@@ -33,8 +34,13 @@ export class FullscreenLayoutManager {
     this.video = video;
   }
 
-  public enter(): void {
-    const fullscreen = document.fullscreenElement;
+  /**
+   * Install the fullscreen layout for the given fullscreen element. The
+   * element is a parameter (defaulting to the authoritative resolution) so
+   * the enter/exit transaction is drivable from tests and, later, from a
+   * fullscreen-context module that already resolved it.
+   */
+  public enter(fullscreen: Element | null = fullscreenContext.element): void {
     if (!fullscreen || this.state) return;
     activeManager?.exit();
 

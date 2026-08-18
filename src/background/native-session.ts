@@ -22,6 +22,7 @@ import {
   NativeHostUnavailableError,
   NativeMessagingClient,
 } from '../native/client';
+import type { NativePointerPayload } from '../shared/runtime-messages';
 import {
   type NativeConfiguration,
   type NativeEvent,
@@ -666,18 +667,7 @@ export class NativeSession {
   }
 
   /** Forward a pointer event to the native host. */
-  async forwardPointer(request: {
-    event: string;
-    x: number;
-    y: number;
-    button?: number;
-    buttons?: number;
-    deltaX?: number;
-    deltaY?: number;
-    shiftKey?: boolean;
-    ctrlKey?: boolean;
-    altKey?: boolean;
-  }): Promise<void> {
+  async forwardPointer(request: NativePointerPayload): Promise<void> {
     const session = this.store.activeSession;
     if (!session) throw new Error('No native session is active.');
     const client = await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));

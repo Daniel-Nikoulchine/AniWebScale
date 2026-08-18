@@ -1,5 +1,6 @@
 import type { RenderStats } from '../types';
 import { fullscreenContainsVideo, getFullscreenElement } from '../shared/fullscreen-video';
+import { fullscreenContext } from './fullscreen-context';
 import { choosePlayerSurface } from '../shared/player-surface';
 import {
   applyTemporaryProperty,
@@ -27,6 +28,7 @@ export class OverlayManager {
   private readonly mutationObserver: MutationObserver;
   private readonly updateBound = () => this.schedulePositionUpdate();
   private readonly fullscreenBound = () => this.handleFullscreenChange();
+  private readonly unsubscribeFullscreen: () => void;
 
   private static readonly HOST_MARKER = 'data-anime4k-overlay-host';
 
@@ -66,10 +68,10 @@ export class OverlayManager {
 
     this.resizeObserver = new ResizeObserver(this.updateBound);
     this.mutationObserver = new MutationObserver(this.updateBound);
+    this.unsubscribeFullscreen = fullscreenContext.subscribe(this.fullscreenBound);
     this.observeVideo();
     window.addEventListener('resize', this.updateBound);
     window.addEventListener('scroll', this.updateBound, { capture: true, passive: true });
-    document.addEventListener('fullscreenchange', this.fullscreenBound);
     this.updatePosition();
   }
 
@@ -220,7 +222,15 @@ export class OverlayManager {
     if (wasVisible) this.restoreVideoOpacity();
     this.video = newVideo;
     this.video.dataset.anime4kVideoId = this.host.getAttribute(OverlayManager.HOST_MARKER) ?? '';
-    document.body.appendChild(this.host);
+    // A mid-fullscreen reattach must not park the host in <body>, where the
+    // fullscreen layout's visibility rules would hide the stats panel until
+    // the next fullscreen toggle; mirror the fullscreenchange placement.
+    const fullscreen = getFullscreenElement();
+    if (fullscreenContainsVideo(fullscreen, newVideo)) {
+      choosePlayerSurface(newVideo, fullscreen).appendChild(this.host);
+    } else {
+      document.body.appendChild(this.host);
+    }
     if (this.canvas && canvasWasAttached) {
       newVideo.parentNode?.insertBefore(this.canvas, newVideo);
     }
@@ -241,7 +251,7 @@ export class OverlayManager {
     this.unobserveVideo();
     window.removeEventListener('resize', this.updateBound);
     window.removeEventListener('scroll', this.updateBound, true);
-    document.removeEventListener('fullscreenchange', this.fullscreenBound);
+    this.unsubscribeFullscreen();
     this.hideCanvas();
     this.host.remove();
   }

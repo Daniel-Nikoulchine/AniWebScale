@@ -174,7 +174,7 @@
     "message": "WebGPU (Hardwarebeschleunigung erforderlich)"
   },
   "backendNative": {
-    "message": "Nativer Windows-Renderer"
+    "message": "Nativer Windows-Renderer (Hardwarebeschleunigung aus)"
   },
   "modeOffOption": {
     "message": "Aus - Keine Bildverbesserung"
@@ -376,5 +376,53 @@
   },
   "verboseLoggingHint": {
     "message": "Protokolliert Stash-, Pipeline- und Renderer-Ereignisse in die DevTools-Konsole."
+  },
+  "systemStatus": {
+    "message": "Systemstatus"
+  },
+  "systemStatusDescription": {
+    "message": "Aktuelle Rendering-Fähigkeiten dieses Browsers."
+  },
+  "webgpuStatusLabel": {
+    "message": "WebGPU"
+  },
+  "nativeHostStatusLabel": {
+    "message": "Nativer Renderer"
+  },
+  "statusChecking": {
+    "message": "Wird geprüft..."
+  },
+  "statusAvailable": {
+    "message": "Verfügbar"
+  },
+  "statusUnavailable": {
+    "message": "Nicht verfügbar"
+  },
+  "statusWindowsOnly": {
+    "message": "Nur Windows"
+  },
+  "resetToDefaults": {
+    "message": "Auf Standard zurücksetzen"
+  },
+  "resetConfirm": {
+    "message": "Alle Einstellungen auf Standard zurücksetzen?"
+  },
+  "settingsReset": {
+    "message": "Einstellungen auf Standard zurückgesetzt."
+  },
+  "removedSite": {
+    "message": "Entfernt: {site}"
+  },
+  "clearedAllSites": {
+    "message": "Alle Website-Zugriffe entfernt"
+  },
+  "clearedAllNative": {
+    "message": "Alle nativen Berechtigungen entfernt"
+  },
+  "undo": {
+    "message": "Rückgängig"
+  },
+  "autoSaveHint": {
+    "message": "Änderungen werden automatisch gespeichert."
   }
 }

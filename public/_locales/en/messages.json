@@ -174,7 +174,7 @@
     "message": "WebGPU (hardware acceleration required)"
   },
   "backendNative": {
-    "message": "Native Windows renderer"
+    "message": "Native Windows renderer (hardware acceleration off)"
   },
   "modeOffOption": {
     "message": "Off - No image enhancement"
@@ -376,5 +376,53 @@
   },
   "verboseLoggingHint": {
     "message": "Logs stash, pipeline and renderer events to the DevTools console."
+  },
+  "systemStatus": {
+    "message": "System status"
+  },
+  "systemStatusDescription": {
+    "message": "Current rendering capabilities of this browser."
+  },
+  "webgpuStatusLabel": {
+    "message": "WebGPU"
+  },
+  "nativeHostStatusLabel": {
+    "message": "Native renderer"
+  },
+  "statusChecking": {
+    "message": "Checking..."
+  },
+  "statusAvailable": {
+    "message": "Available"
+  },
+  "statusUnavailable": {
+    "message": "Unavailable"
+  },
+  "statusWindowsOnly": {
+    "message": "Windows only"
+  },
+  "resetToDefaults": {
+    "message": "Reset to defaults"
+  },
+  "resetConfirm": {
+    "message": "Reset all settings to defaults?"
+  },
+  "settingsReset": {
+    "message": "Settings reset to defaults."
+  },
+  "removedSite": {
+    "message": "Removed {site}"
+  },
+  "clearedAllSites": {
+    "message": "All website access removed"
+  },
+  "clearedAllNative": {
+    "message": "All native permissions removed"
+  },
+  "undo": {
+    "message": "Undo"
+  },
+  "autoSaveHint": {
+    "message": "Changes are saved automatically."
   }
 }

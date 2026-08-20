@@ -9,6 +9,7 @@ import { loadPipelineConstructor } from './pipeline-loader';
 import type { Anime4KPipeline } from './pipeline-types';
 import { OverloadTracker } from './render-stats';
 import { FrameGeneration, type FrameGenerationHost } from './frame-generation';
+import { diffRendererConfig } from './renderer-config';
 
 const fullscreenQuadWGSL = `
 struct VertexOutput {
@@ -812,11 +813,17 @@ export class Renderer {
     frameGenerationEnabled: boolean;
   }): Promise<void> {
     if (this.destroyed) return;
-    const unchanged = JSON.stringify(this.effects) === JSON.stringify(options.effects)
-      && this.targetDimensions.width === options.targetDimensions.width
-      && this.targetDimensions.height === options.targetDimensions.height
-      && this.frameGenerationEnabled === options.frameGenerationEnabled;
-    if (unchanged) return;
+    const diff = diffRendererConfig(
+      {
+        effects: this.effects,
+        targetDimensions: this.targetDimensions,
+        frameGenerationEnabled: this.frameGenerationEnabled,
+        pipelineEffectKey: this.pipelineEffectKey,
+      },
+      options,
+      { width: this.video.videoWidth, height: this.video.videoHeight },
+    );
+    if (diff.isUnchanged) return;
 
     this.stopFrameCallbacks();
     await this.waitForFrameIdle();
@@ -829,22 +836,16 @@ export class Renderer {
     let postConfigurationError: RendererRuntimeError | null = null;
     this.rebuilding = true;
     try {
-      const nextPipelineEffectKey = scheduledEffectPipelineKey(
-        options.effects,
-        { width: this.video.videoWidth, height: this.video.videoHeight },
-        options.targetDimensions,
-      );
       this.effects = options.effects;
       this.targetDimensions = options.targetDimensions;
-      const frameGenerationChanged = this.frameGenerationEnabled !== options.frameGenerationEnabled;
       this.frameGenerationEnabled = options.frameGenerationEnabled;
-      if (nextPipelineEffectKey !== this.pipelineEffectKey) {
+      if (diff.needsPipelineRebuild) {
         await this.device.queue.onSubmittedWorkDone();
         await this.buildPipelines();
         gpuStateChanged = true;
         this.frameGeneration.createResources();
         this.createPresentationBindGroup();
-      } else if (frameGenerationChanged) {
+      } else if (diff.frameGenerationChanged) {
         await this.device.queue.onSubmittedWorkDone();
         gpuStateChanged = true;
         this.frameGeneration.createResources();

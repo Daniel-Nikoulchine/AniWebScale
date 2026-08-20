@@ -1,273 +1,279 @@
 {
-  "extensionName": {
-    "message": "AniWebScale"
-  },
-  "description": {
-    "message": "AniWebScale enhances anime video in real time using Anime4K, WebGPU and an optional local Windows renderer."
-  },
-  "realTimeVideoEnhancement": {
-    "message": "Real-time video enhancement"
-  },
-  "extensionEnabled": {
-    "message": "Extension enabled"
-  },
-  "processVideos": {
-    "message": "Process videos in this browser"
-  },
-  "websiteAccess": {
-    "message": "Website access"
-  },
-  "websiteAccessDescription": {
-    "message": "AniWebScale runs only on sites you explicitly allow from the popup."
-  },
-  "sitePermissions": {
-    "message": "Website permissions"
-  },
-  "allowSiteAccess": {
-    "message": "Allow this site"
-  },
-  "removeSiteAccess": {
-    "message": "Remove access"
-  },
-  "siteAccessGranted": {
-    "message": "AniWebScale can enhance videos on {site}."
-  },
-  "siteAccessViaAllowAll": {
-    "message": "AniWebScale is allowed on every site through an allow-all grant."
-  },
-  "removeAllowAllSiteAccess": {
-    "message": "Remove allow-all access"
-  },
-  "siteAccessGrantedReload": {
-    "message": "Site access granted. Reload the page to activate AniWebScale."
-  },
-  "siteAccessMissing": {
-    "message": "Allow access only for {site} to enhance its videos."
-  },
-  "siteAccessUnavailable": {
-    "message": "Site access is unavailable on this page."
-  },
-  "siteAccessUnavailableAction": {
-    "message": "Unavailable"
-  },
-  "requestingSiteAccess": {
-    "message": "Requesting site access..."
-  },
-  "removingSiteAccess": {
-    "message": "Removing site access..."
-  },
-  "siteAccessReady": {
-    "message": "Site access granted. AniWebScale is ready here."
-  },
-  "siteAccessRemoved": {
-    "message": "Site access removed. Reload the page to finish cleanup."
-  },
-  "siteAccessNotGranted": {
-    "message": "Site access was not granted."
-  },
-  "siteAccessRemoveFailed": {
-    "message": "Site access was not removed."
-  },
-  "siteAccessChangeFailed": {
-    "message": "Could not change site access."
-  },
-  "siteAccessCheckFailed": {
-    "message": "Site access could not be checked."
-  },
-  "siteAccessSyncFailed": {
-    "message": "Site access could not be applied."
-  },
-  "clearWebsiteAccess": {
-    "message": "Clear website access"
-  },
-  "noWebsiteSites": {
-    "message": "No websites can run AniWebScale yet."
-  },
-  "quickSetup": {
-    "message": "Quick setup"
-  },
-  "enhancementMode": {
-    "message": "Enhancement mode"
-  },
-  "quality": {
-    "message": "Quality"
-  },
-  "backend": {
-    "message": "Backend"
-  },
-  "frameGeneration": {
-    "message": "Frame generation"
-  },
-  "autoFullscreen": {
-    "message": "Auto fullscreen"
-  },
-  "liveStatistics": {
-    "message": "Live statistics"
-  },
-  "saveApply": {
-    "message": "Save & apply"
-  },
   "advancedSettings": {
     "message": "Advanced settings"
-  },
-  "enhancement": {
-    "message": "Enhancement"
-  },
-  "permissions": {
-    "message": "Permissions"
-  },
-  "appearance": {
-    "message": "Appearance"
-  },
-  "nativeRendererPermissions": {
-    "message": "Native renderer permissions"
-  },
-  "trustedSites": {
-    "message": "Trusted sites"
-  },
-  "clearPermissions": {
-    "message": "Clear all permissions"
-  },
-  "theme": {
-    "message": "Theme"
-  },
-  "colorTheme": {
-    "message": "Color theme"
-  },
-  "saveSettings": {
-    "message": "Save settings"
-  },
-  "welcomeStep": {
-    "message": "WELCOME / 01"
-  },
-  "onboardingTitle": {
-    "message": "Let's make your videos sparkle!"
-  },
-  "chooseDefaults": {
-    "message": "Choose your defaults"
-  },
-  "finishSetup": {
-    "message": "Finish setup"
-  },
-  "settingsHome": {
-    "message": "AniWebScale settings home"
-  },
-  "openMenu": {
-    "message": "Open menu"
-  },
-  "switchLightTheme": {
-    "message": "Switch to light theme"
-  },
-  "switchDarkTheme": {
-    "message": "Switch to dark theme"
-  },
-  "anime4kModeGroup": {
-    "message": "Anime4K presets"
   },
   "aiModeGroup": {
     "message": "AI upscaling | GPU intensive"
   },
+  "allowSiteAccess": {
+    "message": "Allow this site"
+  },
+  "allowed": {
+    "message": "Allowed"
+  },
+  "anime4kModeGroup": {
+    "message": "Anime4K presets"
+  },
+  "appearance": {
+    "message": "Appearance"
+  },
+  "autoFullscreen": {
+    "message": "Auto fullscreen"
+  },
+  "autoSaveHint": {
+    "message": "Changes are saved automatically."
+  },
+  "backToHome": {
+    "message": "Back to home"
+  },
+  "backToWebsite": {
+    "message": "Back to website"
+  },
+  "backend": {
+    "message": "Backend"
+  },
   "backendAuto": {
     "message": "Auto"
+  },
+  "backendNative": {
+    "message": "Native Windows renderer (hardware acceleration off)"
   },
   "backendWebGpu": {
     "message": "WebGPU (hardware acceleration required)"
   },
-  "backendNative": {
-    "message": "Native Windows renderer"
+  "blocked": {
+    "message": "Blocked"
   },
-  "modeOffOption": {
-    "message": "Off - No image enhancement"
+  "chooseDefaults": {
+    "message": "Choose your defaults"
   },
-  "modeAOption": {
-    "message": "Anime4K A - Balanced restore + 2x upscale (Recommended)"
+  "clearPermissions": {
+    "message": "Clear all permissions"
   },
-  "modeBOption": {
-    "message": "Anime4K B - Soft restore + 2x upscale"
+  "clearWebsiteAccess": {
+    "message": "Clear website access"
   },
-  "modeCOption": {
-    "message": "Anime4K C - Denoise + 2x upscale"
+  "clearedAllNative": {
+    "message": "All native permissions removed"
   },
-  "modeAaOption": {
-    "message": "Anime4K A+A - Strong 2-pass restore + up to 4x"
+  "clearedAllSites": {
+    "message": "All website access removed"
   },
-  "modeBbOption": {
-    "message": "Anime4K B+B - Strong soft restore + up to 4x"
+  "cmpCaption": {
+    "message": "Interactive visual preview"
   },
-  "modeCaOption": {
-    "message": "Anime4K C+A - Denoise, restore + up to 4x"
+  "cmpItem1": {
+    "message": "Cleaner outlines"
   },
-  "modeCnnOption": {
-    "message": "Anime4K CNN 2x - Sharp neural upscale (GPU: medium)"
+  "cmpItem2": {
+    "message": "Smoother color bands"
   },
-  "modeArtCnnOption": {
-    "message": "ArtCNN C4F16 2x - Line/detail reconstruction (GPU: real-time)"
+  "cmpItem3": {
+    "message": "Sharper details at 2x and 4x"
   },
-  "modeAcNetOption": {
-    "message": "ACNet F8B4 2x - Fast lightweight upscale (GPU: very light)"
+  "cmpKicker": {
+    "message": "02 / SEE THE DIFFERENCE"
   },
-  "modeArNetOption": {
-    "message": "ARNet F8B8 2x - Strong detail recovery (GPU: balanced)"
+  "cmpText": {
+    "message": "Drag the slider to compare the original frame with an Anime4K-enhanced preview."
   },
-  "profileOff": {
-    "message": "Off"
+  "cmpTitle": {
+    "message": "From soft to<br><em>sparkling clear.</em>"
   },
-  "profileRecommended": {
-    "message": "Recommended"
+  "colorTheme": {
+    "message": "Color theme"
   },
-  "profileSoftSources": {
-    "message": "Soft sources"
+  "compareSliderAria": {
+    "message": "Compare original and enhanced frame"
   },
-  "profileNoisySources": {
-    "message": "Noisy sources"
+  "description": {
+    "message": "AniWebScale enhances anime video in real time using Anime4K, WebGPU and an optional local Windows renderer."
   },
-  "profileBestAt2x": {
-    "message": "Best at 2x+"
+  "diagnostics": {
+    "message": "Diagnostics"
   },
-  "profileGpuMedium": {
-    "message": "GPU: medium"
+  "disablingExtension": {
+    "message": "Disabling extension..."
   },
-  "profileGpuRealtime": {
-    "message": "GPU: real-time"
+  "dlKicker": {
+    "message": "READY WHEN YOU ARE"
   },
-  "profileGpuVeryLight": {
-    "message": "GPU: very light"
+  "dlNote": {
+    "message": "Store listings are being prepared. Download links will appear here as soon as they are live."
   },
-  "profileGpuBalanced": {
-    "message": "GPU: balanced"
+  "dlText": {
+    "message": "Install AniWebScale and turn soft animation into crisp, smooth video in a few clicks."
   },
-  "modeOffDescription": {
-    "message": "Disables image enhancement. Frame generation can still be enabled separately."
+  "dlTitle": {
+    "message": "Your next episode<br>deserves a little magic."
   },
-  "modeADescription": {
-    "message": "Restores line detail, then applies Anime4K CNN upscaling. The balanced default for most anime."
+  "done": {
+    "message": "Done"
   },
-  "modeBDescription": {
-    "message": "Uses softer restoration before Anime4K CNN upscaling to reduce ringing on blurry or compressed video."
+  "enableVerboseLogging": {
+    "message": "Enable verbose logging"
   },
-  "modeCDescription": {
-    "message": "Denoises and upscales in one Anime4K CNN pass. Best suited to visibly noisy animation."
+  "enablingExtension": {
+    "message": "Enabling extension..."
   },
-  "modeAaDescription": {
-    "message": "Runs the Anime4K A restoration chain twice for stronger detail and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline."
+  "enhancement": {
+    "message": "Enhancement"
   },
-  "modeBbDescription": {
-    "message": "Runs the softer Anime4K B chain twice for blurry sources and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline."
+  "enhancementMode": {
+    "message": "Enhancement mode"
   },
-  "modeCaDescription": {
-    "message": "Denoises and upscales first, then restores and can upscale again. UL is a high-end GPU profile outside the 24 FPS baseline."
+  "extensionDisabledStatus": {
+    "message": "Extension disabled."
   },
-  "modeCnnDescription": {
-    "message": "Official Anime4K CNN at a fixed 2x scale. Produces a sharp result; Quality changes model size and GPU load."
+  "extensionEnabled": {
+    "message": "Extension enabled"
   },
-  "modeArtCnnDescription": {
-    "message": "Fixed 2x GLSL network for reconstructing anime line art and natural detail at real-time speed."
+  "extensionEnabledStatus": {
+    "message": "Extension enabled."
   },
-  "modeAcNetDescription": {
-    "message": "Small fixed 2x GLSL network that prioritizes speed and very low GPU load over maximum detail recovery."
+  "extensionName": {
+    "message": "AniWebScale"
   },
-  "modeArNetDescription": {
-    "message": "Deeper fixed 2x GLSL network with stronger detail recovery than ACNet at a higher, balanced GPU load."
+  "extensionStatusChangeFailed": {
+    "message": "Could not change extension status."
+  },
+  "extensionStatusSavedNotApplied": {
+    "message": "Extension status saved, but could not be applied."
+  },
+  "faq1A": {
+    "message": "No. Enhancement runs locally on your GPU or, when explicitly enabled, through the local native Windows renderer."
+  },
+  "faq1Q": {
+    "message": "Does AniWebScale upload my videos?"
+  },
+  "faq2A": {
+    "message": "Chrome, Chromium-based browsers and Firefox builds with the required WebGPU capabilities are supported."
+  },
+  "faq2Q": {
+    "message": "Which browsers are supported?"
+  },
+  "faq3A": {
+    "message": "A modern WebGPU-capable GPU is required. Recent integrated graphics may run lighter Anime4K presets, but a powerful dedicated GPU is strongly recommended for 1080p-to-4K processing, AI modes and frame generation. High-resolution 4x modes can require substantial VRAM, especially when combined with frame generation."
+  },
+  "faq3Q": {
+    "message": "What graphics card do I need?"
+  },
+  "faq4A": {
+    "message": "Crunchyroll, Netflix, Disney+, Prime Video and similar protected services require the Native Windows renderer; WebGPU cannot read protected frames. AniWebScale never bypasses DRM, so individual services may still block capture even with Native enabled."
+  },
+  "faq4Q": {
+    "message": "Does it work with Crunchyroll, Netflix and protected video?"
+  },
+  "faq5A": {
+    "message": "Everything. Anime4K real-time presets, the AI upscaling modes (ArtCNN, ACNet, ARNet), the optional Native Windows renderer and motion-aware frame generation are all available at no cost. There is no paid tier."
+  },
+  "faq5Q": {
+    "message": "What is included for free?"
+  },
+  "faq6A": {
+    "message": "Reach out through the support page. AniWebScale runs locally, so most issues are settings or hardware related and easy to resolve."
+  },
+  "faq6Q": {
+    "message": "How do I get support?"
+  },
+  "faqKicker": {
+    "message": "04 / GOOD TO KNOW"
+  },
+  "faqSub": {
+    "message": "Still curious? The extension is designed to be predictable, local and easy to undo."
+  },
+  "faqTitle": {
+    "message": "Questions,<br><em>meet answers.</em>"
+  },
+  "feat1Text": {
+    "message": "Anime4K and AI-powered modes sharpen every frame while your video keeps playing."
+  },
+  "feat1Title": {
+    "message": "Real-time upscaling"
+  },
+  "feat2Text": {
+    "message": "Motion-aware frame generation creates an intermediate frame for fluid 2x playback."
+  },
+  "feat2Title": {
+    "message": "Smoother motion"
+  },
+  "feat3Text": {
+    "message": "Enhancement starts with the player and releases GPU resources when you leave."
+  },
+  "feat3Title": {
+    "message": "Smart fullscreen"
+  },
+  "feat4Text": {
+    "message": "No telemetry, no video uploads and no DRM bypass. Your frames stay on your device."
+  },
+  "feat4Title": {
+    "message": "Privacy by design"
+  },
+  "feat5Text": {
+    "message": "Use WebGPU in the browser or the optional native Windows renderer when needed."
+  },
+  "feat5Title": {
+    "message": "Choose your engine"
+  },
+  "feat6Text": {
+    "message": "Carefully tuned presets restore outlines without turning delicate artwork into noise."
+  },
+  "feat6Title": {
+    "message": "Made for line art"
+  },
+  "featKicker": {
+    "message": "01 / THE GOOD STUFF"
+  },
+  "featSub": {
+    "message": "Built for animated content where crisp outlines and subtle color transitions matter most."
+  },
+  "featTitle": {
+    "message": "A tiny extension with<br><em>serious sparkle.</em>"
+  },
+  "finishSetup": {
+    "message": "Finish setup"
+  },
+  "footerContact": {
+    "message": "Contact"
+  },
+  "footerContactLink": {
+    "message": "Contact"
+  },
+  "footerDownload": {
+    "message": "Download"
+  },
+  "footerFeatures": {
+    "message": "Features"
+  },
+  "footerImprint": {
+    "message": "Imprint"
+  },
+  "footerLegal": {
+    "message": "Legal"
+  },
+  "footerMade": {
+    "message": "Made with <b>♥</b> for animation"
+  },
+  "footerPrivacy": {
+    "message": "Privacy"
+  },
+  "footerProduct": {
+    "message": "Product"
+  },
+  "footerSupport": {
+    "message": "Support"
+  },
+  "footerTagline": {
+    "message": "Real-time video enhancement<br>for people who love every frame."
+  },
+  "footerTerms": {
+    "message": "Terms"
+  },
+  "frameGeneration": {
+    "message": "Frame generation"
+  },
+  "frameGenerationLoad": {
+    "message": "Frame generation increases GPU memory use and processing load."
   },
   "frameMotion2x": {
     "message": "Motion-aware 2x"
@@ -278,110 +284,62 @@
   "frameMotion2xEvenOff": {
     "message": "Motion-aware 2x, even while enhancement is off."
   },
-  "saving": {
-    "message": "Saving..."
+  "gpuCheck": {
+    "message": "Check requirements"
   },
-  "savingSetup": {
-    "message": "Saving setup..."
+  "gpuNoticeAria": {
+    "message": "Graphics card requirement"
   },
-  "settingsSaved": {
-    "message": "Settings saved."
+  "gpuText": {
+    "message": "Recent integrated graphics may handle lighter presets. For smooth 4K, AI upscaling and frame generation, use a powerful dedicated graphics card with current drivers and sufficient VRAM."
   },
-  "settingsSavedApplied": {
-    "message": "Settings saved and applied."
+  "gpuTitle": {
+    "message": "A modern GPU is required."
   },
-  "settingsSavedNotApplied": {
-    "message": "Settings saved, but could not be applied."
+  "heroArtAria": {
+    "message": "Stylized AniWebScale video player illustration"
   },
-  "settingsSaveFailed": {
-    "message": "Could not save settings."
+  "heroCta": {
+    "message": "Add to your browser"
   },
-  "setupComplete": {
-    "message": "Setup complete. You can close this tab."
+  "heroLead": {
+    "message": "Sharper line art, cleaner gradients and smoother motion for anime and animation — enhanced directly inside your browser."
   },
-  "setupSaveFailed": {
-    "message": "Setup could not be saved."
+  "heroSecondary": {
+    "message": "See the difference"
   },
-  "done": {
-    "message": "Done"
-  },
-  "enablingExtension": {
-    "message": "Enabling extension..."
-  },
-  "disablingExtension": {
-    "message": "Disabling extension..."
-  },
-  "extensionEnabledStatus": {
-    "message": "Extension enabled."
-  },
-  "extensionDisabledStatus": {
-    "message": "Extension disabled."
-  },
-  "extensionStatusSavedNotApplied": {
-    "message": "Extension status saved, but could not be applied."
-  },
-  "extensionStatusChangeFailed": {
-    "message": "Could not change extension status."
-  },
-  "rendererRejectedSettings": {
-    "message": "The active renderer rejected the settings."
-  },
-  "frameGenerationLoad": {
-    "message": "Frame generation increases GPU memory use and processing load."
-  },
-  "pleaseWait": {
-    "message": "Please wait…"
-  },
-  "noNativeSites": {
-    "message": "No sites have permission to start the native renderer."
-  },
-  "allowed": {
-    "message": "Allowed"
-  },
-  "blocked": {
-    "message": "Blocked"
-  },
-  "remove": {
-    "message": "Remove"
+  "heroTitle": {
+    "message": "Make every frame<br><em>feel magical.</em>"
   },
   "home": {
     "message": "Home"
   },
-  "backToHome": {
-    "message": "Back to home"
+  "howKicker": {
+    "message": "03 / EASY AS 1—2—3"
+  },
+  "howTitle": {
+    "message": "Set it once. Enjoy <em>every frame.</em>"
   },
   "imprint": {
     "message": "Imprint"
   },
-  "privacy": {
-    "message": "Privacy"
-  },
-  "terms": {
-    "message": "Terms"
-  },
-  "support": {
-    "message": "Support"
-  },
-  "backToWebsite": {
-    "message": "Back to website"
+  "imprintDate": {
+    "message": "Last updated: July 25, 2026"
   },
   "imprintKicker": {
     "message": "LEGAL / IMPRINT"
   },
-  "imprintTitle": {
-    "message": "Provider<br><em>information.</em>"
-  },
-  "imprintDate": {
-    "message": "Last updated: July 25, 2026"
+  "imprintPageTitle": {
+    "message": "Imprint – AniWebScale"
   },
   "imprintS1Heading": {
     "message": "Information pursuant to § 5 DDG"
   },
-  "imprintS2Heading": {
-    "message": "Contact"
-  },
   "imprintS2Email": {
     "message": "Email: "
+  },
+  "imprintS2Heading": {
+    "message": "Contact"
   },
   "imprintS3Heading": {
     "message": "Consumer dispute resolution"
@@ -395,86 +353,173 @@
   "imprintS4Text": {
     "message": "Chrome, Firefox, Anime4K and other designations may be trademarks of their respective owners. Mention does not imply any affiliation or endorsement. AniWebScale does not bypass access controls or DRM systems."
   },
-  "supportKicker": {
-    "message": "HELP / SUPPORT"
+  "imprintTitle": {
+    "message": "Provider<br><em>information.</em>"
   },
-  "supportTitle": {
-    "message": "We're here<br><em>to help.</em>"
+  "langToggleAria": {
+    "message": "Switch language"
   },
-  "supportS1Heading": {
-    "message": "Contact"
+  "liveStatistics": {
+    "message": "Live statistics"
   },
-  "supportS1Text": {
-    "message": "Write to "
+  "menuOpen": {
+    "message": "Open menu"
   },
-  "supportS1Text2": {
-    "message": ". Include your browser, extension version, Windows version, GPU, affected website and the exact error message. If an error message shows a \"Support code\" ID, include it."
+  "miniProofAria": {
+    "message": "Core technologies"
   },
-  "supportS2Heading": {
-    "message": "Priorities"
+  "modeADescription": {
+    "message": "Restores line detail, then applies Anime4K CNN upscaling. The balanced default for most anime."
   },
-  "supportS2Text": {
-    "message": "General compatibility questions are handled in order of receipt. Protected streams may still produce black frames with Native enabled, because AniWebScale does not bypass DRM."
+  "modeAOption": {
+    "message": "Anime4K A - Balanced restore + 2x upscale (Recommended)"
   },
-  "termsKicker": {
-    "message": "LEGAL / TERMS"
+  "modeAaDescription": {
+    "message": "Runs the Anime4K A restoration chain twice for stronger detail and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline."
   },
-  "termsTitle": {
-    "message": "Terms of<br><em>Service.</em>"
+  "modeAaOption": {
+    "message": "Anime4K A+A - Strong 2-pass restore + up to 4x"
   },
-  "termsDate": {
-    "message": "Last updated: July 25, 2026"
+  "modeAcNetDescription": {
+    "message": "Small fixed 2x GLSL network that prioritizes speed and very low GPU load over maximum detail recovery."
   },
-  "termsS1Heading": {
-    "message": "1. Subject matter"
+  "modeAcNetOption": {
+    "message": "ACNet F8B4 2x - Fast lightweight upscale (GPU: very light)"
   },
-  "termsS1Text": {
-    "message": "AniWebScale is a free browser extension for local, real-time enhancement of video rendering using WebGPU and an optional Windows native renderer. All features (Anime4K presets, AI upscaling, native renderer, frame generation) are available free of charge and without an account."
+  "modeArNetDescription": {
+    "message": "Deeper fixed 2x GLSL network with stronger detail recovery than ACNet at a higher, balanced GPU load."
   },
-  "termsS2Heading": {
-    "message": "2. Performance"
+  "modeArNetOption": {
+    "message": "ARNet F8B8 2x - Strong detail recovery (GPU: balanced)"
   },
-  "termsS2Text": {
-    "message": "AniWebScale enhances video rendering locally. Actual performance depends on browser, Windows version, GPU, drivers, source material and website, among other factors. Protected streams may prevent capture; AniWebScale does not bypass DRM."
+  "modeArtCnnDescription": {
+    "message": "Fixed 2x GLSL network for reconstructing anime line art and natural detail at real-time speed."
   },
-  "termsS3Heading": {
-    "message": "3. No purchase contract"
+  "modeArtCnnOption": {
+    "message": "ArtCNN C4F16 2x - Line/detail reconstruction (GPU: real-time)"
   },
-  "termsS3Text": {
-    "message": "Since the extension is provided free of charge, no paid contract is formed. No payment data, accounts or billing information is processed."
+  "modeBDescription": {
+    "message": "Uses softer restoration before Anime4K CNN upscaling to reduce ringing on blurry or compressed video."
   },
-  "termsS4Heading": {
-    "message": "4. Acceptable use"
+  "modeBOption": {
+    "message": "Anime4K B - Soft restore + 2x upscale"
   },
-  "termsS4Text": {
-    "message": "The extension and included open-source components (Anime4K, ArtCNN, ACNet, ARNet, Magpie-related shaders) remain under their respective licenses. Use must comply with applicable store policies and law. Circumventing technical protection measures of content providers is prohibited."
+  "modeBbDescription": {
+    "message": "Runs the softer Anime4K B chain twice for blurry sources and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline."
   },
-  "termsS5Heading": {
-    "message": "5. Availability and updates"
+  "modeBbOption": {
+    "message": "Anime4K B+B - Strong soft restore + up to 4x"
   },
-  "termsS5Text": {
-    "message": "Updates may be required for security, compatibility or functionality reasons. Short outages due to maintenance or third parties are possible. Statutory warranty and defect rights remain unaffected."
+  "modeCDescription": {
+    "message": "Denoises and upscales in one Anime4K CNN pass. Best suited to visibly noisy animation."
   },
-  "termsS6Heading": {
-    "message": "6. Liability"
+  "modeCOption": {
+    "message": "Anime4K C - Denoise + 2x upscale"
   },
-  "termsS6Text": {
-    "message": "Liability is governed by statutory provisions. No specific availability or degree of result is guaranteed for free software."
+  "modeCaDescription": {
+    "message": "Denoises and upscales first, then restores and can upscale again. UL is a high-end GPU profile outside the 24 FPS baseline."
   },
-  "privacyKicker": {
-    "message": "LEGAL / PRIVACY"
+  "modeCaOption": {
+    "message": "Anime4K C+A - Denoise, restore + up to 4x"
   },
-  "privacyTitle": {
-    "message": "Privacy,<br><em>plain and simple.</em>"
+  "modeCnnDescription": {
+    "message": "Official Anime4K CNN at a fixed 2x scale. Produces a sharp result; Quality changes model size and GPU load."
+  },
+  "modeCnnOption": {
+    "message": "Anime4K CNN 2x - Sharp neural upscale (GPU: medium)"
+  },
+  "modeOffDescription": {
+    "message": "Disables image enhancement. Frame generation can still be enabled separately."
+  },
+  "modeOffOption": {
+    "message": "Off - No image enhancement"
+  },
+  "nativeHostStatusLabel": {
+    "message": "Native renderer"
+  },
+  "nativeRendererPermissions": {
+    "message": "Native renderer permissions"
+  },
+  "navCta": {
+    "message": "Get AniWebScale"
+  },
+  "navFaq": {
+    "message": "FAQ"
+  },
+  "navFeatures": {
+    "message": "Features"
+  },
+  "navHow": {
+    "message": "How it works"
+  },
+  "navSupport": {
+    "message": "Support"
+  },
+  "noNativeSites": {
+    "message": "No sites have permission to start the native renderer."
+  },
+  "noWebsiteSites": {
+    "message": "No websites can run AniWebScale yet."
+  },
+  "notFoundBack": {
+    "message": "Back home"
+  },
+  "notFoundCta": {
+    "message": "Return home →"
+  },
+  "notFoundHeading": {
+    "message": "This page slipped<br><em>between the frames.</em>"
+  },
+  "notFoundKicker": {
+    "message": "LOST FRAME"
+  },
+  "notFoundText": {
+    "message": "The link may be outdated, or the page has moved somewhere more magical."
+  },
+  "notFoundTitle": {
+    "message": "Page not found — AniWebScale"
+  },
+  "onboardingTitle": {
+    "message": "Let's make your videos sparkle!"
+  },
+  "openMenu": {
+    "message": "Open menu"
+  },
+  "pageTitle": {
+    "message": "AniWebScale — Make every frame magical"
+  },
+  "permissions": {
+    "message": "Permissions"
+  },
+  "pleaseWait": {
+    "message": "Please wait…"
+  },
+  "previewEnhanced": {
+    "message": "Enhanced 4K"
+  },
+  "previewLabel": {
+    "message": "AniWebScale preview"
+  },
+  "previewOriginal": {
+    "message": "Original"
+  },
+  "privacy": {
+    "message": "Privacy"
   },
   "privacyDate": {
     "message": "Last updated: July 25, 2026"
   },
-  "privacyS1Heading": {
-    "message": "1. Controller and data protection contact"
+  "privacyKicker": {
+    "message": "LEGAL / PRIVACY"
+  },
+  "privacyPageTitle": {
+    "message": "Privacy – AniWebScale"
   },
   "privacyS1Contact": {
     "message": "Email and data protection contact: "
+  },
+  "privacyS1Heading": {
+    "message": "1. Controller and data protection contact"
   },
   "privacyS2Heading": {
     "message": "2. Website, hosting and security logs"
@@ -524,56 +569,323 @@
   "privacyS9Text": {
     "message": "AniWebScale does not collect personal data directly from data subjects via the website. In the event of material changes, we will update this declaration and the displayed version information."
   },
-  "footerImprint": {
-    "message": "Imprint"
+  "privacyTitle": {
+    "message": "Privacy,<br><em>plain and simple.</em>"
   },
-  "footerPrivacy": {
-    "message": "Privacy"
+  "processVideos": {
+    "message": "Process videos in this browser"
   },
-  "footerTerms": {
-    "message": "Terms"
+  "profileBestAt2x": {
+    "message": "Best at 2x+"
   },
-  "footerSupport": {
-    "message": "Support"
+  "profileGpuBalanced": {
+    "message": "GPU: balanced"
   },
-  "pageTitle": {
-    "message": "AniWebScale — Make every frame magical"
+  "profileGpuMedium": {
+    "message": "GPU: medium"
+  },
+  "profileGpuRealtime": {
+    "message": "GPU: real-time"
+  },
+  "profileGpuVeryLight": {
+    "message": "GPU: very light"
+  },
+  "profileNoisySources": {
+    "message": "Noisy sources"
+  },
+  "profileOff": {
+    "message": "Off"
+  },
+  "profileRecommended": {
+    "message": "Recommended"
+  },
+  "profileSoftSources": {
+    "message": "Soft sources"
+  },
+  "proofAi": {
+    "message": "AI upscaling"
+  },
+  "proofMotion": {
+    "message": "Motion-aware 2x"
+  },
+  "proofNative": {
+    "message": "Native fallback"
+  },
+  "proofText": {
+    "message": "Loved by animation fans who notice every line"
+  },
+  "quality": {
+    "message": "Quality"
+  },
+  "quickSetup": {
+    "message": "Quick setup"
+  },
+  "realTimeVideoEnhancement": {
+    "message": "Real-time video enhancement"
+  },
+  "remove": {
+    "message": "Remove"
+  },
+  "removeAllowAllSiteAccess": {
+    "message": "Remove allow-all access"
+  },
+  "removeSiteAccess": {
+    "message": "Remove access"
+  },
+  "removedSite": {
+    "message": "Removed {site}"
+  },
+  "removingSiteAccess": {
+    "message": "Removing site access..."
+  },
+  "rendererRejectedSettings": {
+    "message": "The active renderer rejected the settings."
+  },
+  "repoCaption": {
+    "message": "Illustrative preview"
+  },
+  "repoCaptionStrong": {
+    "message": "Original procedurally authored comparison plate"
+  },
+  "repoKicker": {
+    "message": "VISUAL PREVIEW"
+  },
+  "repoText": {
+    "message": "This side-by-side comparison plate is an original procedural illustration showing the visual difference between a soft source and a crisp enhanced render."
+  },
+  "repoTitle": {
+    "message": "See the effect.<br><em>Illustratively.</em>"
+  },
+  "requestingSiteAccess": {
+    "message": "Requesting site access..."
+  },
+  "resetConfirm": {
+    "message": "Reset all settings to defaults?"
+  },
+  "resetToDefaults": {
+    "message": "Reset to defaults"
+  },
+  "saveApply": {
+    "message": "Save & apply"
+  },
+  "saveSettings": {
+    "message": "Save settings"
+  },
+  "saving": {
+    "message": "Saving..."
+  },
+  "savingSetup": {
+    "message": "Saving setup..."
+  },
+  "settingsHome": {
+    "message": "AniWebScale settings home"
+  },
+  "settingsReset": {
+    "message": "Settings reset to defaults."
+  },
+  "settingsSaveFailed": {
+    "message": "Could not save settings."
+  },
+  "settingsSaved": {
+    "message": "Settings saved."
+  },
+  "settingsSavedApplied": {
+    "message": "Settings saved and applied."
+  },
+  "settingsSavedNotApplied": {
+    "message": "Settings saved, but could not be applied."
+  },
+  "setupComplete": {
+    "message": "Setup complete. You can close this tab."
+  },
+  "setupSaveFailed": {
+    "message": "Setup could not be saved."
+  },
+  "siteAccessChangeFailed": {
+    "message": "Could not change site access."
+  },
+  "siteAccessCheckFailed": {
+    "message": "Site access could not be checked."
+  },
+  "siteAccessGranted": {
+    "message": "AniWebScale can enhance videos on {site}."
+  },
+  "siteAccessGrantedReload": {
+    "message": "Site access granted. Reload the page to activate AniWebScale."
+  },
+  "siteAccessMissing": {
+    "message": "Allow access only for {site} to enhance its videos."
+  },
+  "siteAccessNotGranted": {
+    "message": "Site access was not granted."
+  },
+  "siteAccessReady": {
+    "message": "Site access granted. AniWebScale is ready here."
+  },
+  "siteAccessRemoveFailed": {
+    "message": "Site access was not removed."
+  },
+  "siteAccessRemoved": {
+    "message": "Site access removed. Reload the page to finish cleanup."
+  },
+  "siteAccessSyncFailed": {
+    "message": "Site access could not be applied."
+  },
+  "siteAccessUnavailable": {
+    "message": "Site access is unavailable on this page."
+  },
+  "siteAccessUnavailableAction": {
+    "message": "Unavailable"
+  },
+  "siteAccessViaAllowAll": {
+    "message": "AniWebScale is allowed on every site through an allow-all grant."
+  },
+  "sitePermissions": {
+    "message": "Website permissions"
   },
   "skipLink": {
     "message": "Skip to content"
   },
-  "menuOpen": {
-    "message": "Open menu"
+  "statusAvailable": {
+    "message": "Available"
   },
-  "navFeatures": {
-    "message": "Features"
+  "statusChecking": {
+    "message": "Checking..."
   },
-  "navHow": {
-    "message": "How it works"
+  "statusUnavailable": {
+    "message": "Unavailable"
   },
-  "navFaq": {
-    "message": "FAQ"
+  "statusWindowsOnly": {
+    "message": "Windows only"
   },
-  "navSupport": {
+  "step1Text": {
+    "message": "Install AniWebScale in Chrome or Firefox."
+  },
+  "step1Title": {
+    "message": "Add the extension"
+  },
+  "step2Text": {
+    "message": "Choose a preset, quality and rendering backend."
+  },
+  "step2Title": {
+    "message": "Pick your look"
+  },
+  "step3Text": {
+    "message": "Enter fullscreen and let AniWebScale do the rest."
+  },
+  "step3Title": {
+    "message": "Press play"
+  },
+  "storeAvailableFor": {
+    "message": "AVAILABLE FOR"
+  },
+  "storeComingSoon": {
+    "message": "Coming soon"
+  },
+  "streamCheck": {
+    "message": "Check compatibility"
+  },
+  "streamNoticeAria": {
+    "message": "Protected streaming compatibility"
+  },
+  "streamText": {
+    "message": "Protected streams cannot use the WebGPU frame path. The Native Windows renderer is required, but individual services may still block capture because AniWebScale never bypasses DRM."
+  },
+  "streamTitle": {
+    "message": "Crunchyroll, Netflix and similar services require Native."
+  },
+  "support": {
     "message": "Support"
   },
-  "navCta": {
-    "message": "Get AniWebScale"
+  "supportKicker": {
+    "message": "HELP / SUPPORT"
   },
-  "heroTitle": {
-    "message": "Make every frame<br><em>feel magical.</em>"
+  "supportPageTitle": {
+    "message": "Support – AniWebScale"
   },
-  "heroLead": {
-    "message": "Sharper line art, cleaner gradients and smoother motion for anime and animation — enhanced directly inside your browser."
+  "supportS1Heading": {
+    "message": "Contact"
   },
-  "heroCta": {
-    "message": "Add to your browser"
+  "supportS1Text": {
+    "message": "Write to "
   },
-  "heroSecondary": {
-    "message": "See the difference"
+  "supportS1Text2": {
+    "message": ". Include your browser, extension version, Windows version, GPU, affected website and the exact error message. If an error message shows a \"Support code\" ID, include it."
   },
-  "heroArtAria": {
-    "message": "Stylized AniWebScale video player illustration"
+  "supportS2Heading": {
+    "message": "Priorities"
+  },
+  "supportS2Text": {
+    "message": "General compatibility questions are handled in order of receipt. Protected streams may still produce black frames with Native enabled, because AniWebScale does not bypass DRM."
+  },
+  "supportTitle": {
+    "message": "We're here<br><em>to help.</em>"
+  },
+  "switchDarkTheme": {
+    "message": "Switch to dark theme"
+  },
+  "switchLightTheme": {
+    "message": "Switch to light theme"
+  },
+  "systemStatus": {
+    "message": "System status"
+  },
+  "systemStatusDescription": {
+    "message": "Current rendering capabilities of this browser."
+  },
+  "terms": {
+    "message": "Terms"
+  },
+  "termsDate": {
+    "message": "Last updated: July 25, 2026"
+  },
+  "termsKicker": {
+    "message": "LEGAL / TERMS"
+  },
+  "termsPageTitle": {
+    "message": "Terms – AniWebScale"
+  },
+  "termsS1Heading": {
+    "message": "1. Subject matter"
+  },
+  "termsS1Text": {
+    "message": "AniWebScale is a free browser extension for local, real-time enhancement of video rendering using WebGPU and an optional Windows native renderer. All features (Anime4K presets, AI upscaling, native renderer, frame generation) are available free of charge and without an account."
+  },
+  "termsS2Heading": {
+    "message": "2. Performance"
+  },
+  "termsS2Text": {
+    "message": "AniWebScale enhances video rendering locally. Actual performance depends on browser, Windows version, GPU, drivers, source material and website, among other factors. Protected streams may prevent capture; AniWebScale does not bypass DRM."
+  },
+  "termsS3Heading": {
+    "message": "3. No purchase contract"
+  },
+  "termsS3Text": {
+    "message": "Since the extension is provided free of charge, no paid contract is formed. No payment data, accounts or billing information is processed."
+  },
+  "termsS4Heading": {
+    "message": "4. Acceptable use"
+  },
+  "termsS4Text": {
+    "message": "The extension and included open-source components (Anime4K, ArtCNN, ACNet, ARNet, Magpie-related shaders) remain under their respective licenses. Use must comply with applicable store policies and law. Circumventing technical protection measures of content providers is prohibited."
+  },
+  "termsS5Heading": {
+    "message": "5. Availability and updates"
+  },
+  "termsS5Text": {
+    "message": "Updates may be required for security, compatibility or functionality reasons. Short outages due to maintenance or third parties are possible. Statutory warranty and defect rights remain unaffected."
+  },
+  "termsS6Heading": {
+    "message": "6. Liability"
+  },
+  "termsS6Text": {
+    "message": "Liability is governed by statutory provisions. No specific availability or degree of result is guaranteed for free software."
+  },
+  "termsTitle": {
+    "message": "Terms of<br><em>Service.</em>"
+  },
+  "theme": {
+    "message": "Theme"
   },
   "trust1": {
     "message": "No telemetry"
@@ -587,284 +899,11 @@
   "trustGpu": {
     "message": "Modern GPU required"
   },
-  "previewLabel": {
-    "message": "AniWebScale preview"
-  },
-  "previewOriginal": {
-    "message": "Original"
-  },
-  "previewEnhanced": {
-    "message": "Enhanced 4K"
-  },
-  "gpuNoticeAria": {
-    "message": "Graphics card requirement"
-  },
-  "gpuTitle": {
-    "message": "A modern GPU is required."
-  },
-  "gpuText": {
-    "message": "Recent integrated graphics may handle lighter presets. For smooth 4K, AI upscaling and frame generation, use a powerful dedicated graphics card with current drivers and sufficient VRAM."
-  },
-  "gpuCheck": {
-    "message": "Check requirements"
-  },
-  "streamNoticeAria": {
-    "message": "Protected streaming compatibility"
-  },
-  "streamTitle": {
-    "message": "Crunchyroll, Netflix and similar services require Native."
-  },
-  "streamText": {
-    "message": "Protected streams cannot use the WebGPU frame path. The Native Windows renderer is required, but individual services may still block capture because AniWebScale never bypasses DRM."
-  },
-  "streamCheck": {
-    "message": "Check compatibility"
-  },
-  "miniProofAria": {
-    "message": "Core technologies"
-  },
-  "proofText": {
-    "message": "Loved by animation fans who notice every line"
-  },
-  "proofAi": {
-    "message": "AI upscaling"
-  },
-  "proofMotion": {
-    "message": "Motion-aware 2x"
-  },
-  "proofNative": {
-    "message": "Native fallback"
-  },
-  "featKicker": {
-    "message": "01 / THE GOOD STUFF"
-  },
-  "featTitle": {
-    "message": "A tiny extension with<br><em>serious sparkle.</em>"
-  },
-  "featSub": {
-    "message": "Built for animated content where crisp outlines and subtle color transitions matter most."
-  },
-  "feat1Title": {
-    "message": "Real-time upscaling"
-  },
-  "feat1Text": {
-    "message": "Anime4K and AI-powered modes sharpen every frame while your video keeps playing."
-  },
-  "feat2Title": {
-    "message": "Smoother motion"
-  },
-  "feat2Text": {
-    "message": "Motion-aware frame generation creates an intermediate frame for fluid 2x playback."
-  },
-  "feat3Title": {
-    "message": "Smart fullscreen"
-  },
-  "feat3Text": {
-    "message": "Enhancement starts with the player and releases GPU resources when you leave."
-  },
-  "feat4Title": {
-    "message": "Privacy by design"
-  },
-  "feat4Text": {
-    "message": "No telemetry, no video uploads and no DRM bypass. Your frames stay on your device."
-  },
-  "feat5Title": {
-    "message": "Choose your engine"
-  },
-  "feat5Text": {
-    "message": "Use WebGPU in the browser or the optional native Windows renderer when needed."
-  },
-  "feat6Title": {
-    "message": "Made for line art"
-  },
-  "feat6Text": {
-    "message": "Carefully tuned presets restore outlines without turning delicate artwork into noise."
-  },
-  "cmpKicker": {
-    "message": "02 / SEE THE DIFFERENCE"
-  },
-  "cmpTitle": {
-    "message": "From soft to<br><em>sparkling clear.</em>"
-  },
-  "cmpText": {
-    "message": "Drag the slider to compare the original frame with an Anime4K-enhanced preview."
-  },
-  "cmpItem1": {
-    "message": "Cleaner outlines"
-  },
-  "cmpItem2": {
-    "message": "Smoother color bands"
-  },
-  "cmpItem3": {
-    "message": "Sharper details at 2x and 4x"
-  },
-  "compareSliderAria": {
-    "message": "Compare original and enhanced frame"
-  },
-  "cmpCaption": {
-    "message": "Interactive visual preview"
-  },
-  "repoKicker": {
-    "message": "VISUAL PREVIEW"
-  },
-  "repoTitle": {
-    "message": "See the effect.<br><em>Illustratively.</em>"
-  },
-  "repoText": {
-    "message": "This side-by-side comparison plate is an original procedural illustration showing the visual difference between a soft source and a crisp enhanced render."
-  },
-  "repoCaption": {
-    "message": "Illustrative preview"
-  },
-  "repoCaptionStrong": {
-    "message": "Original procedurally authored comparison plate"
-  },
-  "howKicker": {
-    "message": "03 / EASY AS 1—2—3"
-  },
-  "howTitle": {
-    "message": "Set it once. Enjoy <em>every frame.</em>"
-  },
-  "step1Title": {
-    "message": "Add the extension"
-  },
-  "step1Text": {
-    "message": "Install AniWebScale in Chrome or Firefox."
-  },
-  "step2Title": {
-    "message": "Pick your look"
-  },
-  "step2Text": {
-    "message": "Choose a preset, quality and rendering backend."
-  },
-  "step3Title": {
-    "message": "Press play"
-  },
-  "step3Text": {
-    "message": "Enter fullscreen and let AniWebScale do the rest."
-  },
-  "faqKicker": {
-    "message": "04 / GOOD TO KNOW"
-  },
-  "faqTitle": {
-    "message": "Questions,<br><em>meet answers.</em>"
-  },
-  "faqSub": {
-    "message": "Still curious? The extension is designed to be predictable, local and easy to undo."
-  },
-  "faq1Q": {
-    "message": "Does AniWebScale upload my videos?"
-  },
-  "faq1A": {
-    "message": "No. Enhancement runs locally on your GPU or, when explicitly enabled, through the local native Windows renderer."
-  },
-  "faq2Q": {
-    "message": "Which browsers are supported?"
-  },
-  "faq2A": {
-    "message": "Chrome, Chromium-based browsers and Firefox builds with the required WebGPU capabilities are supported."
-  },
-  "faq3Q": {
-    "message": "What graphics card do I need?"
-  },
-  "faq3A": {
-    "message": "A modern WebGPU-capable GPU is required. Recent integrated graphics may run lighter Anime4K presets, but a powerful dedicated GPU is strongly recommended for 1080p-to-4K processing, AI modes and frame generation. High-resolution 4x modes can require substantial VRAM, especially when combined with frame generation."
-  },
-  "faq4Q": {
-    "message": "Does it work with Crunchyroll, Netflix and protected video?"
-  },
-  "faq4A": {
-    "message": "Crunchyroll, Netflix, Disney+, Prime Video and similar protected services require the Native Windows renderer; WebGPU cannot read protected frames. AniWebScale never bypasses DRM, so individual services may still block capture even with Native enabled."
-  },
-  "faq5Q": {
-    "message": "What is included for free?"
-  },
-  "faq5A": {
-    "message": "Everything. Anime4K real-time presets, the AI upscaling modes (ArtCNN, ACNet, ARNet), the optional Native Windows renderer and motion-aware frame generation are all available at no cost. There is no paid tier."
-  },
-  "faq6Q": {
-    "message": "How do I get support?"
-  },
-  "faq6A": {
-    "message": "Reach out through the support page. AniWebScale runs locally, so most issues are settings or hardware related and easy to resolve."
-  },
-  "dlKicker": {
-    "message": "READY WHEN YOU ARE"
-  },
-  "dlTitle": {
-    "message": "Your next episode<br>deserves a little magic."
-  },
-  "dlText": {
-    "message": "Install AniWebScale and turn soft animation into crisp, smooth video in a few clicks."
-  },
-  "storeAvailableFor": {
-    "message": "AVAILABLE FOR"
-  },
-  "dlNote": {
-    "message": "Store listings are being prepared. Download links will appear here as soon as they are live."
-  },
-  "footerTagline": {
-    "message": "Real-time video enhancement<br>for people who love every frame."
-  },
-  "footerProduct": {
-    "message": "Product"
-  },
-  "footerFeatures": {
-    "message": "Features"
-  },
-  "footerDownload": {
-    "message": "Download"
-  },
-  "footerLegal": {
-    "message": "Legal"
-  },
-  "footerContact": {
-    "message": "Contact"
-  },
-  "footerContactLink": {
-    "message": "Contact"
-  },
-  "footerMade": {
-    "message": "Made with <b>♥</b> for animation"
-  },
-  "notFoundTitle": {
-    "message": "Page not found — AniWebScale"
-  },
-  "notFoundBack": {
-    "message": "Back home"
-  },
-  "notFoundKicker": {
-    "message": "LOST FRAME"
-  },
-  "notFoundHeading": {
-    "message": "This page slipped<br><em>between the frames.</em>"
-  },
-  "notFoundText": {
-    "message": "The link may be outdated, or the page has moved somewhere more magical."
-  },
-  "notFoundCta": {
-    "message": "Return home →"
-  },
-  "storeComingSoon": {
-    "message": "Coming soon"
-  },
-  "langToggleAria": {
-    "message": "Switch language"
-  },
-  "privacyPageTitle": {
-    "message": "Privacy – AniWebScale"
-  },
-  "termsPageTitle": {
-    "message": "Terms – AniWebScale"
-  },
-  "imprintPageTitle": {
-    "message": "Imprint – AniWebScale"
-  },
-  "supportPageTitle": {
-    "message": "Support – AniWebScale"
-  },
-  "diagnostics": {
-    "message": "Diagnostics"
+  "trustedSites": {
+    "message": "Trusted sites"
+  },
+  "undo": {
+    "message": "Undo"
   },
   "verboseLogging": {
     "message": "Verbose logging"
@@ -872,10 +911,19 @@
   "verboseLoggingDescription": {
     "message": "Write detailed diagnostic messages to the browser console. Useful when troubleshooting; leave off for normal use."
   },
-  "enableVerboseLogging": {
-    "message": "Enable verbose logging"
-  },
   "verboseLoggingHint": {
     "message": "Logs stash, pipeline and renderer events to the DevTools console."
+  },
+  "webgpuStatusLabel": {
+    "message": "WebGPU"
+  },
+  "websiteAccess": {
+    "message": "Website access"
+  },
+  "websiteAccessDescription": {
+    "message": "AniWebScale runs only on sites you explicitly allow from the popup."
+  },
+  "welcomeStep": {
+    "message": "WELCOME / 01"
   }
 }

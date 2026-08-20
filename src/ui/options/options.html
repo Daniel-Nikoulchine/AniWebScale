@@ -14,6 +14,7 @@
       <a class="active" href="#enhancement" data-i18n="enhancement">Enhancement</a>
       <a href="#permissions" data-i18n="permissions">Permissions</a>
       <a href="#appearance" data-i18n="appearance">Appearance</a>
+      <a href="#diagnostics" data-i18n="diagnostics">Diagnostics</a>
     </nav>
     <div class="header-actions">
       <button id="theme-toggle" class="theme-button" type="button" aria-label="Switch to dark theme">
@@ -32,18 +33,7 @@
   </header>
 
   <main id="top">
-    <header class="hero">
-      <div class="hero-copy">
-        <h1>Make every frame<br><em>feel magical~!!</em></h1>
-        <p>Fine-tune real-time upscaling for crisp lines, softer gradients and smoother motion across the web.</p>
-        <div class="hero-chips"><span>WebGPU</span><span>Native fallback</span><span>No telemetry</span></div>
-      </div>
-      <div class="hero-art" aria-hidden="true">
-        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
-        <span class="art-star one">&#10022;</span><span class="art-star two">&#10022;</span><span class="art-star three">&#10023;</span>
-        <img class="hero-logo" src="icons/icon400.png" alt="" width="250" height="250">
-      </div>
-    </header>
+    <h1 class="sr-only">AniWebScale Settings</h1>
 
     <div class="section-intro" id="enhancement">
       <span class="heading-icon lavender" aria-hidden="true">&#10022;</span>
@@ -65,7 +55,7 @@
             </select>
           </label>
           <label><span data-i18n="quality">Quality</span><select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select></label>
-          <label><span data-i18n="backend">Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
+          <label><span data-i18n="backend">Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer (hardware acceleration off)</option></select></label>
         </div>
         <div class="mode-summary">
           <p id="mode-description"></p>
@@ -118,11 +108,23 @@
       <div><h3 data-i18n="verboseLogging">Verbose logging</h3><p class="note" data-i18n="verboseLoggingDescription">Write detailed diagnostic messages to the browser console. Useful when troubleshooting; leave off for normal use.</p></div>
       <label class="check"><input id="verbose-logging" type="checkbox"><span class="check-control"></span><span><strong data-i18n="enableVerboseLogging">Enable verbose logging</strong><small data-i18n="verboseLoggingHint">Logs stash, pipeline and renderer events to the DevTools console.</small></span></label>
     </section>
+    <section class="card diagnostics-card">
+      <div class="diagnostics-head">
+        <h3 data-i18n="systemStatus">System status</h3>
+        <p class="note" data-i18n="systemStatusDescription">Current rendering capabilities of this browser.</p>
+      </div>
+      <div class="status-rows">
+        <div class="status-row"><span data-i18n="webgpuStatusLabel">WebGPU</span><span id="webgpu-status" class="status-badge checking">Checking...</span></div>
+        <div class="status-row"><span data-i18n="nativeHostStatusLabel">Native renderer</span><span id="native-host-status" class="status-badge checking">Checking...</span></div>
+      </div>
+      <button id="reset-settings" class="outline" type="button" data-i18n="resetToDefaults">Reset to defaults</button>
+    </section>
 
     <div class="actions">
-      <button id="save" class="primary" type="button"><span data-i18n="saveSettings">Save settings</span> <span aria-hidden="true">&#10022;</span></button>
+      <span class="auto-save-hint" data-i18n="autoSaveHint">Changes are saved automatically.</span>
       <div id="status" role="status" aria-live="polite"></div>
     </div>
+    <div id="undo-toast" class="undo-toast" role="status" aria-live="polite" hidden></div>
     <footer>AniWebScale <span id="version"></span><i></i>MIT-licensed shaders<i></i>No telemetry</footer>
   </main>
 </body>

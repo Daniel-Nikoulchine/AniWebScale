@@ -1,4 +1,3 @@
-import { Conv2d } from 'anime4k-webgpu/core';
 import type { ExternalGlslModelDefinition } from '../shared/generated-external-glsl-models';
 import type { Anime4KPipeline, PipelineConstructor } from './pipeline-types';
 
@@ -21,6 +20,78 @@ fn computeMain(@builtin(global_invocation_id) pixel: vec3u) {
   textureStore(luma_texture, pixel.xy, vec4f(luma, 0.0, 0.0, 1.0));
 }
 `;
+
+/**
+ * A single compute-pass convolution with a configurable workgroup size.
+ * The external GLSL models generate shared-memory-tiled WGSL whose
+ * workgroup size is pinned per pass (see generate-external-glsl-models.py);
+ * dispatching with the pinned size keeps the tiled halo blocks aligned to
+ * workgroups. The vendor Conv2d is not used here because it hard-codes
+ * 8x8 dispatch.
+ */
+class GlslConvPipeline implements Anime4KPipeline {
+  private readonly outputTexture: GPUTexture;
+  private readonly pipeline: GPUComputePipeline;
+  private readonly bindGroup: GPUBindGroup;
+  private readonly width: number;
+  private readonly height: number;
+  private readonly workgroupSize: number;
+
+  constructor(
+    device: GPUDevice,
+    inputTextures: GPUTexture[],
+    shaderWGSL: string,
+    name: string,
+    options: { workgroupSize?: number } = {},
+  ) {
+    const firstInput = inputTextures[0];
+    if (!firstInput) throw new Error(`${name}: 0 input textures for convolution.`);
+    this.workgroupSize = options.workgroupSize ?? 8;
+    this.width = firstInput.width;
+    this.height = firstInput.height;
+    this.outputTexture = device.createTexture({
+      label: `${name} output`,
+      size: [this.width, this.height, 1],
+      format: 'rgba16float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
+    });
+    this.pipeline = device.createComputePipeline({
+      label: `${name} conv`,
+      layout: 'auto',
+      compute: {
+        module: device.createShaderModule({ label: `${name} module`, code: shaderWGSL }),
+        entryPoint: 'computeMain',
+      },
+    });
+    this.bindGroup = device.createBindGroup({
+      label: `${name} inputs`,
+      layout: this.pipeline.getBindGroupLayout(0),
+      entries: [
+        ...inputTextures.map((texture, index) => ({ binding: index, resource: texture.createView() })),
+        { binding: inputTextures.length, resource: this.outputTexture.createView() },
+      ],
+    });
+  }
+
+  public updateParam(): void {
+    throw new Error('External GLSL models have no runtime parameters.');
+  }
+
+  public pass(encoder: GPUCommandEncoder): void {
+    const pass = encoder.beginComputePass({ label: 'External GLSL convolution' });
+    pass.setPipeline(this.pipeline);
+    pass.setBindGroup(0, this.bindGroup);
+    pass.dispatchWorkgroups(
+      Math.ceil(this.width / this.workgroupSize),
+      Math.ceil(this.height / this.workgroupSize),
+    );
+    pass.end();
+  }
+
+  public getOutputTexture(): GPUTexture {
+    return this.outputTexture;
+  }
+}
 
 const pixelShuffleMergeWGSL = `
 @group(0) @binding(0) var source_texture: texture_2d<f32>;
@@ -120,11 +191,8 @@ class ExternalGlslPipeline implements Anime4KPipeline {
     model: ExternalGlslModelDefinition,
   ) {
     const resources = new Map<string, GPUTexture>();
-    const luma = new Conv2d({
-      device,
-      inputTextures: [inputTexture],
-      shaderWGSL: lumaWGSL,
-      name: `${model.id}-luma`,
+    const luma = new GlslConvPipeline(device, [inputTexture], lumaWGSL, `${model.id}-luma`, {
+      workgroupSize: 8,
     });
     this.pipelines.push(luma);
     resources.set('LUMA', luma.getOutputTexture());
@@ -135,11 +203,8 @@ class ExternalGlslPipeline implements Anime4KPipeline {
         if (!texture) throw new Error(`${model.displayName}: missing GLSL resource ${binding}.`);
         return texture;
       });
-      const pipeline = new Conv2d({
-        device,
-        inputTextures: inputs,
-        shaderWGSL: definition.wgsl,
-        name: `${model.id}-${index}`,
+      const pipeline = new GlslConvPipeline(device, inputs, definition.wgsl, `${model.id}-${index}`, {
+        workgroupSize: definition.workgroupSize,
       });
       this.pipelines.push(pipeline);
       resources.set(definition.output, pipeline.getOutputTexture());

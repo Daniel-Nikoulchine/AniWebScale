@@ -15,15 +15,15 @@
  *   interpolationFactor.x == 0.0  -> present the previous frame
  *   interpolationFactor.x == 0.5  -> present an intermediate interpolated frame
  */
-export const PRESENT_CURRENT_FRAME = new Float32Array([1, 0, 0, 0]);
-export const PRESENT_PREVIOUS_FRAME = new Float32Array([0, 0, 0, 0]);
-export const PRESENT_INTERMEDIATE_FRAME = new Float32Array([0.5, 0, 0, 0]);
+export const PRESENT_CURRENT_FRAME: Float32Array<ArrayBuffer> = new Float32Array([1, 0, 0, 0]);
+export const PRESENT_PREVIOUS_FRAME: Float32Array<ArrayBuffer> = new Float32Array([0, 0, 0, 0]);
+export const PRESENT_INTERMEDIATE_FRAME: Float32Array<ArrayBuffer> = new Float32Array([0.5, 0, 0, 0]);
 
 /** Human-readable name of a presentation mode for diagnostics. */
 export type PresentationMode = 'current' | 'previous' | 'intermediate';
 
 /** Resolve the presentation uniform for a mode (for tests/diagnostics). */
-export function presentationUniformFor(mode: PresentationMode): Float32Array {
+export function presentationUniformFor(mode: PresentationMode): Float32Array<ArrayBuffer> {
   switch (mode) {
     case 'current':
       return PRESENT_CURRENT_FRAME;

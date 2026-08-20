@@ -156,7 +156,7 @@ export class FrameGeneration {
     return true;
   }
 
-  private renderHistoryFrame(factor: Float32Array, label: string): void {
+  private renderHistoryFrame(factor: Float32Array<ArrayBuffer>, label: string): void {
     if (this.host.isDestroyed() || !this.host.frameGenerationEnabled
         || !this.historyReady || this.host.isRebuilding()) return;
     this.host.device.queue.writeBuffer(this.host.presentationUniform, 0, factor);

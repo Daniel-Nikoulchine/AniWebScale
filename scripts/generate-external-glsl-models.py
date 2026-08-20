@@ -51,7 +51,29 @@ def load_native_generator():
     return module
 
 
-def translate_hook(body: str, bindings: tuple[str, ...], description: str) -> str:
+def choose_workgroup_size(input_count: int) -> int:
+    """Pick the largest workgroup whose 3x3 tiling halo fits the WebGPU
+    maxComputeWorkgroupStorageSize budget (16384 bytes): (WG+2)^2 tiles of
+    16 bytes (vec4f f32) per input texture."""
+    if input_count <= 3:
+        return 16  # 18x18 = 324 entries -> 5184 B/input
+    if input_count <= 5:
+        return 12  # 14x14 = 196 entries -> 3136 B/input
+    if input_count <= 10:
+        return 8  # 10x10 = 100 entries -> 1600 B/input
+    raise RuntimeError(f"no workgroup size fits {input_count} tiled inputs")
+
+
+def translate_hook(body: str, bindings: tuple[str, ...], description: str) -> tuple[str, int]:
+    """Translate one GLSL pass into a tiled WGSL compute pass.
+
+    Returns (wgsl, workgroup_size). Every 3x3 convolution is turned into a
+    shared-memory tiled pass: each workgroup stages its WG+2 halo block once
+    into `var<workgroup>` tiles, so the 9 taps per output pixel read from
+    shared memory instead of issuing 9 (x N inputs) global texture loads.
+    The output matches the non-tiled kernel bit-for-bit: same clamped
+    textureLoad values, same accumulation order in model().
+    """
     translated = body
     translated, hook_count = re.subn(
         r"\bvec4\s+hook\s*\(\s*\)",
@@ -91,38 +113,81 @@ def translate_hook(body: str, bindings: tuple[str, ...], description: str) -> st
     for glsl_type, wgsl_type in type_names.items():
         translated = re.sub(rf"\b{glsl_type}\b", wgsl_type, translated)
 
-    declarations = []
-    helpers = []
-    for slot in range(len(bindings)):
-        declarations.append(f"@group(0) @binding({slot}) var input_{slot}: texture_2d<f32>;")
-        helpers.append(
-            f"""fn load_{slot}(pixel: vec2i, offset: vec2f) -> vec4f {{
-  let maximum = vec2i(textureDimensions(input_{slot})) - vec2i(1);
-  return textureLoad(input_{slot}, clamp(pixel + vec2i(offset), vec2i(0), maximum), 0);
+    input_count = len(bindings)
+    workgroup_size = choose_workgroup_size(input_count)
+    tile = workgroup_size + 2
+    tile_count = tile * tile
+    threads = workgroup_size * workgroup_size
+
+    declarations = [f"@group(0) @binding({slot}) var input_{slot}: texture_2d<f32>;" for slot in range(input_count)]
+    shared_tiles = [f"var<workgroup> tile_{slot}: array<vec4f, {tile_count}>;" for slot in range(input_count)]
+    tile_loader = f"""fn loadTile(tex: texture_2d<f32>, origin: vec2i, maximum: vec2i, linear: i32) -> vec4f {{
+  let coord = vec2i(linear % {tile}, linear / {tile});
+  return textureLoad(tex, clamp(origin + coord, vec2i(0), maximum), 0);
 }}"""
+    tap_readers = [
+        f"""fn load_{slot}(pixel: vec2i, offset: vec2f) -> vec4f {{
+  let local = pixel - origin + vec2i(offset);
+  return tile_{slot}[local.y * {tile} + local.x];
+}}"""
+        for slot in range(input_count)
+    ]
+
+    compute_lines = [
+        "var<private> origin: vec2i;",
+        "@compute",
+        f"@workgroup_size({workgroup_size}, {workgroup_size})",
+        "fn computeMain(",
+        "  @builtin(global_invocation_id) invocation: vec3u,",
+        "  @builtin(local_invocation_id) local: vec3u,",
+        ") {",
+        "  let dimensions = textureDimensions(output_texture);",
+        # The halo origin is one texel before the workgroup block; the
+        # clamp in loadTile makes the negative edge a clamped border read,
+        # identical to the per-tap clamped textureLoad it replaces.
+        f"  origin = vec2i(invocation.xy / {workgroup_size}u) * {workgroup_size} - 1;",
+        f"  let tid = i32(local.x) + i32(local.y) * {workgroup_size};",
+    ]
+    for slot in range(input_count):
+        # Each textureDimensions is hoisted once per workgroup instead of
+        # once per tap per pixel (9 x input-count reads per pixel before).
+        compute_lines.append(f"  let maximum_{slot} = vec2i(textureDimensions(input_{slot})) - vec2i(1);")
+        compute_lines.append(
+            f"  if (tid < {tile_count}) {{ tile_{slot}[tid] = loadTile(input_{slot}, origin, maximum_{slot}, tid); }}"
         )
-    output_binding = len(bindings)
-    return "\n".join(
+        compute_lines.append(
+            f"  if (tid + {threads} < {tile_count}) {{ tile_{slot}[tid + {threads}] = loadTile(input_{slot}, origin, maximum_{slot}, tid + {threads}); }}"
+        )
+    compute_lines.extend([
+        "  workgroupBarrier();",
+        # The bounds check runs after the barrier so every invocation of a
+        # partially out-of-bounds workgroup still reaches the barrier.
+        "  if (invocation.x >= dimensions.x || invocation.y >= dimensions.y) { return; }",
+        "  let pixel = vec2i(invocation.xy);",
+        "  textureStore(output_texture, invocation.xy, model(pixel));",
+        "}",
+    ])
+
+    output_binding = input_count
+    wgsl = "\n".join(
         [
             f"// {description}",
             *declarations,
             f"@group(0) @binding({output_binding}) var output_texture: texture_storage_2d<rgba16float, write>;",
             "",
-            *helpers,
+            *shared_tiles,
+            "",
+            tile_loader,
+            "",
+            *tap_readers,
             "",
             translated.strip(),
             "",
-            "@compute",
-            "@workgroup_size(8, 8)",
-            "fn computeMain(@builtin(global_invocation_id) invocation: vec3u) {",
-            "  let dimensions = textureDimensions(output_texture);",
-            "  if (invocation.x >= dimensions.x || invocation.y >= dimensions.y) { return; }",
-            "  let pixel = vec2i(invocation.xy);",
-            "  textureStore(output_texture, invocation.xy, model(pixel));",
-            "}",
+            *compute_lines,
             "",
         ]
     )
+    return wgsl, workgroup_size
 
 
 def build_models() -> dict[str, object]:
@@ -146,12 +211,16 @@ def build_models() -> dict[str, object]:
         for index, shader_pass in enumerate(passes[:-1]):
             if shader_pass.save is None:
                 raise RuntimeError(f"{relative_source}: pass {index} does not save a logical resource")
+            pass_wgsl, pass_workgroup_size = translate_hook(
+                shader_pass.body, shader_pass.bindings, shader_pass.description
+            )
             generated_passes.append(
                 {
                     "description": shader_pass.description,
                     "bindings": list(shader_pass.bindings),
                     "output": shader_pass.save,
-                    "wgsl": translate_hook(shader_pass.body, shader_pass.bindings, shader_pass.description),
+                    "wgsl": pass_wgsl,
+                    "workgroupSize": pass_workgroup_size,
                 }
             )
 
@@ -181,6 +250,7 @@ interface ExternalGlslPassDefinition {{
   readonly bindings: readonly string[];
   readonly output: string;
   readonly wgsl: string;
+  readonly workgroupSize: number;
 }}
 
 export interface ExternalGlslModelDefinition {{

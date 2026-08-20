@@ -16,7 +16,7 @@ let sourceTexture: GPUTexture | null = null;
 let copyPipeline: GPUComputePipeline | null = null;
 let adapterDescription = 'unknown WebGPU adapter';
 
-function decodeFixture(base64: string): Uint8Array {
+function decodeFixture(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64);
   if (binary.length !== SOURCE_WIDTH * SOURCE_HEIGHT * 4) {
     throw new Error('Fixture must be exactly one 96x54 RGBA8 frame');

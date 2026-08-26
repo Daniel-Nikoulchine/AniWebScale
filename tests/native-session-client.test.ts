@@ -58,6 +58,39 @@ describe('native session client', () => {
     });
   });
 
+  it('does not let an older same-video request clear a newer pending request', async () => {
+    let resolveSecond!: (value: unknown) => void;
+    const responses = [
+      new Promise<unknown>(resolve => { setTimeout(() => resolve({ ok: false }), 10); }),
+      new Promise<unknown>(resolve => { resolveSecond = resolve; }),
+    ];
+    const client = createNativeSessionClient(async message => {
+      const record = message as Record<string, unknown>;
+      if (record.type === 'NATIVE_FALLBACK_REQUEST') return responses.shift();
+      return { ok: true };
+    });
+
+    const first = client.requestFallback({
+      videoId: 'video-1',
+      reason: 'eme',
+      configuration: { mode: 'A', quality: 'M', frameGenerationEnabled: false },
+      rect: { x: 0, y: 0, width: 320, height: 180, devicePixelRatio: 1 },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const second = client.requestFallback({
+      videoId: 'video-1',
+      reason: 'eme',
+      configuration: { mode: 'A', quality: 'M', frameGenerationEnabled: false },
+      rect: { x: 0, y: 0, width: 320, height: 180, devicePixelRatio: 1 },
+    });
+    await first;
+
+    expect(client.hasPendingFallback('video-1')).toBe(true);
+    await client.stop({ videoId: 'video-1' });
+    resolveSecond({ ok: false });
+    await second;
+  });
+
   it('marks a refused fallback request without a session as not ok', async () => {
     const { client, respond } = fakeTransport();
     respond.mockResolvedValue(undefined);

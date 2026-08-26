@@ -107,6 +107,8 @@ describe('native messaging protocol', () => {
     expect(isNativePointerEventPayload({ event: 'move', x: -0.1, y: 0.5 })).toBe(false);
     expect(isNativePointerEventPayload({ event: 'hover', x: 0.5, y: 0.5 })).toBe(false);
     expect(isNativePointerEventPayload({ event: 'move', x: 'not-a-number', y: 0.5 })).toBe(false);
+    expect(isNativePointerEventPayload({ event: 'move', x: null, y: 0.5 })).toBe(false);
+    expect(isNativePointerEventPayload({ event: 'move', x: '', y: 0.5 })).toBe(false);
 
     expect(clampNativePointerCoords(1.5, -0.2)).toEqual({ x: 1, y: 0 });
     expect(clampNativePointerCoords(0.3, 0.7)).toEqual({ x: 0.3, y: 0.7 });

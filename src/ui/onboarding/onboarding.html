@@ -7,63 +7,27 @@
 </head>
 <body>
   <main>
-    <aside class="welcome-art" aria-hidden="true">
-      <div class="art-label">hello, video lover!</div>
-      <div class="magic-window">
-        <div class="window-sky"><span class="moon"></span><i class="star star-one">&#10022;</i><i class="star star-two">&#10022;</i><i class="star star-three">&#10023;</i></div>
-        <div class="window-screen"><span></span></div>
-        <div class="window-base"></div>
-      </div>
-      <div class="art-cloud cloud-one"></div><div class="art-cloud cloud-two"></div>
-      <p>Sharper lines.<br>Softer colors.<br><strong>More magic~!!</strong></p>
-      <span class="art-doodle">&#12336;</span>
-    </aside>
-
     <div class="setup-panel">
       <header>
         <div class="brand"><img class="mini-mark" src="icons/icon32.png" alt="" width="26" height="26">AniWebScale</div>
-        <p class="step" data-i18n="welcomeStep">WELCOME / 01</p>
-        <h1 data-i18n="onboardingTitle">Let's make your videos sparkle!</h1>
-        <p class="lead">Pick a comfortable starting point. You can change every option later.</p>
+        <h1 data-i18n="onboardingTitle">Sharper anime, in real time.</h1>
       </header>
 
       <section>
-        <div class="section-heading"><span aria-hidden="true">&#10022;</span><div><h2 data-i18n="chooseDefaults">Choose your defaults</h2><p>Your everyday enhancement recipe.</p></div></div>
-        <div class="grid">
-          <label class="mode-select-field"><span data-i18n="enhancementMode">Enhancement mode</span>
-            <select id="mode">
-              <option value="OFF">Off</option>
-              <optgroup label="Anime4K presets">
-                <option value="A">A</option><option value="B">B</option><option value="C">C</option>
-                <option value="AA">A+A</option><option value="BB">B+B</option><option value="CA">C+A</option>
-              </optgroup>
-              <optgroup label="AI upscaling">
-                <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option>
-              </optgroup>
-            </select>
-          </label>
-          <div class="mode-summary">
-            <p id="mode-description"></p>
-            <span id="mode-profile" class="mode-profile"></span>
-          </div>
-          <label><span data-i18n="quality">Quality</span><select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select></label>
-          <label><span data-i18n="backend">Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer</option></select></label>
-          <label class="check"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong data-i18n="frameGeneration">Frame generation</strong><small id="frame-generation-description">Motion-aware 2x, even while enhancement is off.</small></span></label>
-        </div>
+        <div class="section-heading"><h2 data-i18n="chooseDefaults">Choose your defaults</h2></div>
+        <div id="enhancement-controls" class="grid"></div>
+        <div id="enhancement-toggles"></div>
       </section>
 
-      <div class="tips">
-        <div class="tip"><span aria-hidden="true">&#10003;</span><p><strong>Fullscreen friendly</strong>Starts and stops with your video player.</p></div>
-        <div class="tip"><span aria-hidden="true">&#9825;</span><p><strong>Privacy first</strong>No telemetry, DRM bypass or silent site access. Allow each video site from the popup when you need it.</p></div>
-      </div>
-      <details>
-        <summary>Important native renderer notes</summary>
-        <ul>
-          <li>Protected video may require one-time site permission for the native renderer.</li>
-          <li>If a streaming video stays black, turn off hardware acceleration in your browser settings, then restart the browser.</li>
-          <li>Some protected video can still block capture.</li>
-        </ul>
-      </details>
+      <section class="feature-section">
+        <div class="section-heading"><h2 data-i18n="language">Language</h2></div>
+        <select id="language"><option value="auto" data-i18n="languageAuto">Auto (browser language)</option><option value="en">English</option><option value="de">Deutsch</option></select>
+      </section>
+
+      <section class="theme-section">
+        <div class="section-heading"><h2 data-i18n="colorTheme">Color theme</h2></div>
+        <label class="theme-field"><span data-i18n="theme">Theme</span><select id="theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      </section>
 
       <div class="finish-row">
         <button id="finish" type="button"><span data-i18n="finishSetup">Finish setup</span> <span aria-hidden="true">&#8594;</span></button>

@@ -273,7 +273,7 @@ export function parseRuntimeRequest(value: unknown): RuntimeRequestParseResult {
         : invalid(type, 'Invalid native pointer event.');
     case 'NATIVE_RESET_CONSENT': {
       const origin = asString(value.origin);
-      if (origin !== undefined && !isHttpOrigin(origin)) return { kind: 'message', message: { type } };
+      if (origin !== undefined && !isHttpOrigin(origin)) return invalid(type, 'Invalid consent origin.');
       return { kind: 'message', message: { type, origin } };
     }
     case 'SETTINGS_UPDATED':
@@ -508,72 +508,21 @@ export function parseFrameMessage(value: unknown): FrameMessageParseResult {
 
 // ── Senders: the wire form of every message exists exactly once ──────────
 
-export function enhancementClaimMessage(videoId: string): EnhancementClaimRequest {
-  return { type: 'ENHANCEMENT_CLAIM', videoId };
-}
-
-export function enhancementReleaseMessage(videoId?: string): EnhancementReleaseRequest {
-  return { type: 'ENHANCEMENT_RELEASE', ...(videoId !== undefined ? { videoId } : {}) };
-}
-
-export function nativeStopMessage(ids: { sessionId?: string; videoId?: string } = {}): NativeStopRequest {
-  return { type: 'NATIVE_STOP', ...ids };
-}
-
-export function nativeUpdateConfigurationMessage(payload: {
-  sessionId?: string;
-  videoId?: string;
-  configuration: NativeConfiguration;
-}): NativeUpdateConfigurationRequest {
-  return { type: 'NATIVE_UPDATE_CONFIGURATION', ...payload };
-}
-
-export function nativePlaybackStateMessage(state: {
-  sessionId: string;
-  videoId: string;
-  playbackActive: boolean;
-  mediaTime: number;
-}): NativePlaybackStateRequest {
-  return { type: 'NATIVE_PLAYBACK_STATE', ...state };
-}
-
-export function nativeFallbackRequestMessage(
-  request: Omit<NativeFallbackRequest, 'type'>,
-): NativeFallbackRequest {
-  return { type: 'NATIVE_FALLBACK_REQUEST', ...request };
-}
-
-export function settingsUpdatedMessage(): SettingsUpdatedRequest {
-  return { type: 'SETTINGS_UPDATED' };
-}
-
-export function siteAccessSyncMessage(): SiteAccessSyncRequest {
-  return { type: 'SITE_ACCESS_SYNC' };
-}
-
-export function siteAccessIframeRequestMessage(origin: string): SiteAccessIframeRequest {
-  return { type: 'SITE_ACCESS_IFRAME_REQUEST', origin };
-}
-
-export function siteAccessResultMessage(payload: {
-  origin: string;
-  outcome: 'granted' | 'denied' | 'failed';
-  applied?: boolean;
-}): SiteAccessResultMessage {
-  return { type: 'SITE_ACCESS_RESULT', ...payload };
-}
-
-export function nativeResetConsentMessage(origin?: string): NativeResetConsentRequest {
-  return { type: 'NATIVE_RESET_CONSENT', ...(origin !== undefined ? { origin } : {}) };
-}
-
-export function urlUpdatedMessage(url?: string): UrlUpdatedMessage {
-  return { type: 'URL_UPDATED', ...(url !== undefined ? { url } : {}) };
-}
-
-export function nativeConsentRequestMessage(origin?: string): NativeConsentRequestMessage {
-  return { type: 'NATIVE_CONSENT_REQUEST', ...(origin !== undefined ? { origin } : {}) };
-}
+export {
+  enhancementClaimMessage,
+  enhancementReleaseMessage,
+  nativeStopMessage,
+  nativeUpdateConfigurationMessage,
+  nativePlaybackStateMessage,
+  nativeFallbackRequestMessage,
+  settingsUpdatedMessage,
+  siteAccessSyncMessage,
+  siteAccessIframeRequestMessage,
+  siteAccessResultMessage,
+  nativeResetConsentMessage,
+  urlUpdatedMessage,
+  nativeConsentRequestMessage,
+} from './runtime-message-builders';
 
 // ── Response forms ───────────────────────────────────────────────────────
 

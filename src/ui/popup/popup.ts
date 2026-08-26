@@ -1,10 +1,6 @@
-import './popup.css';
 import '../common-vars.css';
-import type { EnhancementMode, QualityTier, RenderBackend } from '../../types';
-import {
-  isProcessingEnabled,
-  modeUsesQuality,
-} from '../../shared/presets';
+import '../form-controls.css';
+import './popup.css';
 import { applySettings } from '../../utils/apply-settings';
 import { getSettings } from '../../utils/settings';
 import {
@@ -13,21 +9,39 @@ import {
   grantSiteAccess,
   revokeSiteAccess,
 } from '../../site-access';
-import { populateModeSelect, renderModeDescription } from '../mode-select';
+import { renderEnhancementSelects, renderToggle, renderEnhancementToggles } from '../enhancement-controls';
+import { refreshModeUi } from '../mode-ui';
 import { themeManager } from '../theme-manager';
-import { localizeDocument, message } from '../i18n';
+import { localizeDocument, message, initI18n } from '../i18n';
+import { createSettingsController } from '../settings-controller';
 
 document.addEventListener('DOMContentLoaded', async () => {
+  await initI18n();
   localizeDocument();
   themeManager.getTheme();
 
-  const mode = document.getElementById('mode') as HTMLSelectElement;
+  const controls = renderEnhancementSelects(
+    document.getElementById('enhancement-controls') as HTMLDivElement,
+  );
+  const { mode, quality, backend } = controls;
+  const extensionEnabled = renderToggle(
+    document.getElementById('extension-toggle') as HTMLDivElement,
+    {
+      id: 'extension-enabled',
+      titleKey: 'extensionEnabled',
+      titleFallback: 'Extension enabled',
+      descriptionKey: 'processVideos',
+      descriptionFallback: 'Process videos in this browser',
+      compact: true,
+    },
+  );
+  const toggles = renderEnhancementToggles(
+    document.getElementById('enhancement-toggles') as HTMLDivElement,
+    { includeStatistics: true, compact: true },
+  );
+  const statistics = toggles.statistics as HTMLInputElement;
+  const frameGeneration = toggles.frameGeneration;
   const modeDescription = document.getElementById('mode-description') as HTMLParagraphElement;
-  const extensionEnabled = document.getElementById('extension-enabled') as HTMLInputElement;
-  const quality = document.getElementById('quality') as HTMLSelectElement;
-  const backend = document.getElementById('backend') as HTMLSelectElement;
-  const statistics = document.getElementById('statistics') as HTMLInputElement;
-  const frameGeneration = document.getElementById('frame-generation') as HTMLInputElement;
   const openOptions = document.getElementById('open-options') as HTMLButtonElement;
   const status = document.getElementById('status') as HTMLDivElement;
   const version = document.getElementById('version') as HTMLSpanElement;
@@ -130,7 +144,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   version.textContent = chrome.runtime.getManifest().version;
   const settings = await getSettings();
   extensionEnabled.checked = settings.extensionEnabled;
-  populateModeSelect(mode, settings.mode);
+  mode.value = settings.mode;
   quality.value = settings.quality;
   backend.value = settings.backend;
   statistics.checked = settings.statsEnabled;
@@ -158,65 +172,39 @@ document.addEventListener('DOMContentLoaded', async () => {
       : message('extensionDisabledStatus', 'Extension disabled.');
   });
 
-  const refreshModeUi = () => {
-    const selectedMode = mode.value as EnhancementMode;
-    const processingDisabled = !isProcessingEnabled(selectedMode, frameGeneration.checked);
-    renderModeDescription(selectedMode, modeDescription);
-    quality.disabled = !modeUsesQuality(selectedMode);
-    backend.disabled = processingDisabled;
-    // The hardware-acceleration warning only applies when the native Windows
-    // backend is actually in use.
-    nativeWarning.style.display = !processingDisabled && backend.value === 'native' ? '' : 'none';
-  };
+  const updateModeUi = () => refreshModeUi({
+    mode,
+    quality,
+    backend,
+    frameGeneration,
+    description: modeDescription,
+    nativeWarning,
+  });
 
-  mode.addEventListener('change', refreshModeUi);
-  frameGeneration.addEventListener('change', refreshModeUi);
-  backend.addEventListener('change', refreshModeUi);
-  refreshModeUi();
+  mode.addEventListener('change', updateModeUi);
+  frameGeneration.addEventListener('change', updateModeUi);
+  backend.addEventListener('change', updateModeUi);
+  updateModeUi();
 
   // ── Autosave ─────────────────────────────────────────────────────────────
 
-  let saveTimer: ReturnType<typeof setTimeout> | undefined;
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
-
-  function showStatus(text: string): void {
+  const showStatus = (text: string): void => {
     status.textContent = text;
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => { status.textContent = ''; }, 3000);
-  }
-
-  function collectSettingsUpdate() {
-    return {
-      extensionEnabled: extensionEnabled.checked,
-      mode: mode.value as EnhancementMode,
-      quality: quality.value as QualityTier,
-      backend: backend.value as RenderBackend,
-      statsEnabled: statistics.checked,
-      frameGenerationEnabled: frameGeneration.checked,
-    };
-  }
-
-  async function saveNow(): Promise<void> {
-    clearTimeout(saveTimer);
-    const result = await applySettings(collectSettingsUpdate()).catch(() => 'failed' as const);
-    if (result === 'failed') {
-      console.error('[AniWebScale] Could not save popup settings.');
-      showStatus(message('settingsSaveFailed', 'Could not save settings.'));
-    } else if (result === 'saved-not-applied') {
-      showStatus(message('settingsSavedNotApplied', 'Settings saved, but could not be applied.'));
-    } else if (result === 'applied') {
-      showStatus(message('settingsSavedApplied', 'Settings saved and applied.'));
-    }
-  }
-
-  function scheduleSave(): void {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => void saveNow(), 300);
-  }
-
-  for (const control of [mode, quality, backend, statistics, frameGeneration]) {
-    control.addEventListener('change', scheduleSave);
-  }
+  };
+  createSettingsController({
+    controls: { mode, quality, backend, statistics, frameGeneration },
+    showStatus,
+    messages: {
+      saving: message('saving', 'Saving...'),
+      saved: message('settingsSavedApplied', 'Settings saved and applied.'),
+      applied: message('settingsSavedApplied', 'Settings saved and applied.'),
+      savedNotApplied: message('settingsSavedNotApplied', 'Settings saved, but could not be applied.'),
+      failed: message('settingsSaveFailed', 'Could not save settings.'),
+    },
+  });
 
   openOptions.addEventListener('click', () => chrome.runtime.openOptionsPage());
 });

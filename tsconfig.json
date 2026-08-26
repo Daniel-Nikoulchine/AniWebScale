@@ -7,7 +7,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "lib": ["es2022", "dom"],
+    "resolveJsonModule": true,
+    "lib": ["es2022", "dom"]
   },
   "include": ["**/*.ts"],
   "exclude": ["node_modules"]

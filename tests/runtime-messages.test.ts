@@ -70,9 +70,9 @@ describe('parseRuntimeRequest', () => {
       .toEqual({ kind: 'invalid', type: 'NATIVE_MEDIA_COMMAND', message: 'Invalid media command.' });
   });
 
-  it('drops a non-HTTP consent origin instead of forwarding it', () => {
+  it('rejects a non-HTTP consent origin instead of treating it as reset-all', () => {
     expect(parseRuntimeRequest({ type: 'NATIVE_RESET_CONSENT', origin: 'javascript:alert(1)' }))
-      .toEqual({ kind: 'message', message: { type: 'NATIVE_RESET_CONSENT', origin: undefined } });
+      .toEqual({ kind: 'invalid', type: 'NATIVE_RESET_CONSENT', message: 'Invalid consent origin.' });
   });
 
   it('reports unknown types as unknown', () => {

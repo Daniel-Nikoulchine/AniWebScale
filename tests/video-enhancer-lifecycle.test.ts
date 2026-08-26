@@ -6,6 +6,7 @@ import { VideoEnhancer } from '../src/core/video-enhancer';
 import { createNativeSessionClient } from '../src/core/native-session-client';
 import { BackendState } from '../src/core/backend-state';
 import { OverloadTracker } from '../src/core/render-stats';
+import { EnhancerLifecycle } from '../src/core/enhancer-lifecycle';
 import { DEFAULT_SETTINGS } from '../src/utils/settings';
 
 function deferred<T>() {
@@ -77,13 +78,12 @@ function createBareEnhancer() {
     oversharpenWarning: false,
     nativeOverloadTracker: new OverloadTracker(),
     lastNativeDroppedFrames: 0,
-    lastRenderStats: null,
     destroyed: false,
     switchingFromNative: false,
     targetResizeObserver,
     unsubscribeFullscreenContext: () => undefined,
     fullscreenRevision: 0,
-    transitionChain: Promise.resolve(),
+    lifecycle: new EnhancerLifecycle(),
     automaticSession: false,
     nativeRetryBlocked: false,
   });

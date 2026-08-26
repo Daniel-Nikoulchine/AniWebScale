@@ -54,7 +54,7 @@ count, and DXGI local-memory usage to JSON:
 ```powershell
 .\native\scripts\run-benchmark.ps1 -WhatIf
 .\native\scripts\run-benchmark.ps1 `
-  -BinaryDirectory .\native\build-exact\bin `
+  -BinaryDirectory .\native\build\bin\Release `
   -WarmupFrames 3 -SampleFrames 30 -MaximumSeconds 600 `
   -OutputPath .\artifacts\native-rx6750xt-benchmark.json
 ```

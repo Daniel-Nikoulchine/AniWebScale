@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { electFullscreenCandidate } from '../src/core/fullscreen-context';
 import type { FullscreenCandidate } from '../src/core/fullscreen-context';
-import { resetFullscreenApiTracking } from '../src/shared/fullscreen-video';
+import {
+  isVideoInFullscreenContext,
+  resetFullscreenApiTracking,
+} from '../src/shared/fullscreen-video';
 
 interface Rect {
   left: number;
@@ -73,6 +76,12 @@ afterEach(() => {
 });
 
 describe('electFullscreenCandidate', () => {
+  it('treats a cross-origin video filling its frame as a fullscreen context', () => {
+    installCrossOriginHosterFrame();
+    const video = videoCandidate('video-1', { left: 0, top: 0, width: 870, height: 490 }).video;
+    expect(isVideoInFullscreenContext(video)).toBe(true);
+  });
+
   it('elects an embedded hoster video that fills its own frame viewport', () => {
     installCrossOriginHosterFrame();
     const embeddedPlayer = videoCandidate('video-1', { left: 0, top: 0, width: 870, height: 490 });

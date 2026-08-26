@@ -230,6 +230,11 @@ export class NativeInputBridge {
         break;
       case 'toggleFullscreen':
         if (this.isolation.active) break;
+        // Entering fullscreen requires a user gesture (transient activation),
+        // and native media commands arrive through runtime messages, which
+        // carry none — the click happens in the host's own overlay window.
+        // requestFullscreen() would throw NotAllowedError here on every
+        // engine, so only the exit direction is possible via this path.
         if (document.fullscreenElement) await document.exitFullscreen();
         break;
     }

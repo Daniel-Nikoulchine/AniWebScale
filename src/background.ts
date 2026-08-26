@@ -115,30 +115,40 @@ async function checkOnboarding(): Promise<void> {
 }
 
 const handleMessage = createBackgroundRouter({
-  claim: (videoId, sender) => nativeSession.claimEnhancement(videoId, sender),
-  releaseEnhancement: (videoId, sender) => nativeSession.releaseEnhancement(videoId, sender),
-  startNativeFallback: (request, sender) => nativeSession.startNativeFallback(request, sender),
-  activeSession: () => nativeSession.activeSession,
-  updateConfiguration: configuration => nativeSession.updateNativeConfiguration(configuration),
-  stopSession: (reason, notify, restoreTab, sessionId) =>
-    nativeSession.stopNativeSession(reason, notify, restoreTab, sessionId),
-  status: () => nativeSession.status as unknown as Record<string, unknown>,
-  sendPlaybackState: (sessionId, playbackActive, mediaTime) =>
-    nativeSession.sendPlaybackState(sessionId, playbackActive, mediaTime),
-  forwardMediaCommand: (command, value) => nativeSession.forwardMediaCommand(command, value),
-  forwardPointer: request => nativeSession.forwardPointer(request),
-  loadActiveEnhancement: () => nativeSession.store.loadActiveEnhancement(),
-  persistActiveEnhancement: value => nativeSession.store.persistActiveEnhancement(value),
-  serialized,
-  isExtensionEnabled,
-  readNativeConfiguration,
-  updateSiteAccess,
-  requestFrameSiteAccess,
-  resetConsent: resetNativeConsent,
-  openOptionsPage: () => chrome.runtime.openOptionsPage(),
-  openOnboarding: () => {
-    void chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
-    return Promise.resolve();
+  enhancement: {
+    claim: (videoId, sender) => nativeSession.claimEnhancement(videoId, sender),
+    release: (videoId, sender) => nativeSession.releaseEnhancement(videoId, sender),
+    loadActive: () => nativeSession.store.loadActiveEnhancement(),
+    clearActive: () => nativeSession.store.persistActiveEnhancement(null),
+  },
+  native: {
+    startFallback: (request, sender) => nativeSession.startNativeFallback(request, sender),
+    activeSession: () => nativeSession.activeSession,
+    hasActiveSession: () => nativeSession.hasActiveSession(),
+    isControlAuthorized: (message, sender) => nativeSession.isControlAuthorized(message, sender),
+    isPlaybackStateAuthorized: (message, sender) => nativeSession.isPlaybackStateAuthorized(message, sender),
+    isSenderAuthorized: sender => nativeSession.isSenderAuthorized(sender),
+    updateConfiguration: configuration => nativeSession.updateNativeConfiguration(configuration),
+    stopSession: (reason, notify, restoreTab, sessionId) =>
+      nativeSession.stopNativeSession(reason, notify, restoreTab, sessionId),
+    status: () => nativeSession.status as unknown as Record<string, unknown>,
+    sendPlaybackState: (sessionId, playbackActive, mediaTime) =>
+      nativeSession.sendPlaybackState(sessionId, playbackActive, mediaTime),
+    forwardMediaCommand: (command, value) => nativeSession.forwardMediaCommand(command, value),
+    forwardPointer: request => nativeSession.forwardPointer(request),
+    readConfiguration: readNativeConfiguration,
+  },
+  platform: {
+    serialized,
+    isExtensionEnabled,
+    updateSiteAccess,
+    requestFrameSiteAccess,
+    resetConsent: resetNativeConsent,
+    openOptionsPage: () => chrome.runtime.openOptionsPage(),
+    openOnboarding: () => {
+      void chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+      return Promise.resolve();
+    },
   },
 });
 

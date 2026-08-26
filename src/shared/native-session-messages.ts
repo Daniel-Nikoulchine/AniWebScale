@@ -80,6 +80,18 @@ export function isNativeSessionControlAuthorized(
   return true;
 }
 
+/**
+ * Pointer/media commands have no session ID on their public runtime message,
+ * so their sender must be the exact frame that owns the active session.
+ */
+export function isNativeSessionSenderAuthorized(
+  session: NativeSessionIdentity,
+  sender: NativeMessageSenderIdentity,
+): boolean {
+  return sender.tabId === session.tabId
+    && (sender.frameId ?? 0) === session.frameId;
+}
+
 /** Playback heartbeats are periodic and can outlive the content-side timer
  * that created them. Require both the exact session and source video so a
  * delayed heartbeat cannot be relabeled as a replacement session. */

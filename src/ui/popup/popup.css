@@ -40,7 +40,7 @@ body {
 .brand-mark { position: relative; flex: 0 0 36px; width: 36px; height: 36px; }
 .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .brand-copy { min-width: 0; flex: 1; }
-h1 { margin: 0; color: var(--ink); font: 700 20px/1 var(--font-family-display); letter-spacing: .01em; }
+h1 { margin: 0; color: var(--ink); font: 700 20px/1 var(--font-family); letter-spacing: .01em; }
 
 .settings-card,
 .switch-card { border: 1px solid var(--outline-variant); border-radius: 16px; background: var(--surface-container-low); }
@@ -57,27 +57,9 @@ h1 { margin: 0; color: var(--ink); font: 700 20px/1 var(--font-family-display); 
 label { display: block; }
 label > span:first-child { display: block; margin-bottom: 4px; color: var(--ink-soft); font-size: 10px; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
 
-select,
 button { font: inherit; }
-select {
-  width: 100%;
-  min-height: 34px;
-  appearance: none;
-  border: 1px solid var(--outline-variant);
-  border-radius: 11px;
-  background-color: var(--surface-container-lowest);
-  background-image: linear-gradient(45deg, transparent 50%, var(--ink-soft) 50%), linear-gradient(135deg, var(--ink-soft) 50%, transparent 50%);
-  background-position: calc(100% - 14px) 14px, calc(100% - 10px) 14px;
-  background-repeat: no-repeat;
-  background-size: 4px 4px, 4px 4px;
-  color: var(--on-surface);
-  padding: 6px 27px 6px 9px;
-  font-size: 11px;
-}
-select:hover { border-color: color-mix(in srgb, var(--lavender) 75%, var(--outline)); }
-select:focus-visible, button:focus-visible, input:focus-visible + .check-control { outline: 2px solid var(--primary); outline-offset: 2px; }
-.check-row:has(input:focus-visible) { border-radius: 10px; background: color-mix(in srgb, var(--primary) 8%, transparent); }
-select:disabled { opacity: .65; background-color: var(--surface-container); }
+.ui-select { min-height: 34px; padding: 6px 27px 6px 9px; font-size: 11px; }
+.ui-toggle:has(input:focus-visible) { border-radius: 10px; background: color-mix(in srgb, var(--primary) 8%, transparent); }
 .hint { color: var(--on-surface-variant); font-size: 10px; line-height: 1.4; }
 
 .switch-card { margin-top: 6px; overflow: hidden; }
@@ -88,24 +70,19 @@ select:disabled { opacity: .65; background-color: var(--surface-container); }
 .site-access-card strong { color: var(--ink); font-size: 10.5px; }
 .site-access-card small { overflow: hidden; margin-top: 1px; color: var(--ink); font-size: 10px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .site-access-card button { min-height: 27px; padding: 4px 7px; font-size: 10px; }
-.check-row { display: grid; grid-template-columns: auto 1fr; column-gap: 9px; align-items: center; padding: 5px 9px; cursor: pointer; }
-.check-row + .check-row { border-top: 1px dashed var(--outline-variant); }
-.check-row input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.check-control { grid-row: 1 / 3; position: relative; width: 32px; height: 18px; margin: 0 !important; border: 1px solid var(--outline); border-radius: 99px; background: var(--surface-container-highest); transition: .2s ease; }
-.check-control::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface-container-lowest); box-shadow: 0 1px 3px rgba(38, 53, 87, .25); transition: .2s ease; }
-.check-row input:checked + .check-control { border-color: var(--primary); background: var(--lavender); }
-.check-row input:checked + .check-control::after { transform: translateX(14px); background: #fffdf9; }
-.check-row > span:last-child { display: flex; flex-direction: column; min-width: 0; }
-.check-row strong { color: var(--ink); font-size: 11px; line-height: 1.2; }
-.check-row small { margin-top: 2px; color: var(--on-surface-variant); font-size: 10px; }
+.ui-toggle-compact { padding: 5px 9px; }
+.ui-toggle-compact + .ui-toggle-compact { border-top: 1px dashed var(--outline-variant); }
+.ui-toggle-compact .check-control { width: 32px; height: 18px; }
+.ui-toggle-compact .check-control::after { top: 2px; left: 2px; width: 12px; height: 12px; }
+.ui-toggle-compact input:checked + .check-control::after { transform: translateX(14px); }
+.ui-toggle-compact strong { font-size: 11px; line-height: 1.2; }
+.ui-toggle-compact small { font-size: 10px; }
 
 .native-warning { display: flex; gap: 8px; align-items: center; margin: 6px 0 0; padding: 4px 7px; border: 1px solid color-mix(in srgb, var(--pink) 62%, var(--outline-variant)); border-radius: 12px; background: var(--pink-soft); color: var(--on-error-container); }
 .native-warning > span:first-child { display: grid; flex: 0 0 18px; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--pink); color: #643544; font-weight: 900; }
 .actions { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 6px; }
-button { min-height: 34px; border: 1px solid var(--outline-variant); border-radius: 12px; padding: 6px 10px; cursor: pointer; font-size: 11px; font-weight: 800; transition: transform .16s ease, box-shadow .16s ease, background .16s ease; }
-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-1); }
+button { min-height: 34px; border: 1px solid var(--outline-variant); border-radius: 12px; padding: 6px 10px; font-size: 11px; font-weight: 800; transition: transform .16s ease, box-shadow .16s ease, background .16s ease; }
 button:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
-button:disabled { cursor: wait; opacity: .62; }
 .secondary { background: var(--surface-container-lowest); color: var(--primary); }
 .secondary span { margin-left: 4px; }
 #status { min-height: 13px; padding-top: 2px; color: var(--on-surface-variant); text-align: center; font-size: 10px; }
@@ -113,10 +90,3 @@ button:disabled { cursor: wait; opacity: .62; }
 footer { position: relative; z-index: 1; flex: 0 0 auto; display: flex; justify-content: center; align-items: center; gap: 7px; padding: 2px 0; color: var(--on-surface-variant); font-size: 10px; }
 footer i { width: 1px; height: 3px; border-radius: 50%; background: var(--pink); }
 
-@media (prefers-reduced-motion: reduce) {
-  button,
-  .check-control,
-  .check-control::after {
-    transition: none;
-  }
-}

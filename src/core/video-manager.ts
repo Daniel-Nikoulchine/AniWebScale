@@ -8,177 +8,207 @@ import {
   stashEnhancer,
 } from './enhancer-stash';
 import { VideoEnhancer } from './video-enhancer';
+import { walkDocumentTree, walkElementTree } from './dom-tree-walker';
 
 const mediaEventsToWatch = ['loadedmetadata', 'play', 'playing', 'canplay'] as const;
-const observedRoots = new Map<Document | ShadowRoot, MutationObserver>();
-let initialized = false;
-let initializationRevision = 0;
-let lateScanTimer: number | undefined;
-let hosterObserver: MutationObserver | undefined;
 
-function cleanupVideoEnhancer(video: HTMLVideoElement, allowStash = true): void {
-  const enhancer = EnhancerMap.getEnhancer(video);
-  if (!enhancer) return;
-
-  const stashed = allowStash
-    && video.hasAttribute(ANIME4K_APPLIED_ATTR)
-    && stashEnhancer(enhancer);
-  if (!stashed) enhancer.destroy();
-  EnhancerMap.dissociateEnhancer(video);
+function isVideoElement(element: EventTarget | Element | null): element is HTMLVideoElement {
+  return typeof HTMLVideoElement !== 'undefined' && element instanceof HTMLVideoElement;
 }
 
-function processVideoElement(video: HTMLVideoElement, source: string): void {
-  if (EnhancerMap.hasEnhancer(video) || !video.isConnected) return;
+class VideoPopulation {
+  private readonly observedRoots = new Map<Document | ShadowRoot, MutationObserver>();
+  private initialized = false;
+  private initializationRevision = 0;
+  private initializationPromise: Promise<void> | null = null;
+  private lateScanTimer: number | undefined;
+  private hosterObserver: MutationObserver | undefined;
 
-  const stashedEnhancer = findAndUnstashEnhancer(video);
-  if (stashedEnhancer) {
-    EnhancerMap.associateEnhancer(video, stashedEnhancer);
-    void stashedEnhancer.reattach(video).catch(error => {
-      console.error('[Anime4K] Failed to reattach a replaced video element.', error);
-      EnhancerMap.dissociateEnhancer(video);
-      stashedEnhancer.destroy();
-    });
-    return;
-  }
-
-  try {
-    EnhancerMap.associateEnhancer(video, VideoEnhancer.create(video));
-  } catch (error) {
-    console.error(`[Anime4K] Failed to manage a video discovered by ${source}.`, error);
-  }
-}
-
-function handleMediaEvent(event: Event): void {
-  if (event.target instanceof HTMLVideoElement) {
-    processVideoElement(event.target, `media-event:${event.type}`);
-  }
-}
-
-function scanForLatePlayer(): void {
-  if (!initialized) return;
-  scanRoot(document, 'late-player-scan');
-  lateScanTimer = window.setTimeout(scanForLatePlayer, 1500);
-}
-
-function installAniWorldHosterObserver(): void {
-  if (hosterObserver || typeof MutationObserver === 'undefined') return;
-  hosterObserver = new MutationObserver(() => {
-    scanRoot(document, 'aniworld-hoster-update');
-  });
-  hosterObserver.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] });
-}
-
-function removeRootObservation(root: Document | ShadowRoot): void {
-  const observer = observedRoots.get(root);
-  if (!observer) return;
-  observer.disconnect();
-  for (const eventName of mediaEventsToWatch) {
-    root.removeEventListener(eventName, handleMediaEvent, { capture: true });
-  }
-  observedRoots.delete(root);
-}
-
-function cleanupShadowRoot(root: ShadowRoot, allowStash: boolean): void {
-  root.querySelectorAll('*').forEach(element => {
-    if (element instanceof HTMLVideoElement) cleanupVideoEnhancer(element, allowStash);
-    if (element.shadowRoot) cleanupShadowRoot(element.shadowRoot, allowStash);
-  });
-  removeRootObservation(root);
-}
-
-function cleanupElementTree(element: Element, allowStash: boolean): void {
-  if (element instanceof HTMLVideoElement) cleanupVideoEnhancer(element, allowStash);
-  if (element.shadowRoot) cleanupShadowRoot(element.shadowRoot, allowStash);
-  element.querySelectorAll('*').forEach(descendant => {
-    if (descendant instanceof HTMLVideoElement) cleanupVideoEnhancer(descendant, allowStash);
-    if (descendant.shadowRoot) cleanupShadowRoot(descendant.shadowRoot, allowStash);
-  });
-}
-
-function scanRoot(root: Document | ShadowRoot, source: string): void {
-  root.querySelectorAll('*').forEach(element => {
-    if (element instanceof HTMLVideoElement) processVideoElement(element, source);
-    if (element.shadowRoot) observeRoot(element.shadowRoot, `${source}:shadow-root`);
-  });
-}
-
-function scanAddedElement(element: Element): void {
-  if (element instanceof HTMLVideoElement) {
-    processVideoElement(element, 'mutation:video');
-  }
-  if (element.shadowRoot) observeRoot(element.shadowRoot, 'mutation:shadow-root');
-  element.querySelectorAll('*').forEach(descendant => {
-    if (descendant instanceof HTMLVideoElement) processVideoElement(descendant, 'mutation:subtree');
-    if (descendant.shadowRoot) observeRoot(descendant.shadowRoot, 'mutation:nested-shadow-root');
-  });
-}
-
-function observeRoot(root: Document | ShadowRoot, source: string): MutationObserver {
-  const existing = observedRoots.get(root);
-  if (existing) return existing;
-
-  for (const eventName of mediaEventsToWatch) {
-    root.addEventListener(eventName, handleMediaEvent, { capture: true, passive: true });
-  }
-
-  const observer = new MutationObserver(mutations => {
-    for (const mutation of mutations) {
-      mutation.addedNodes.forEach(node => {
-        if (node instanceof Element) scanAddedElement(node);
-      });
-      mutation.removedNodes.forEach(node => {
-        if (node instanceof Element) cleanupElementTree(node, true);
-      });
+  private readonly handleMediaEvent = (event: Event): void => {
+    if (isVideoElement(event.target)) {
+      this.processVideoElement(event.target, `media-event:${event.type}`);
     }
-  });
-  observer.observe(root, { childList: true, subtree: true });
-  observedRoots.set(root, observer);
-  scanRoot(root, source);
-  return observer;
-}
+  };
 
-function destroyAllEnhancers(): void {
-  for (const video of EnhancerMap.getAllManagedVideos()) {
+  private readonly scanForLatePlayer = (): void => {
+    if (!this.initialized) return;
+    this.scanRoot(document, 'late-player-scan');
+    this.lateScanTimer = window.setTimeout(this.scanForLatePlayer, 1500);
+  };
+
+  private readonly handlePageHide = (event: PageTransitionEvent): void => {
+    // A persisted pagehide only freezes the document for the back/forward
+    // cache; its enhancers must survive so playback resumes enhanced after the
+    // user navigates back. Teardown also must not run when a beforeunload
+    // dialog is cancelled, so it runs on the real unload path only.
+    if (event.persisted) return;
+    window.removeEventListener('pagehide', this.handlePageHide);
+    this.handlePageUnload();
+  };
+
+  private cleanupVideoEnhancer(video: HTMLVideoElement, allowStash = true): void {
     const enhancer = EnhancerMap.getEnhancer(video);
-    enhancer?.destroy();
+    if (!enhancer) return;
+
+    const stashed = allowStash
+      && video.hasAttribute(ANIME4K_APPLIED_ATTR)
+      && stashEnhancer(enhancer);
+    if (!stashed) enhancer.destroy();
     EnhancerMap.dissociateEnhancer(video);
   }
-  clearEnhancerStash();
-}
 
-function handlePageUnload(): void {
-  initializationRevision += 1;
-  if (lateScanTimer !== undefined) {
-    window.clearTimeout(lateScanTimer);
-    lateScanTimer = undefined;
+  private processVideoElement(video: HTMLVideoElement, source: string): void {
+    if (EnhancerMap.hasEnhancer(video) || !video.isConnected) return;
+
+    const stashedEnhancer = findAndUnstashEnhancer(video);
+    if (stashedEnhancer) {
+      EnhancerMap.associateEnhancer(video, stashedEnhancer);
+      void stashedEnhancer.reattach(video).catch(error => {
+        console.error('[Anime4K] Failed to reattach a replaced video element.', error);
+        EnhancerMap.dissociateEnhancer(video);
+        stashedEnhancer.destroy();
+      });
+      return;
+    }
+
+    try {
+      EnhancerMap.associateEnhancer(video, VideoEnhancer.create(video));
+    } catch (error) {
+      console.error(`[Anime4K] Failed to manage a video discovered by ${source}.`, error);
+    }
   }
-  hosterObserver?.disconnect();
-  hosterObserver = undefined;
-  for (const root of Array.from(observedRoots.keys())) removeRootObservation(root);
-  destroyAllEnhancers();
-  initialized = false;
+
+  private installAniWorldHosterObserver(): void {
+    if (this.hosterObserver || typeof MutationObserver === 'undefined') return;
+    this.hosterObserver = new MutationObserver(() => {
+      this.scanRoot(document, 'aniworld-hoster-update');
+    });
+    this.hosterObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src', 'style', 'class'],
+    });
+  }
+
+  private removeRootObservation(root: Document | ShadowRoot): void {
+    const observer = this.observedRoots.get(root);
+    if (!observer) return;
+    observer.disconnect();
+    for (const eventName of mediaEventsToWatch) {
+      root.removeEventListener(eventName, this.handleMediaEvent, { capture: true });
+    }
+    this.observedRoots.delete(root);
+  }
+
+  private cleanupElementTree(element: Element, allowStash: boolean): void {
+    walkElementTree(element, current => {
+      if (isVideoElement(current)) this.cleanupVideoEnhancer(current, allowStash);
+      if (current.shadowRoot) this.removeRootObservation(current.shadowRoot);
+    });
+  }
+
+  private scanRoot(root: Document | ShadowRoot, source: string): void {
+    walkDocumentTree(root, element => {
+      if (isVideoElement(element)) this.processVideoElement(element, source);
+      if (element.shadowRoot) this.observeRoot(element.shadowRoot, `${source}:shadow-root`);
+    });
+  }
+
+  private scanAddedElement(element: Element): void {
+    walkElementTree(element, current => {
+      if (isVideoElement(current)) this.processVideoElement(current, 'mutation:subtree');
+      if (current.shadowRoot) this.observeRoot(current.shadowRoot, 'mutation:shadow-root');
+    });
+  }
+
+  private observeRoot(root: Document | ShadowRoot, source: string): MutationObserver {
+    const existing = this.observedRoots.get(root);
+    if (existing) return existing;
+
+    for (const eventName of mediaEventsToWatch) {
+      root.addEventListener(eventName, this.handleMediaEvent, { capture: true, passive: true });
+    }
+
+    const observer = new MutationObserver(mutations => {
+      for (const mutation of mutations) {
+        mutation.addedNodes.forEach(node => {
+          if (node instanceof Element) this.scanAddedElement(node);
+        });
+        mutation.removedNodes.forEach(node => {
+          if (node instanceof Element) this.cleanupElementTree(node, true);
+        });
+      }
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    this.observedRoots.set(root, observer);
+    this.scanRoot(root, source);
+    return observer;
+  }
+
+  private destroyAllEnhancers(): void {
+    for (const video of EnhancerMap.getAllManagedVideos()) {
+      const enhancer = EnhancerMap.getEnhancer(video);
+      enhancer?.destroy();
+      EnhancerMap.dissociateEnhancer(video);
+    }
+    clearEnhancerStash();
+  }
+
+  private handlePageUnload(): void {
+    this.initializationRevision += 1;
+    this.initializationPromise = null;
+    if (this.lateScanTimer !== undefined) {
+      window.clearTimeout(this.lateScanTimer);
+      this.lateScanTimer = undefined;
+    }
+    this.hosterObserver?.disconnect();
+    this.hosterObserver = undefined;
+    for (const root of Array.from(this.observedRoots.keys())) this.removeRootObservation(root);
+    this.destroyAllEnhancers();
+    this.initialized = false;
+  }
+
+  async initialize(): Promise<void> {
+    if (this.initialized || this.initializationPromise) {
+      return this.initializationPromise ?? Promise.resolve();
+    }
+
+    const revision = this.initializationRevision;
+    const operation = (async () => {
+      const settings = await getSettings();
+      if (revision !== this.initializationRevision || !settings.extensionEnabled || this.initialized) return;
+      this.initialized = true;
+      this.observeRoot(document, 'initial-scan');
+      this.installAniWorldHosterObserver();
+      this.lateScanTimer = window.setTimeout(this.scanForLatePlayer, 250);
+      window.addEventListener('pagehide', this.handlePageHide);
+    })();
+    this.initializationPromise = operation;
+    void operation.finally(() => {
+      if (this.initializationPromise === operation) this.initializationPromise = null;
+    }).catch(() => undefined);
+    return operation;
+  }
+
+  deinitialize(): void {
+    window.removeEventListener('pagehide', this.handlePageHide);
+    this.handlePageUnload();
+  }
+
+  getManagedVideos(): HTMLVideoElement[] {
+    return EnhancerMap.getAllManagedVideos();
+  }
+
+  isInitialized(): boolean {
+    return this.initialized;
+  }
 }
 
-function handlePageHide(event: PageTransitionEvent): void {
-  // A persisted pagehide only freezes the document for the back/forward
-  // cache; its enhancers must survive so playback resumes enhanced after the
-  // user navigates back. Teardown also must not run when a beforeunload
-  // dialog is cancelled, so it runs on the real unload path only.
-  if (event.persisted) return;
-  window.removeEventListener('pagehide', handlePageHide);
-  handlePageUnload();
-}
+const population = new VideoPopulation();
 
-export async function initializeOnPage(): Promise<void> {
-  if (initialized) return;
-  const revision = initializationRevision;
-  const settings = await getSettings();
-  if (revision !== initializationRevision || !settings.extensionEnabled || initialized) return;
-  initialized = true;
-  observeRoot(document, 'initial-scan');
-  installAniWorldHosterObserver();
-  lateScanTimer = window.setTimeout(scanForLatePlayer, 250);
-  window.addEventListener('pagehide', handlePageHide);
+export function initializeOnPage(): Promise<void> {
+  return population.initialize();
 }
 
 export type SettingsReapplyResult = { status: 'SUCCESS' | 'NO_ACTION' | 'ERROR'; message: string };
@@ -191,25 +221,23 @@ export type SettingsReapplyResult = { status: 'SUCCESS' | 'NO_ACTION' | 'ERROR';
  */
 export async function reapplySettings(): Promise<SettingsReapplyResult> {
   const newSettings: Anime4KWebExtSettings = await getSettings();
-  initializationRevision += 1;
-
   if (!newSettings.extensionEnabled) {
-    const managedCount = EnhancerMap.getAllManagedVideos().length;
-    deinitializeOnPage();
+    const managedCount = population.getManagedVideos().length;
+    population.deinitialize();
     return managedCount > 0
       ? { status: 'SUCCESS', message: `Disabled Anime4K on ${managedCount} managed video(s).` }
       : { status: 'NO_ACTION', message: 'AniWebScale is disabled.' };
   }
 
-  if (!initialized) {
-    await initializeOnPage();
+  if (!population.isInitialized()) {
+    await population.initialize();
     return { status: 'SUCCESS', message: 'Anime4K is enabled.' };
   }
 
   let updatedCount = 0;
   let updateError: Error | null = null;
 
-  for (const video of EnhancerMap.getAllManagedVideos()) {
+  for (const video of population.getManagedVideos()) {
     const enhancer = EnhancerMap.getEnhancer(video);
     if (!enhancer) continue;
     const isActive = enhancer.isActive();
@@ -230,9 +258,4 @@ export async function reapplySettings(): Promise<SettingsReapplyResult> {
     return { status: 'SUCCESS', message: `Updated ${updatedCount} active video(s).` };
   }
   return { status: 'NO_ACTION', message: 'No active instance needed an update.' };
-}
-
-function deinitializeOnPage(): void {
-  window.removeEventListener('pagehide', handlePageHide);
-  handlePageUnload();
 }

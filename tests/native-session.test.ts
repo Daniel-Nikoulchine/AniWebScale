@@ -166,6 +166,26 @@ describe('NativeSession state machine', () => {
     });
   });
 
+  describe('startNativeFallback', () => {
+    it('rejects a fallback request without the matching active enhancement claim', async () => {
+      const machine = createMachine();
+      const result = await machine.startNativeFallback({
+        type: 'NATIVE_FALLBACK_REQUEST',
+        videoId: 'video-1',
+        reason: 'native-selected',
+        configuration: config(),
+        output: 'auto',
+        videoRect: { x: 0, y: 0, width: 640, height: 360, devicePixelRatio: 1 },
+      }, sender());
+
+      expect(result).toEqual({
+        ok: false,
+        status: 'denied',
+        message: 'The native request did not belong to the active video.',
+      });
+    });
+  });
+
   describe('releaseEnhancement', () => {
     it('clears the claim only when it matches', async () => {
       const machine = createMachine();

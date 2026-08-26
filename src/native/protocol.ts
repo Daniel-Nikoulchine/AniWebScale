@@ -116,11 +116,9 @@ export interface NativePointerPayload {
 export function isNativePointerEventPayload(value: unknown): value is NativePointerPayload {
   if (!value || typeof value !== 'object') return false;
   const payload = value as Record<string, unknown>;
-  const x = Number(payload.x);
-  const y = Number(payload.y);
   return isNativePointerEventType(payload.event)
-    && Number.isFinite(x) && x >= 0 && x <= 1
-    && Number.isFinite(y) && y >= 0 && y <= 1;
+    && typeof payload.x === 'number' && Number.isFinite(payload.x) && payload.x >= 0 && payload.x <= 1
+    && typeof payload.y === 'number' && Number.isFinite(payload.y) && payload.y >= 0 && payload.y <= 1;
 }
 
 /** Clamp normalized coordinates into [0,1] (defensive, used on the content side). */

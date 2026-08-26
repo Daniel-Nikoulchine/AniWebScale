@@ -13,17 +13,14 @@
  *   webgpu-active   → the in-page WebGPU renderer owns the enhancement
  *   native-active   → the native host owns the enhancement
  *
- * `beginTransition` bumps the revision; every async operation captures the
- * revision it started with and calls `isTransitionCurrent(revision)` before
- * committing any state, so a superseded operation aborts instead of
- * clobbering the newer one.
+ * Transition revision ownership lives in EnhancerLifecycle. This module only
+ * owns the committed backend phase, so backend state cannot become a second
+ * lifecycle coordinator.
  */
 export type BackendPhase = 'idle' | 'starting' | 'webgpu-active' | 'native-active';
 
 export class BackendState {
   private phase: BackendPhase = 'idle';
-  private transitionRevision = 0;
-  private destroyed = false;
 
   /** Whether any enhancement is active or starting. */
   get isBusy(): boolean {
@@ -54,25 +51,14 @@ export class BackendState {
     return this.phase;
   }
 
-  /** Mark a transition as in flight and return its revision. */
-  beginTransition(): number {
-    this.transitionRevision += 1;
+  /** Mark a transition as in flight. Revision ownership stays in the lifecycle. */
+  beginTransition(): void {
     this.phase = 'starting';
-    return this.transitionRevision;
   }
 
   /** Abort every in-flight transition (destroy path). */
   destroy(): void {
-    this.destroyed = true;
     this.phase = 'idle';
-  }
-
-  /**
-   * True when the operation captured by `revision` is still the newest
-   * transition and the enhancer is not destroyed.
-   */
-  isTransitionCurrent(revision: number): boolean {
-    return !this.destroyed && revision === this.transitionRevision;
   }
 
   /** Commit the machine to the webgpu-active phase. */
@@ -90,8 +76,4 @@ export class BackendState {
     this.phase = 'idle';
   }
 
-  /** Reset the transition revision (used when a transition supersedes itself). */
-  resetTransitions(): void {
-    this.transitionRevision = 0;
-  }
 }

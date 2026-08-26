@@ -22,10 +22,7 @@ quality levels, for 18 selectable presets:
 | C+A | Clamp → DenoiseUpscale → Restore → Upscale |
 
 `Output: Auto` targets the physical player size, including display scaling.
-The double-stage modes remain selectable below 2× and show an oversharpening
-warning. Quality is never silently reduced when rendering is too slow. Their UL
-variants are explicit high-end GPU profiles and are outside the RX 6750 XT
-24 FPS release baseline; every other preset is part of that baseline.
+Quality is never silently reduced when rendering is too slow.
 
 ## AI upscale and frame generation
 
@@ -53,21 +50,18 @@ backends.
 - AniWebScale stays idle during ordinary playback. It starts automatically only
   after the user enters a video player's Fullscreen API mode and stops when
   that fullscreen mode ends. There is no per-video AniWebScale button.
-- On readable video, a WebGPU canvas follows `requestVideoFrameCallback` and
-  keeps at most one current frame plus the newest replacement frame. DOM
+- On readable video, a WebGPU canvas follows `requestVideoFrameCallback`. DOM
   controls and subtitles remain owned by the website.
 - The dedicated CNN mode uses the trained Anime4K weights on either backend.
   ArtCNN, ACNet, and ARNet use the pinned official GLSL weights translated at
-  build time to WGSL and D3D11 compute shaders, with BT.709 luma/chroma
-  reconstruction after the fixed 2x model.
+  build time to WGSL and D3D11 compute shaders.
 - All inference is local; no video frame is sent to a server.
 - Anime4K quality tiers and each generated neural model are separate lazy chunks;
   choosing one mode does not parse or load every other model into the tab.
 - On EME/DRM, a `SecurityError`, or explicit `Backend: Native`, the extension
   can ask once per site for permission to use the local Windows renderer.
-- The tab remains in its existing browser window. A random 128-bit title nonce
-  identifies that existing fullscreen browser window for native capture; no
-  browser popup is created and no tab is moved.
+- The tab remains in its existing browser window; no browser popup is created
+  and no tab is moved.
 - `Anime4K.NativeHost.exe` uses the browser Native Messaging protocol and a
   current-user-only named pipe. `Anime4K.Renderer.exe` uses Windows Graphics
   Capture and Direct3D 11. No shader, weight, compiler, or executable is
@@ -159,21 +153,15 @@ npm run build:native
 npm run package:local
 ```
 
-Public store bundles are built without any backend. The extension is fully free and
-needs no account, license server or database; see [`docs/RELEASE.md`](docs/RELEASE.md).
-
-The optional Windows native renderer signs its binaries; no backend, store secret or
-account API URL is involved.
+Public store bundles are built without any backend. The extension is fully free
+and needs no account, license server or database.
 
 `npm run package:local` creates:
 
 - `artifacts/chrome-unpacked/`
-- `artifacts/aniwebscale-chrome-1.0.0.zip`
-- `artifacts/aniwebscale-firefox-1.0.0.xpi`
-- `artifacts/aniwebscale-native-windows-x64-1.0.0.zip`
-
-The native ZIP contains `Install Anime4K Native.cmd`; extract the ZIP and
-double-click that file to install the complete backend.
+- `artifacts/aniwebscale-chrome-1.0.5.zip`
+- `artifacts/aniwebscale-firefox-1.0.5.xpi`
+- `artifacts/aniwebscale-native-windows-x64-1.0.5.zip`
 
 Before the first browser E2E run, use `npm run test:e2e:install`; details are
 in [`tests/e2e/README.md`](tests/e2e/README.md).

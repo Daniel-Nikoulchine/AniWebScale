@@ -33,7 +33,7 @@
     "message": "Backend"
   },
   "backendAuto": {
-    "message": "Automatisch"
+    "message": "Auto"
   },
   "backendNative": {
     "message": "Nativer Windows-Renderer (Hardwarebeschleunigung aus)"
@@ -78,7 +78,7 @@
     "message": "Ziehe den Regler, um das Original-Frame mit einer Anime4K-verbesserten Vorschau zu vergleichen."
   },
   "cmpTitle": {
-    "message": "Von weich zu<br><em>glasklar.</em>"
+    "message": "Weiche Quelle,<br><em>scharfer Render.</em>"
   },
   "colorTheme": {
     "message": "Farbschema"
@@ -86,11 +86,20 @@
   "compareSliderAria": {
     "message": "Original und verbessertes Frame vergleichen"
   },
+  "copyDiagnostics": {
+    "message": "Diagnose kopieren"
+  },
   "description": {
     "message": "AniWebScale verbessert Anime-Videos in Echtzeit mit Anime4K, WebGPU und einem optionalen lokalen Windows-Renderer."
   },
   "diagnostics": {
     "message": "Diagnose"
+  },
+  "diagnosticsCopied": {
+    "message": "Diagnose in die Zwischenablage kopiert."
+  },
+  "diagnosticsCopyFailed": {
+    "message": "Diagnose konnte nicht kopiert werden."
   },
   "disablingExtension": {
     "message": "Erweiterung wird deaktiviert..."
@@ -105,7 +114,10 @@
     "message": "Installiere AniWebScale und verwandle weiche Animation in wenigen Klicks in scharfes, flüssiges Video."
   },
   "dlTitle": {
-    "message": "Deine nächste Folge<br>verdient ein bisschen Magie."
+    "message": "Einmal installiert.<br>Ab sofort schärfer."
+  },
+  "documentationLink": {
+    "message": "Dokumentation und Support"
   },
   "done": {
     "message": "Fertig"
@@ -177,7 +189,7 @@
     "message": "Wie bekomme ich Support?"
   },
   "faqKicker": {
-    "message": "04 / GUT ZU WISSEN"
+    "message": "03 / GUT ZU WISSEN"
   },
   "faqSub": {
     "message": "Noch neugierig? Die Erweiterung ist darauf ausgelegt, berechenbar, lokal und leicht rückgängig zu machen zu sein."
@@ -228,7 +240,7 @@
     "message": "Gebaut für animierte Inhalte, bei denen klare Konturen und feine Farbabstufungen am wichtigsten sind."
   },
   "featTitle": {
-    "message": "Eine winzige Erweiterung mit<br><em>ernsthaftem Funkeln.</em>"
+    "message": "Eine kleine Erweiterung.<br><em>Jedes Frame geschärft.</em>"
   },
   "finishSetup": {
     "message": "Einrichtung abschließen"
@@ -303,22 +315,16 @@
     "message": "Zum Browser hinzufügen"
   },
   "heroLead": {
-    "message": "Schärfere Linien, sauberere Farbverläufe und flüssigere Bewegungen für Anime und Animation — direkt in deinem Browser verbessert."
+    "message": "Schärfere Linien, sauberere Farbverläufe und flüssigere Bewegung für Anime. In Echtzeit, direkt in deinem Browser."
   },
   "heroSecondary": {
     "message": "Sieh den Unterschied"
   },
   "heroTitle": {
-    "message": "Mach jedes Frame<br><em>magisch.</em>"
+    "message": "Schärferes Anime,<br><em>Frame für Frame.</em>"
   },
   "home": {
     "message": "Startseite"
-  },
-  "howKicker": {
-    "message": "03 / SO EINFACH WIE 1—2—3"
-  },
-  "howTitle": {
-    "message": "Einmal eingerichtet. <em>Jedes Frame</em> genießen."
   },
   "imprint": {
     "message": "Impressum"
@@ -359,14 +365,20 @@
   "langToggleAria": {
     "message": "Sprache wechseln"
   },
+  "language": {
+    "message": "Sprache"
+  },
+  "languageAuto": {
+    "message": "Automatisch (Browsersprache)"
+  },
+  "languageDescription": {
+    "message": "Sprache der Erweiterungsoberfläche."
+  },
   "liveStatistics": {
     "message": "Live-Statistiken"
   },
   "menuOpen": {
     "message": "Menü öffnen"
-  },
-  "miniProofAria": {
-    "message": "Kerntechnologien"
   },
   "modeADescription": {
     "message": "Stellt Liniendetails wieder her und skaliert anschließend mit Anime4K CNN. Die ausgewogene Voreinstellung für die meisten Anime."
@@ -449,9 +461,6 @@
   "navFeatures": {
     "message": "Features"
   },
-  "navHow": {
-    "message": "So funktioniert's"
-  },
   "navSupport": {
     "message": "Support"
   },
@@ -480,13 +489,19 @@
     "message": "Seite nicht gefunden — AniWebScale"
   },
   "onboardingTitle": {
-    "message": "Lass deine Videos funkeln!"
+    "message": "Schärfere Anime, in Echtzeit."
   },
   "openMenu": {
     "message": "Menü öffnen"
   },
+  "optionsSavedNotApplied": {
+    "message": "Einstellungen gespeichert, konnten aber nicht angewendet werden. Lade den Video-Tab neu."
+  },
   "pageTitle": {
-    "message": "AniWebScale — Mach jedes Frame magisch"
+    "message": "AniWebScale: schärferes Anime, in Echtzeit"
+  },
+  "permissionRestoreFailed": {
+    "message": "Berechtigungsanfrage abgelehnt. Die Website wurde nicht wiederhergestellt."
   },
   "permissions": {
     "message": "Berechtigungen"
@@ -602,20 +617,17 @@
   "profileSoftSources": {
     "message": "Weiche Quellen"
   },
-  "proofAi": {
-    "message": "KI-Upscaling"
-  },
-  "proofMotion": {
-    "message": "Bewegungsbasiertes 2x"
-  },
-  "proofNative": {
-    "message": "Native-Fallback"
-  },
-  "proofText": {
-    "message": "Geliebt von Animationsfans, die jede Linie bemerken"
-  },
   "quality": {
     "message": "Qualität"
+  },
+  "qualityTierMedium": {
+    "message": "Mittel"
+  },
+  "qualityTierUltraLarge": {
+    "message": "Ultra groß"
+  },
+  "qualityTierVeryLarge": {
+    "message": "Sehr groß"
   },
   "quickSetup": {
     "message": "Schnelleinrichtung"
@@ -645,7 +657,7 @@
     "message": "Illustrative Vorschau"
   },
   "repoCaptionStrong": {
-    "message": "Originäre prozedural erstellte Vergleichsplatte"
+    "message": "Originäre prozedurale Vergleichsplatte"
   },
   "repoKicker": {
     "message": "VISUELLE VORSCHAU"
@@ -654,7 +666,7 @@
     "message": "Diese Seite-an-Seite-Vergleichsplatte ist eine originäre prozedurale Illustration, die den visuellen Unterschied zwischen einer weichen Quelle und einem scharfen verbesserten Render zeigt."
   },
   "repoTitle": {
-    "message": "Sieh den Effekt.<br><em>Illustrativ.</em>"
+    "message": "Links weich,<br><em>rechts scharf.</em>"
   },
   "requestingSiteAccess": {
     "message": "Website-Zugriff wird angefragt..."
@@ -757,24 +769,6 @@
   },
   "statusWindowsOnly": {
     "message": "Nur Windows"
-  },
-  "step1Text": {
-    "message": "Installiere AniWebScale in Chrome oder Firefox."
-  },
-  "step1Title": {
-    "message": "Erweiterung hinzufügen"
-  },
-  "step2Text": {
-    "message": "Wähle Preset, Qualität und Rendering-Backend."
-  },
-  "step2Title": {
-    "message": "Wähle deinen Look"
-  },
-  "step3Text": {
-    "message": "Gehe in den Vollbildmodus und lass AniWebScale den Rest machen."
-  },
-  "step3Title": {
-    "message": "Play drücken"
   },
   "storeAvailableFor": {
     "message": "VERFÜGBAR FÜR"
@@ -883,6 +877,15 @@
   },
   "termsTitle": {
     "message": "Allgemeine<br><em>Geschäftsbedingungen.</em>"
+  },
+  "testRender": {
+    "message": "Test-Render starten"
+  },
+  "testRenderFailed": {
+    "message": "Test-Render fehlgeschlagen. WebGPU kann in diesem Browser nicht rendern."
+  },
+  "testRenderPassed": {
+    "message": "Test-Render erfolgreich. WebGPU kann in diesem Browser rendern."
   },
   "theme": {
     "message": "Design"

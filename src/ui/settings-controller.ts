@@ -1,0 +1,132 @@
+import type { EnhancementMode, QualityTier, RenderBackend } from '../types';
+import type { LocalSettings } from '../types';
+import { applySettings, type SettingsApplyResult, type SettingsUpdate } from '../utils/apply-settings';
+
+export interface RenderControlElements {
+  mode: HTMLSelectElement;
+  quality: HTMLSelectElement;
+  backend: HTMLSelectElement;
+  statistics: HTMLInputElement;
+  frameGeneration: HTMLInputElement;
+}
+
+export function collectRenderSettings(controls: RenderControlElements): SettingsUpdate {
+  return {
+    mode: controls.mode.value as EnhancementMode,
+    quality: controls.quality.value as QualityTier,
+    output: 'auto',
+    backend: controls.backend.value as RenderBackend,
+    statsEnabled: controls.statistics.checked,
+    frameGenerationEnabled: controls.frameGeneration.checked,
+  };
+}
+
+/** Apply storage changes to matching form controls and report whether the UI changed. */
+export function syncRenderSettings(
+  changes: { [key: string]: chrome.storage.StorageChange },
+  controls: RenderControlElements,
+  localBindings: Record<string, HTMLInputElement> = {},
+): boolean {
+  let changed = false;
+  const selectBindings: Record<string, HTMLSelectElement> = {
+    mode: controls.mode,
+    quality: controls.quality,
+    backend: controls.backend,
+  };
+  const booleanBindings: Record<string, HTMLInputElement> = {
+    statsEnabled: controls.statistics,
+    frameGenerationEnabled: controls.frameGeneration,
+    ...localBindings,
+  };
+
+  for (const [key, select] of Object.entries(selectBindings)) {
+    const value = changes[key]?.newValue;
+    if (typeof value === 'string' && select.value !== value) {
+      select.value = value;
+      changed = true;
+    }
+  }
+  for (const [key, input] of Object.entries(booleanBindings)) {
+    const value = changes[key]?.newValue;
+    if (typeof value === 'boolean' && input.checked !== value) {
+      input.checked = value;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+export interface SettingsControllerOptions {
+  controls: RenderControlElements;
+  additionalControls?: HTMLElement[];
+  collectSettings?: () => SettingsUpdate;
+  getLocalSettings?: () => Partial<LocalSettings>;
+  onChange?: () => void;
+  showStatus: (text: string) => void;
+  messages?: {
+    saving?: string;
+    saved?: string;
+    applied?: string;
+    savedNotApplied?: string;
+    failed?: string;
+  };
+}
+
+export interface SettingsController {
+  collectSettings: () => SettingsUpdate;
+  saveNow: () => Promise<SettingsApplyResult>;
+  scheduleSave: () => void;
+}
+
+const defaultMessages = {
+  saving: 'Saving...',
+  saved: 'Settings saved.',
+  applied: 'Settings saved and applied.',
+  savedNotApplied: 'Settings saved, but could not be applied.',
+  failed: 'Could not save settings.',
+};
+
+export function createSettingsController(options: SettingsControllerOptions): SettingsController {
+  const messages = { ...defaultMessages, ...options.messages };
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function saveNow(): Promise<SettingsApplyResult> {
+    clearTimeout(saveTimer);
+    options.showStatus(messages.saving);
+    const result = await applySettings(
+      options.collectSettings?.() ?? collectRenderSettings(options.controls),
+      { local: options.getLocalSettings?.() },
+    ).catch(() => 'failed' as const);
+
+    if (result === 'failed') options.showStatus(messages.failed);
+    else if (result === 'saved-not-applied') options.showStatus(messages.savedNotApplied);
+    else options.showStatus(result === 'applied' ? messages.applied : messages.saved);
+    return result;
+  }
+
+  function scheduleSave(): void {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => void saveNow(), 300);
+  }
+
+  const controls = [
+    options.controls.mode,
+    options.controls.quality,
+    options.controls.backend,
+    options.controls.statistics,
+    options.controls.frameGeneration,
+    ...(options.additionalControls ?? []),
+  ];
+  for (const control of controls) {
+    control.addEventListener('change', () => {
+      options.onChange?.();
+      scheduleSave();
+    });
+  }
+
+  return {
+    collectSettings: () => options.collectSettings?.() ?? collectRenderSettings(options.controls),
+    saveNow,
+    scheduleSave,
+  };
+}

@@ -15,6 +15,7 @@ import { nativeRequestBase } from '../background-helpers';
 export class NativeBridge {
   private client: NativeMessagingClient | null = null;
   private capabilities: NativeCapabilitiesEvent | null = null;
+  private handshakePromise: Promise<NativeMessagingClient> | null = null;
 
   /**
    * Return a connected, handshaked client, reusing the existing connection
@@ -23,11 +24,25 @@ export class NativeBridge {
    */
   async connectAndHandshake(onEvent: (event: NativeEvent, client: NativeMessagingClient) => void): Promise<NativeMessagingClient> {
     if (this.client?.connected && this.capabilities) return this.client;
+    if (this.handshakePromise) return this.handshakePromise;
 
+    const handshake = this.openConnection(onEvent);
+    this.handshakePromise = handshake;
+    try {
+      return await handshake;
+    } finally {
+      if (this.handshakePromise === handshake) this.handshakePromise = null;
+    }
+  }
+
+  private async openConnection(
+    onEvent: (event: NativeEvent, client: NativeMessagingClient) => void,
+  ): Promise<NativeMessagingClient> {
     this.client?.disconnect();
     this.client = null;
     this.capabilities = null;
     const client = new NativeMessagingClient();
+    this.client = client;
     client.onEvent(event => onEvent(event, client));
     try {
       client.connect();
@@ -48,21 +63,26 @@ export class NativeBridge {
         throw new Error('The native host does not support Windows Graphics Capture and Direct3D 11.');
       }
 
+      if (this.client !== client) throw new Error('The native messaging connection was replaced during handshake.');
       this.capabilities = capabilities;
-      this.client = client;
       return client;
     } catch (error) {
+      if (this.client === client) {
+        this.client = null;
+        this.capabilities = null;
+      }
       client.disconnect();
-      this.capabilities = null;
       throw error;
     }
   }
 
   /** Disconnect and forget the current client and its capabilities. */
   disconnect(): void {
-    this.client?.disconnect();
+    const client = this.client;
     this.client = null;
     this.capabilities = null;
+    this.handshakePromise = null;
+    client?.disconnect();
   }
 
   /** The live client, if connected (used to scope events to the current host). */

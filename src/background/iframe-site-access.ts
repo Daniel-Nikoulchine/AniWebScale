@@ -53,7 +53,7 @@ export class IframeSiteAccessManager {
   /** Origin patterns that were prompted recently, for spam protection. */
   private readonly lastPrompted = new Map<string, number>();
   /** Origin patterns with a prompt in flight, for duplicate protection. */
-  private readonly pending = new Map<string, number>();
+  private readonly pending = new Map<string, { at: number; token: symbol }>();
   /** In-flight completion phases; tests await these via settled(). */
   private readonly completions = new Set<Promise<void>>();
 
@@ -83,9 +83,9 @@ export class IframeSiteAccessManager {
     }
 
     const now = this.deps.now();
-    const pendingAt = this.pending.get(pattern);
-    if (pendingAt !== undefined) {
-      if (now - pendingAt < this.stalePendingMs) {
+    const pending = this.pending.get(pattern);
+    if (pending !== undefined) {
+      if (now - pending.at < this.stalePendingMs) {
         // A prompt for this origin is already showing; one doorhanger is enough.
         return { ok: true, outcome: 'suppressed' };
       }
@@ -99,8 +99,9 @@ export class IframeSiteAccessManager {
     }
 
     this.lastPrompted.set(pattern, now);
-    this.pending.set(pattern, now);
-    this.schedule(pattern, origin, tabId);
+    const pendingToken = Symbol('player-access-prompt');
+    this.pending.set(pattern, { at: now, token: pendingToken });
+    this.schedule(pattern, origin, tabId, pendingToken);
     return { ok: true, outcome: 'prompting' };
   }
 
@@ -109,9 +110,9 @@ export class IframeSiteAccessManager {
     await Promise.all([...this.completions]);
   }
 
-  private schedule(pattern: string, origin: string, tabId?: number): void {
+  private schedule(pattern: string, origin: string, tabId: number | undefined, pendingToken: symbol): void {
     let completion: Promise<void>;
-    completion = this.complete(pattern, origin, tabId)
+    completion = this.complete(pattern, origin, tabId, pendingToken)
       .catch(error => {
         console.error('[AniWebScale] Player access request failed.', error);
       })
@@ -125,19 +126,24 @@ export class IframeSiteAccessManager {
    * Run the permission request and its follow-ups. Guarded so every outcome
    * clears the pending state and reports back to the tab exactly once.
    */
-  private async complete(pattern: string, origin: string, tabId?: number): Promise<void> {
+  private async complete(
+    pattern: string,
+    origin: string,
+    tabId: number | undefined,
+    pendingToken: symbol,
+  ): Promise<void> {
     let granted: boolean;
     try {
       granted = await this.deps.request([pattern]);
     } catch {
       // The engine refused the prompt outside a user gesture (Chrome) or the
       // call failed. Route through the manual grant page instead.
-      this.pending.delete(pattern);
+      this.clearPending(pattern, pendingToken);
       if (tabId !== undefined) this.deps.notify(tabId, origin, 'failed');
       this.deps.openGrantPage(origin, tabId);
       return;
     }
-    this.pending.delete(pattern);
+    this.clearPending(pattern, pendingToken);
 
     if (!granted) {
       if (tabId !== undefined) this.deps.notify(tabId, origin, 'denied');
@@ -158,5 +164,9 @@ export class IframeSiteAccessManager {
       }
       this.deps.notify(tabId, origin, 'granted', applied);
     }
+  }
+
+  private clearPending(pattern: string, pendingToken: symbol): void {
+    if (this.pending.get(pattern)?.token === pendingToken) this.pending.delete(pattern);
   }
 }

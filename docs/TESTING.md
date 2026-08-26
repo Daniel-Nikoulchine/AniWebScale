@@ -20,7 +20,7 @@ The TS suite checks all 18 preset graphs, physical Auto sizing, legacy-settings 
 Compare all 18 production WebGPU and D3D11 graphs against the pinned official Anime4K GLSL (FFmpeg/libplacebo/Vulkan). Nine additional 4x cases run AA, BB, CA in every quality with their second upscale pass:
 
 ```
-python tests/golden/run_shader_golden.py --native-exe native/build/bin/Anime4K.Golden.exe --report artifacts/shader-golden-report.json
+python tests/golden/run_shader_golden.py --native-exe native/build/bin/Release/Anime4K.Golden.exe --report artifacts/shader-golden-report.json
 ```
 
 Browser E2E fixtures are local (no streaming service). They cover same-origin/CORS media, iframes, dynamic video replacement, auto fullscreen, DOM subtitles, navigation, and teardown.
@@ -30,7 +30,7 @@ Browser E2E fixtures are local (no streaming service). They cover same-origin/CO
 Run the bounded native acceptance benchmark on an RX 6750 XT:
 
 ```
-.\native\scripts\run-benchmark.ps1 -BinaryDirectory .\native\build-exact\bin -WarmupFrames 3 -SampleFrames 30 -OutputPath .\artifacts\native-rx6750xt-benchmark.json
+.\native\scripts\run-benchmark.ps1 -BinaryDirectory .\native\build\bin\Release -WarmupFrames 3 -SampleFrames 30 -OutputPath .\artifacts\native-rx6750xt-benchmark.json
 ```
 
 The checked-in [RX 6750 XT report](../artifacts/native-rx6750xt-benchmark.json) passed 15/18 canonical combinations. `AA/UL`, `BB/UL`, `CA/UL` are explicit high-load profiles outside the 24 FPS baseline.

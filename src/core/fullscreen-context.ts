@@ -88,19 +88,6 @@ export class FullscreenContext {
     }
   }
 
-  private removeFullscreenChangeListeners(): void {
-    document.removeEventListener('fullscreenchange', this.change);
-    document.removeEventListener('webkitfullscreenchange', this.change);
-    try {
-      if (window.top && window.top !== window) {
-        window.top.removeEventListener('fullscreenchange', this.change);
-        window.top.removeEventListener('webkitfullscreenchange', this.change);
-      }
-    } catch {
-      // Cross-origin parent.
-    }
-  }
-
   /** Be notified on every fullscreen change that concerns this document. */
   subscribe(listener: () => void): () => void {
     this.install();

@@ -1,57 +1,9 @@
 import { parseStatusResponse, siteAccessSyncMessage } from './shared/runtime-messages';
-import { debug } from './utils/debug-log';
-
-const REGISTERED_SCRIPT_IDS = [
-  'aniwebscale-fullscreen-bridge',
-  'aniwebscale-content',
-] as const;
+import { SiteAccessRegistration } from './site-access-registration';
+export { SiteAccessRegistration } from './site-access-registration';
 
 function isHttpMatchPattern(pattern: string): boolean {
   return /^https?:\/\/[^/]+\/\*$/.test(pattern);
-}
-
-function sameStrings(left: string[] | undefined, right: string[]): boolean {
-  if (!left || left.length !== right.length) return false;
-  return [...left].sort().every((value, index) => value === [...right].sort()[index]);
-}
-
-function desiredContentScripts(matches: string[]): chrome.scripting.RegisteredContentScript[] {
-  return [
-    {
-      id: REGISTERED_SCRIPT_IDS[0],
-      matches,
-      js: ['fullscreen-bridge.js'],
-      runAt: 'document_start',
-      allFrames: true,
-      matchOriginAsFallback: true,
-      persistAcrossSessions: true,
-      world: 'MAIN',
-    },
-    {
-      id: REGISTERED_SCRIPT_IDS[1],
-      matches,
-      js: ['content.js'],
-      runAt: 'document_idle',
-      allFrames: true,
-      matchOriginAsFallback: true,
-      persistAcrossSessions: true,
-      world: 'ISOLATED',
-    },
-  ];
-}
-
-function sameRegistration(
-  actual: chrome.scripting.RegisteredContentScript,
-  desired: chrome.scripting.RegisteredContentScript,
-): boolean {
-  return actual.id === desired.id
-    && sameStrings(actual.matches, desired.matches ?? [])
-    && sameStrings(actual.js, desired.js ?? [])
-    && actual.runAt === desired.runAt
-    && actual.allFrames === desired.allFrames
-    && actual.matchOriginAsFallback === desired.matchOriginAsFallback
-    && actual.persistAcrossSessions === desired.persistAcrossSessions
-    && actual.world === desired.world;
 }
 
 /**
@@ -244,32 +196,14 @@ export async function revokeSiteAccessPatterns(patterns: string[]): Promise<bool
 }
 
 /**
- * Mirror granted origins into persistent dynamic content scripts. Manifest
- * content_scripts cannot be scoped to runtime-granted optional origins on
- * Firefox, so registration is the cross-browser path for per-site approval.
+ * Owns browser-side script registration and immediate injection. Site Access
+ * callers provide origins and tab IDs; the Chrome scripting details stay at
+ * this seam.
  */
-export async function synchronizeRegisteredContentScripts(): Promise<void> {
-  const matches = await getGrantedSitePatterns();
-  const existing = await chrome.scripting.getRegisteredContentScripts({
-    ids: [...REGISTERED_SCRIPT_IDS],
-  });
+const siteAccessRegistration = new SiteAccessRegistration(getGrantedSitePatterns);
 
-  if (matches.length === 0) {
-    if (existing.length > 0) {
-      await chrome.scripting.unregisterContentScripts({ ids: existing.map(script => script.id) });
-    }
-    return;
-  }
-
-  const desired = desiredContentScripts(matches);
-  const isCurrent = existing.length === desired.length
-    && desired.every(script => existing.some(candidate => sameRegistration(candidate, script)));
-  if (isCurrent) return;
-
-  if (existing.length > 0) {
-    await chrome.scripting.unregisterContentScripts({ ids: existing.map(script => script.id) });
-  }
-  await chrome.scripting.registerContentScripts(desired);
+export function synchronizeRegisteredContentScripts(): Promise<void> {
+  return siteAccessRegistration.synchronize();
 }
 
 /**
@@ -283,58 +217,7 @@ export async function synchronizeRegisteredContentScripts(): Promise<void> {
  * own origin is granted. The persistent registration covers every future
  * navigation either way. Returns whether at least one frame was scripted.
  */
-export async function injectSiteScripts(tabId: number): Promise<boolean> {
-  const injections = [
-    { files: ['fullscreen-bridge.js'], world: 'MAIN' as const },
-    { files: ['content.js'], world: 'ISOLATED' as const },
-  ];
-
-  // Fast path: every frame in the tab is scriptable.
-  try {
-    for (const injection of injections) {
-      await chrome.scripting.executeScript({
-        target: { tabId, allFrames: true },
-        files: injection.files,
-        world: injection.world,
-      });
-    }
-    return true;
-  } catch {
-    // Fall through to per-frame injection.
-  }
-
-  let frames: (chrome.webNavigation.GetAllFrameResultDetails & { url: string })[];
-  try {
-    const listed = await chrome.webNavigation.getAllFrames({ tabId });
-    frames = (listed ?? []).filter((
-      frame,
-    ): frame is chrome.webNavigation.GetAllFrameResultDetails & { url: string } =>
-      frame !== null && typeof frame.url === 'string' && /^https?:/.test(frame.url));
-  } catch (error) {
-    debug('Could not enumerate frames for tab %d: %s', tabId, errorMessage(error));
-    return false;
-  }
-
-  let injectedAny = false;
-  for (const frame of frames) {
-    for (const injection of injections) {
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId, frameIds: [frame.frameId] },
-          files: injection.files,
-          world: injection.world,
-        });
-        injectedAny = true;
-      } catch (error) {
-        // This frame is not scriptable right now; the persistent
-        // registration covers it on its next load.
-        debug('Per-frame injection failed (tab %d, frame %d): %s', tabId, frame.frameId, errorMessage(error));
-      }
-    }
-  }
-  return injectedAny;
+export function injectSiteScripts(tabId: number): Promise<boolean> {
+  return siteAccessRegistration.inject(tabId);
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

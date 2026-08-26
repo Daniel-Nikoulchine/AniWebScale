@@ -111,7 +111,12 @@ export function createNativeSessionClient(send: Send = message => chrome.runtime
           ...(response.message !== undefined ? { message: response.message } : {}),
         };
       } finally {
-        pendingFallbacks.delete(input.videoId);
+        // A second request for the same video can supersede this one while the
+        // first response is still in flight. Never remove the newer ledger
+        // entry when the older request settles.
+        if (pendingFallbacks.get(input.videoId) === pending) {
+          pendingFallbacks.delete(input.videoId);
+        }
       }
     },
     async stop(input) {

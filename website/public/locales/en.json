@@ -78,7 +78,7 @@
     "message": "Drag the slider to compare the original frame with an Anime4K-enhanced preview."
   },
   "cmpTitle": {
-    "message": "From soft to<br><em>sparkling clear.</em>"
+    "message": "Soft source,<br><em>crisp render.</em>"
   },
   "colorTheme": {
     "message": "Color theme"
@@ -86,11 +86,20 @@
   "compareSliderAria": {
     "message": "Compare original and enhanced frame"
   },
+  "copyDiagnostics": {
+    "message": "Copy diagnostics"
+  },
   "description": {
     "message": "AniWebScale enhances anime video in real time using Anime4K, WebGPU and an optional local Windows renderer."
   },
   "diagnostics": {
     "message": "Diagnostics"
+  },
+  "diagnosticsCopied": {
+    "message": "Diagnostics copied to clipboard."
+  },
+  "diagnosticsCopyFailed": {
+    "message": "Could not copy diagnostics."
   },
   "disablingExtension": {
     "message": "Disabling extension..."
@@ -105,7 +114,10 @@
     "message": "Install AniWebScale and turn soft animation into crisp, smooth video in a few clicks."
   },
   "dlTitle": {
-    "message": "Your next episode<br>deserves a little magic."
+    "message": "Installed once.<br>Sharper from now on."
+  },
+  "documentationLink": {
+    "message": "Documentation and support"
   },
   "done": {
     "message": "Done"
@@ -177,7 +189,7 @@
     "message": "How do I get support?"
   },
   "faqKicker": {
-    "message": "04 / GOOD TO KNOW"
+    "message": "03 / GOOD TO KNOW"
   },
   "faqSub": {
     "message": "Still curious? The extension is designed to be predictable, local and easy to undo."
@@ -228,7 +240,7 @@
     "message": "Built for animated content where crisp outlines and subtle color transitions matter most."
   },
   "featTitle": {
-    "message": "A tiny extension with<br><em>serious sparkle.</em>"
+    "message": "One small extension.<br><em>Every frame sharpened.</em>"
   },
   "finishSetup": {
     "message": "Finish setup"
@@ -303,22 +315,16 @@
     "message": "Add to your browser"
   },
   "heroLead": {
-    "message": "Sharper line art, cleaner gradients and smoother motion for anime and animation — enhanced directly inside your browser."
+    "message": "Sharper line art, cleaner gradients and smoother motion for anime. It happens in real time, in your browser."
   },
   "heroSecondary": {
     "message": "See the difference"
   },
   "heroTitle": {
-    "message": "Make every frame<br><em>feel magical.</em>"
+    "message": "Sharper anime,<br><em>frame by frame.</em>"
   },
   "home": {
     "message": "Home"
-  },
-  "howKicker": {
-    "message": "03 / EASY AS 1—2—3"
-  },
-  "howTitle": {
-    "message": "Set it once. Enjoy <em>every frame.</em>"
   },
   "imprint": {
     "message": "Imprint"
@@ -359,14 +365,20 @@
   "langToggleAria": {
     "message": "Switch language"
   },
+  "language": {
+    "message": "Language"
+  },
+  "languageAuto": {
+    "message": "Auto (browser language)"
+  },
+  "languageDescription": {
+    "message": "Language of the extension interface."
+  },
   "liveStatistics": {
     "message": "Live statistics"
   },
   "menuOpen": {
     "message": "Open menu"
-  },
-  "miniProofAria": {
-    "message": "Core technologies"
   },
   "modeADescription": {
     "message": "Restores line detail, then applies Anime4K CNN upscaling. The balanced default for most anime."
@@ -449,9 +461,6 @@
   "navFeatures": {
     "message": "Features"
   },
-  "navHow": {
-    "message": "How it works"
-  },
   "navSupport": {
     "message": "Support"
   },
@@ -480,13 +489,19 @@
     "message": "Page not found — AniWebScale"
   },
   "onboardingTitle": {
-    "message": "Let's make your videos sparkle!"
+    "message": "Sharper anime, in real time."
   },
   "openMenu": {
     "message": "Open menu"
   },
+  "optionsSavedNotApplied": {
+    "message": "Settings saved, but could not be applied. Reload the video tab."
+  },
   "pageTitle": {
-    "message": "AniWebScale — Make every frame magical"
+    "message": "AniWebScale: sharper anime, in real time"
+  },
+  "permissionRestoreFailed": {
+    "message": "Permission request declined. The website was not restored."
   },
   "permissions": {
     "message": "Permissions"
@@ -602,20 +617,17 @@
   "profileSoftSources": {
     "message": "Soft sources"
   },
-  "proofAi": {
-    "message": "AI upscaling"
-  },
-  "proofMotion": {
-    "message": "Motion-aware 2x"
-  },
-  "proofNative": {
-    "message": "Native fallback"
-  },
-  "proofText": {
-    "message": "Loved by animation fans who notice every line"
-  },
   "quality": {
     "message": "Quality"
+  },
+  "qualityTierMedium": {
+    "message": "Medium"
+  },
+  "qualityTierUltraLarge": {
+    "message": "Ultra Large"
+  },
+  "qualityTierVeryLarge": {
+    "message": "Very Large"
   },
   "quickSetup": {
     "message": "Quick setup"
@@ -645,7 +657,7 @@
     "message": "Illustrative preview"
   },
   "repoCaptionStrong": {
-    "message": "Original procedurally authored comparison plate"
+    "message": "Original procedural comparison plate"
   },
   "repoKicker": {
     "message": "VISUAL PREVIEW"
@@ -654,7 +666,7 @@
     "message": "This side-by-side comparison plate is an original procedural illustration showing the visual difference between a soft source and a crisp enhanced render."
   },
   "repoTitle": {
-    "message": "See the effect.<br><em>Illustratively.</em>"
+    "message": "Soft on the left,<br><em>crisp on the right.</em>"
   },
   "requestingSiteAccess": {
     "message": "Requesting site access..."
@@ -757,24 +769,6 @@
   },
   "statusWindowsOnly": {
     "message": "Windows only"
-  },
-  "step1Text": {
-    "message": "Install AniWebScale in Chrome or Firefox."
-  },
-  "step1Title": {
-    "message": "Add the extension"
-  },
-  "step2Text": {
-    "message": "Choose a preset, quality and rendering backend."
-  },
-  "step2Title": {
-    "message": "Pick your look"
-  },
-  "step3Text": {
-    "message": "Enter fullscreen and let AniWebScale do the rest."
-  },
-  "step3Title": {
-    "message": "Press play"
   },
   "storeAvailableFor": {
     "message": "AVAILABLE FOR"
@@ -883,6 +877,15 @@
   },
   "termsTitle": {
     "message": "Terms of<br><em>Service.</em>"
+  },
+  "testRender": {
+    "message": "Run test render"
+  },
+  "testRenderFailed": {
+    "message": "Test render failed. WebGPU cannot render on this browser."
+  },
+  "testRenderPassed": {
+    "message": "Test render succeeded. WebGPU can render here."
   },
   "theme": {
     "message": "Theme"

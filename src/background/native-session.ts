@@ -39,6 +39,12 @@ import {
   selectRecoveredSessionTab,
 } from '../shared/session-recovery';
 import {
+  isNativePlaybackStateAuthorized,
+  isNativeSessionControlAuthorized,
+  isNativeSessionSenderAuthorized,
+  type NativeSessionControlMessage,
+} from '../shared/native-session-messages';
+import {
   resolveFullscreenExitState,
   type FullscreenExitFrameResponse,
 } from '../shared/fullscreen-exit';
@@ -51,6 +57,7 @@ import {
 } from '../background-helpers';
 import { NativeSessionStore } from './session-store';
 import { NativeBridge } from './native-bridge';
+import { NativeSessionTransport } from './native-session-transport';
 import type {
   NativeSessionRecord,
   NativeStatusSnapshot,
@@ -81,6 +88,7 @@ export interface SessionDependencies {
 export class NativeSession {
   readonly store: NativeSessionStore;
   readonly bridge: NativeBridge;
+  private readonly transport: NativeSessionTransport;
   private latestStatus: NativeStatusSnapshot = { active: false };
   private fullscreenExitSessionId: string | null = null;
   private deps: SessionDependencies;
@@ -88,6 +96,7 @@ export class NativeSession {
   constructor(deps: SessionDependencies) {
     this.store = new NativeSessionStore();
     this.bridge = new NativeBridge();
+    this.transport = new NativeSessionTransport(this.bridge, (event, client) => this.routeNativeEvent(event, client));
     this.deps = deps;
   }
 
@@ -99,6 +108,44 @@ export class NativeSession {
   /** The currently active session, if any. */
   get activeSession(): NativeSessionRecord | null {
     return this.store.activeSession;
+  }
+
+  /** Whether a native session is currently active. */
+  hasActiveSession(): boolean {
+    return this.store.activeSession !== null;
+  }
+
+  /** Authorize a session-control message against the active session. */
+  isControlAuthorized(
+    message: NativeSessionControlMessage,
+    sender: chrome.runtime.MessageSender,
+  ): boolean {
+    const session = this.store.activeSession;
+    return session !== null && isNativeSessionControlAuthorized(session, message, {
+      tabId: sender.tab?.id,
+      frameId: sender.frameId,
+    });
+  }
+
+  /** Authorize pointer/media messages against the active session owner. */
+  isSenderAuthorized(sender: chrome.runtime.MessageSender): boolean {
+    const session = this.store.activeSession;
+    return session !== null && isNativeSessionSenderAuthorized(session, {
+      tabId: sender.tab?.id,
+      frameId: sender.frameId,
+    });
+  }
+
+  /** Authorize a playback heartbeat against the active session. */
+  isPlaybackStateAuthorized(
+    message: NativeSessionControlMessage,
+    sender: chrome.runtime.MessageSender,
+  ): boolean {
+    const session = this.store.activeSession;
+    return session !== null && isNativePlaybackStateAuthorized(session, message, {
+      tabId: sender.tab?.id,
+      frameId: sender.frameId,
+    });
   }
 
   /** Run a state transition without overlapping another. */
@@ -172,6 +219,14 @@ export class NativeSession {
     const senderOrigin = sourceOrigin(sender);
     if (tabId === undefined || senderOrigin === null) {
       return { ok: false, status: 'denied', message: 'The native request did not come from a trusted HTTP(S) page origin.' };
+    }
+
+    const activeEnhancement = await this.store.loadActiveEnhancement();
+    if (!activeEnhancement
+        || activeEnhancement.tabId !== tabId
+        || activeEnhancement.frameId !== frameId
+        || activeEnhancement.videoId !== request.videoId) {
+      return { ok: false, status: 'denied', message: 'The native request did not belong to the active video.' };
     }
 
     // Consent is keyed to the user-visible top-level website, not a CDN/player
@@ -254,7 +309,7 @@ export class NativeSession {
       session.targetHeight = prepared.targetHeight;
       await this.store.persistSession(session);
 
-      const client = await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));
+      const client = await this.transport.connect();
       this.bridge.assertSupportsConfiguration(session.configuration);
       const started = await client.request<NativeStatusEvent>({
         ...nativeRequestBase(),
@@ -316,7 +371,7 @@ export class NativeSession {
   async updateNativeConfiguration(configuration: NativeConfiguration): Promise<void> {
     const session = this.store.activeSession;
     if (!session) throw new Error('No native session is active.');
-    const client = await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));
+    const client = await this.transport.connect();
     this.bridge.assertSupportsConfiguration(configuration);
     const status = await client.request<NativeStatusEvent>({
       ...nativeRequestBase(),
@@ -337,7 +392,7 @@ export class NativeSession {
     // A disconnected client can still have a previously queued callback. Never
     // reinterpret an unscoped transport error from that client as belonging to
     // the replacement native session.
-    if (sourceClient !== this.bridge.currentClient) return;
+    if (sourceClient !== this.transport.currentClient) return;
     const session = this.store.activeSession;
 
     if (event.type === 'pointer' || event.type === 'mediaCommand') {
@@ -595,7 +650,7 @@ export class NativeSession {
     const recoveredTab = await this.findRecoveredSessionTab(persisted);
     if (!recoveredTab || recoveredTab.id === undefined) {
       try {
-        await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));
+        await this.transport.connect();
       } catch {
         // Cleanup below is still safe when the host is already gone.
       }
@@ -621,7 +676,7 @@ export class NativeSession {
 
     if (persisted.phase !== 'active') {
       try {
-        await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));
+        await this.transport.connect();
       } catch {
         // Browser restoration below is still safe for the nonce-verified tab.
       }
@@ -630,7 +685,7 @@ export class NativeSession {
     }
 
     try {
-      const client = await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));
+      const client = await this.transport.connect();
       const status = await client.request<NativeStatusEvent>({
         ...nativeRequestBase(),
         type: 'status',
@@ -656,7 +711,7 @@ export class NativeSession {
   async forwardMediaCommand(command: NativeMediaCommandName, value?: number): Promise<void> {
     const session = this.store.activeSession;
     if (!session) throw new Error('No native session is active.');
-    const client = await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));
+    const client = await this.transport.connect();
     client.post({
       ...nativeRequestBase(),
       type: 'mediaCommand',
@@ -670,7 +725,7 @@ export class NativeSession {
   async forwardPointer(request: NativePointerPayload): Promise<void> {
     const session = this.store.activeSession;
     if (!session) throw new Error('No native session is active.');
-    const client = await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));
+    const client = await this.transport.connect();
     client.post({
       ...nativeRequestBase(),
       type: 'pointer',
@@ -699,14 +754,14 @@ export class NativeSession {
     if (!matchesExpectedNativeSession(session, expectedSessionId)) return;
     if (!session) {
       this.latestStatus = { active: false };
-      this.bridge.disconnect();
+      this.transport.disconnect();
       return;
     }
     session.phase = 'stopping';
     await this.store.persistSession(session);
-    if (notifyHost && this.bridge.currentClient?.connected) {
+    if (notifyHost && this.transport.currentClient?.connected) {
       try {
-        await this.bridge.currentClient.request({
+        await this.transport.currentClient.request({
           ...nativeRequestBase(),
           type: 'stop',
           sessionId: session.sessionId,
@@ -720,7 +775,7 @@ export class NativeSession {
       await this.restoreContent(session);
       if (requiresLegacyPopupRestore(session)) await this.restoreTab(session);
     }
-    this.bridge.disconnect();
+    this.transport.disconnect();
     await this.store.persistSession(null);
     const currentEnhancement = await this.store.loadActiveEnhancement();
     if (currentEnhancement?.tabId === session.tabId
@@ -737,7 +792,7 @@ export class NativeSession {
     playbackActive: boolean,
     mediaTime: number,
   ): Promise<void> {
-    const client = await this.bridge.connectAndHandshake((event, eventClient) => this.routeNativeEvent(event, eventClient));
+    const client = await this.transport.connect();
     client.post({
       protocolVersion: NATIVE_PROTOCOL_VERSION,
       requestId: `playback-${createRequestId()}`,

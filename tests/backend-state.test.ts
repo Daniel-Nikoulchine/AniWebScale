@@ -11,21 +11,18 @@ describe('BackendState', () => {
     expect(state.isWebGPUActive).toBe(false);
   });
 
-  it('beginTransition marks starting and returns a fresh revision', () => {
+  it('beginTransition marks the backend as starting', () => {
     const state = new BackendState();
-    const revision = state.beginTransition();
+    state.beginTransition();
     expect(state.phaseName).toBe('starting');
     expect(state.isBusy).toBe(true);
-    expect(state.isTransitionCurrent(revision)).toBe(true);
-    expect(state.isTransitionCurrent(revision + 1)).toBe(false);
   });
 
-  it('a superseding transition invalidates the previous revision', () => {
+  it('beginTransition does not own lifecycle revisions', () => {
     const state = new BackendState();
-    const first = state.beginTransition();
-    const second = state.beginTransition();
-    expect(state.isTransitionCurrent(first)).toBe(false);
-    expect(state.isTransitionCurrent(second)).toBe(true);
+    state.beginTransition();
+    state.beginTransition();
+    expect(state.phaseName).toBe('starting');
   });
 
   it('commits to webgpu-active and native-active phases', () => {
@@ -52,23 +49,20 @@ describe('BackendState', () => {
     expect(state.isBusy).toBe(false);
   });
 
-  it('destroy invalidates all transitions', () => {
+  it('destroy returns the backend to idle', () => {
     const state = new BackendState();
-    const revision = state.beginTransition();
+    state.beginTransition();
     state.destroy();
-    expect(state.isTransitionCurrent(revision)).toBe(false);
     expect(state.isBusy).toBe(false);
   });
 
-  it('markIdle does not clear the revision so stop-then-start still works', () => {
+  it('markIdle allows a later transition to start', () => {
     const state = new BackendState();
-    const start = state.beginTransition();
+    state.beginTransition();
     state.markWebGPUActive();
     state.markIdle();
-    // A subsequent start bumps the revision again.
-    const restart = state.beginTransition();
-    expect(restart).toBeGreaterThan(start);
-    expect(state.isTransitionCurrent(start)).toBe(false);
-    expect(state.isTransitionCurrent(restart)).toBe(true);
+    state.beginTransition();
+    expect(state.phaseName).toBe('starting');
+    expect(state.isBusy).toBe(true);
   });
 });

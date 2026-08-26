@@ -23,7 +23,6 @@ if (-not $BinaryDirectory) {
     $candidates = @(
         (Join-Path $nativeRoot 'build\bin\Release'),
         (Join-Path $nativeRoot 'build\bin'),
-        (Join-Path $nativeRoot 'build-exact\bin'),
         (Join-Path $nativeRoot 'tools'),
         $nativeRoot
     )

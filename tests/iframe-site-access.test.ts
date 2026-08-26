@@ -205,6 +205,31 @@ describe('IframeSiteAccessManager', () => {
     await expect(manager.handle('https://voe.sx', 7)).resolves.toEqual({ ok: true, outcome: 'prompting' });
   });
 
+  it('keeps a newer prompt protected when an abandoned prompt settles late', async () => {
+    let resolveFirst!: (granted: boolean) => void;
+    let resolveSecond!: (granted: boolean) => void;
+    const request = vi.fn()
+      .mockImplementationOnce(() => new Promise<boolean>(resolve => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise<boolean>(resolve => { resolveSecond = resolve; }));
+    const { advance, deps, manager } = installDeps({ request });
+
+    await manager.handle('https://voe.sx', 7);
+    advance(50_000);
+    await manager.handle('https://voe.sx', 7);
+    resolveFirst(false);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The late first response must not clear the second prompt's pending token.
+    await expect(manager.handle('https://voe.sx', 7)).resolves.toEqual({
+      ok: true,
+      outcome: 'suppressed',
+    });
+    expect(deps.request).toHaveBeenCalledTimes(2);
+    resolveSecond(false);
+    await manager.settled();
+  });
+
   it('rejects origins that cannot be granted', async () => {
     const { deps, manager } = installDeps();
     await expect(manager.handle('chrome://settings', 7)).resolves.toEqual({

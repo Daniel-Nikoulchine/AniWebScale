@@ -10,6 +10,7 @@ import type { Anime4KPipeline } from './pipeline-types';
 import { OverloadTracker } from './render-stats';
 import { FrameGeneration, type FrameGenerationHost } from './frame-generation';
 import { diffRendererConfig } from './renderer-config';
+import { EventScope } from '../shared/event-scope';
 
 const fullscreenQuadWGSL = `
 struct VertexOutput {
@@ -211,6 +212,11 @@ export interface RendererOptions {
   onStats?: (stats: RenderStats) => void;
 }
 
+/** VideoFrame uses a leading zero for its packed high-bit-depth formats. */
+function isHighBitVideoFrameFormat(format: string | null | undefined): boolean {
+  return /(?:P0?1[026]|I0?1[026])$/.test(format ?? '');
+}
+
 export class Renderer {
   private video: HTMLVideoElement;
   private readonly canvas: HTMLCanvasElement;
@@ -258,6 +264,7 @@ export class Renderer {
   private stateUpdateChain: Promise<void> = Promise.resolve();
   private cleanupScheduled = false;
   private readonly playbackStoppedHandler = () => this.handlePlaybackStopped();
+  private readonly videoEvents = new EventScope();
 
   private renderedSinceSample = 0;
   private statsWindowStarted = performance.now();
@@ -281,8 +288,7 @@ export class Renderer {
     this.onProgress = options.onProgress;
     this.onStats = options.onStats;
     this.videoFrameHandler = this.createVideoFrameHandler(this.video, this.videoSourceRevision);
-    this.video.addEventListener('pause', this.playbackStoppedHandler);
-    this.video.addEventListener('ended', this.playbackStoppedHandler);
+    this.observePlaybackEvents();
     // The host adapter reads through getters so device/texture swaps made
     // after construction (device recovery, source rebuilds) are always live.
     const thisRef = this;
@@ -317,6 +323,11 @@ export class Renderer {
         { cause: error as Error },
       );
     }
+  }
+
+  private observePlaybackEvents(): void {
+    this.videoEvents?.on(this.video, 'pause', this.playbackStoppedHandler);
+    this.videoEvents?.on(this.video, 'ended', this.playbackStoppedHandler);
   }
 
   private async initialize(): Promise<void> {
@@ -430,7 +441,7 @@ export class Renderer {
     try {
       const frame = new VideoFrame(this.video);
       try {
-        return /P1[02]$/.test(frame.format ?? '') ? 'rgba16float' : 'rgba8unorm';
+        return isHighBitVideoFrameFormat(frame.format) ? 'rgba16float' : 'rgba8unorm';
       } finally {
         frame.close();
       }
@@ -924,12 +935,10 @@ export class Renderer {
     this.stopFrameCallbacks();
     await this.waitForFrameIdle();
     if (this.destroyed) return;
-    this.video.removeEventListener('pause', this.playbackStoppedHandler);
-    this.video.removeEventListener('ended', this.playbackStoppedHandler);
+    this.videoEvents?.dispose();
     this.video = newVideo;
     this.videoFrameHandler = this.createVideoFrameHandler(this.video, this.videoSourceRevision);
-    this.video.addEventListener('pause', this.playbackStoppedHandler);
-    this.video.addEventListener('ended', this.playbackStoppedHandler);
+    this.observePlaybackEvents();
     this.useImageBitmap = false;
     this.firstFrameRendered = false;
     this.sourceDepthChecked = false;
@@ -978,8 +987,7 @@ export class Renderer {
   public destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.video.removeEventListener('pause', this.playbackStoppedHandler);
-    this.video.removeEventListener('ended', this.playbackStoppedHandler);
+    this.videoEvents?.dispose();
     this.stopFrameCallbacks();
     this.frameGeneration.destroy();
     if (this.cleanupScheduled) return;

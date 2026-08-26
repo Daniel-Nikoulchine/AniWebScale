@@ -2,6 +2,7 @@ import type { RenderStats } from '../types';
 import { fullscreenContainsVideo, getFullscreenElement } from '../shared/fullscreen-video';
 import { fullscreenContext } from './fullscreen-context';
 import { choosePlayerSurface } from '../shared/player-surface';
+import { EventScope } from '../shared/event-scope';
 import {
   applyTemporaryProperty,
   restoreTemporaryStyles,
@@ -16,7 +17,6 @@ export class OverlayManager {
   private readonly host: HTMLDivElement;
   private readonly shadowRoot: ShadowRoot;
   private readonly statsPanel: HTMLDivElement;
-  private readonly warningPanel: HTMLDivElement;
   private canvas?: HTMLCanvasElement;
   private canvasVisible = false;
   private opacitySnapshot: TemporaryInlineStyles = new Map();
@@ -29,6 +29,7 @@ export class OverlayManager {
   private readonly updateBound = () => this.schedulePositionUpdate();
   private readonly fullscreenBound = () => this.handleFullscreenChange();
   private readonly unsubscribeFullscreen: () => void;
+  private readonly videoEvents = new EventScope();
 
   private static readonly HOST_MARKER = 'data-anime4k-overlay-host';
 
@@ -61,11 +62,6 @@ export class OverlayManager {
     this.statsPanel.hidden = true;
     this.shadowRoot.appendChild(this.statsPanel);
 
-    this.warningPanel = document.createElement('div');
-    this.warningPanel.className = 'warning';
-    this.warningPanel.hidden = true;
-    this.shadowRoot.appendChild(this.warningPanel);
-
     this.resizeObserver = new ResizeObserver(this.updateBound);
     this.mutationObserver = new MutationObserver(this.updateBound);
     this.unsubscribeFullscreen = fullscreenContext.subscribe(this.fullscreenBound);
@@ -81,15 +77,14 @@ export class OverlayManager {
       attributes: true,
       attributeFilter: ['style', 'class', 'hidden'],
     });
-    this.video.addEventListener('play', this.updateBound, { passive: true });
-    this.video.addEventListener('loadedmetadata', this.updateBound, { passive: true });
+    this.videoEvents.on(this.video, 'play', this.updateBound, { passive: true });
+    this.videoEvents.on(this.video, 'loadedmetadata', this.updateBound, { passive: true });
   }
 
   private unobserveVideo(): void {
     this.resizeObserver.disconnect();
     this.mutationObserver.disconnect();
-    this.video.removeEventListener('play', this.updateBound);
-    this.video.removeEventListener('loadedmetadata', this.updateBound);
+    this.videoEvents.dispose();
     this.cancelPositionUpdate();
   }
 
@@ -190,7 +185,6 @@ export class OverlayManager {
     this.canvas = undefined;
     this.canvasVisible = false;
     this.setStats(null);
-    this.setWarning(null);
   }
 
   public setStats(stats: RenderStats | null): void {
@@ -201,11 +195,6 @@ export class OverlayManager {
     this.statsPanel.textContent = `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
     this.statsPanel.hidden = false;
     this.statsPanel.classList.toggle('overloaded', stats.warning);
-  }
-
-  public setWarning(message: string | null): void {
-    this.warningPanel.textContent = message ?? '';
-    this.warningPanel.hidden = !message;
   }
 
   public detach(): void {
@@ -271,7 +260,7 @@ export class OverlayManager {
     const style = document.createElement('style');
     style.textContent = `
       :host { pointer-events: none; font-family: system-ui, sans-serif; }
-      .stats, .warning {
+      .stats {
         position: absolute;
         left: 12px;
         bottom: 12px;
@@ -284,12 +273,6 @@ export class OverlayManager {
         font: 500 11px/1.35 ui-monospace, monospace;
       }
       .stats.overloaded { color: #ffd17a; }
-      .warning {
-        bottom: 42px;
-        background: rgba(111, 48, 0, .92);
-        color: #fff2dc;
-        font-family: system-ui, sans-serif;
-      }
       [hidden] { display: none !important; }
     `;
     this.shadowRoot.appendChild(style);

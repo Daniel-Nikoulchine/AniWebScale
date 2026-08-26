@@ -41,14 +41,11 @@ From the repository root, for the Ninja build layout used by the native build:
 
 ```powershell
 python tests/golden/run_shader_golden.py `
-  --native-exe native/build/bin/Anime4K.Golden.exe `
+  --native-exe native/build/bin/Release/Anime4K.Golden.exe `
   --report artifacts/shader-golden-report.json
 ```
 
-For a Visual Studio multi-configuration build, use
-`native/build/bin/Release/Anime4K.Golden.exe`. Add `--warp` only for a D3D11
-software diagnostic; the official GLSL and WebGPU paths still require their
-normal GPU backends.
+Add `--warp` only for a D3D11 software diagnostic; the official GLSL and WebGPU paths still require their normal GPU backends.
 
 Scratch files are restricted to `.tmp`. The schema-2 JSON report records every metric,
 the fixture and manifest hashes, the official source revision, and per-preset

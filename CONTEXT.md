@@ -9,6 +9,14 @@ diesen Konzepten benannt; Änderungen an der Bedeutung werden hier gepflegt.
 startet, stoppt, Einstellungen anwendet und zwischen Backends wechselt.
 Genau ein Enhancer ist gleichzeitig aktiv (`activeEnhancer`-Arbitration).
 
+**Enhancer-Lifecycle** — die geordnete Folge von Start, Stop, Backendwechsel,
+Einstellungsänderung und Fullscreen-Reconcile eines Enhancers. Sie darf keine
+veraltete Übergangsentscheidung nach einer neueren Änderung committen.
+
+**Video-Population** — die verwaltete Menge aller Video-Instanzen einer Seite.
+Sie umfasst Entdeckung, Zuordnung, Ersatz-Video-Reattach und Deinitialisierung;
+die Population entscheidet nicht selbst, welches Video fullscreen gewinnt.
+
 **Site Access** — die Nutzerfreigabe, auf welchen Origins die Extension
 überhaupt läuft (optional host permissions + dynamische Content-Script-
 Registrierung). Das **Site-Access-Service**-Modul in `src/site-access.ts`

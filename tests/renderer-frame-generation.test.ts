@@ -396,7 +396,7 @@ describe('source texture format detection', () => {
 
   it('promotes the source texture to rgba16float once a 10-bit stream is detected', async () => {
     const close = vi.fn();
-    vi.stubGlobal('VideoFrame', class { public format = 'I420P10'; public close = close; });
+    vi.stubGlobal('VideoFrame', class { public format = 'P010'; public close = close; });
     const renderer = formatProbeRenderer('rgba8unorm');
 
     renderer.probeSourceTextureFormat();
@@ -415,6 +415,13 @@ describe('source texture format detection', () => {
     renderer.rebuildForSourceResize = vi.fn(async () => { renderer.sourceFormatStale = false; });
     await expect(renderer.processFrame()).resolves.toBe(false);
     expect(renderer.rebuildForSourceResize).toHaveBeenCalledOnce();
+  });
+
+  it.each(['I420P10', 'I422P12', 'I444P16'])('recognizes planar high-bit format %s', async format => {
+    vi.stubGlobal('VideoFrame', class { public format = format; public close = vi.fn(); });
+    const renderer = formatProbeRenderer('rgba8unorm');
+
+    await expect(renderer.detectSourceTextureFormat()).resolves.toBe('rgba16float');
   });
 
   it('keeps rgba8unorm for 8-bit formats and stays quiet when formats match', async () => {

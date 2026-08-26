@@ -257,6 +257,12 @@ export function isVideoInFullscreenContext(
   const ownLayoutActive = document.documentElement?.hasAttribute(ANIME4K_FULLSCREEN_DOCUMENT_ATTR) ?? false;
   if (!allowGeometryFallback && ownLayoutActive) return false;
   if (!isVisibleVideo(video, video.getAttribute(ANIME4K_APPLIED_ATTR) === 'true')) return false;
+  // A cross-origin player frame has its own viewport. Its video rectangle is
+  // therefore expressed in frame-local coordinates and cannot be compared to
+  // the top-level screen metrics below. Filling that local viewport is the
+  // signal used for embedded hoster players and must also authorize native
+  // preparation, not only automatic enhancer election.
+  if (window.top !== window && videoFillsOwnViewport(video)) return true;
   // When the visible fullscreen element belongs to the top-level document,
   // measure against the top-level viewport rather than the (clipped) iframe.
   // Every property read on a cross-origin top window throws, so guarded

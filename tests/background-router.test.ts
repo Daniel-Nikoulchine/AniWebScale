@@ -9,29 +9,48 @@ const SESSION: NativeSessionIdentity = {
   videoId: 'video-1',
 };
 
-function installDeps(overrides: Partial<BackgroundRouterDependencies> = {}) {
+function installDeps(overrides: {
+  enhancement?: Partial<BackgroundRouterDependencies['enhancement']>;
+  native?: Partial<BackgroundRouterDependencies['native']>;
+  platform?: Partial<BackgroundRouterDependencies['platform']>;
+} = {}) {
   const deps: BackgroundRouterDependencies = {
-    claim: vi.fn(async () => ({ ok: true })),
-    releaseEnhancement: vi.fn(async () => undefined),
-    startNativeFallback: vi.fn(async () => ({ ok: true, sessionId: 'session-1' })),
-    activeSession: vi.fn(() => SESSION),
-    updateConfiguration: vi.fn(async () => undefined),
-    stopSession: vi.fn(async () => undefined),
-    status: vi.fn(() => ({ active: true, state: 'streaming' })),
-    sendPlaybackState: vi.fn(async () => undefined),
-    forwardMediaCommand: vi.fn(async () => undefined),
-    forwardPointer: vi.fn(async () => undefined),
-    loadActiveEnhancement: vi.fn(async () => ({ tabId: 7 })),
-    persistActiveEnhancement: vi.fn(async () => undefined),
-    serialized: vi.fn(task => task()),
-    isExtensionEnabled: vi.fn(async () => true),
-    readNativeConfiguration: vi.fn(async () => ({ mode: 'A', quality: 'M', frameGenerationEnabled: false })),
-    updateSiteAccess: vi.fn(async () => undefined),
-    requestFrameSiteAccess: vi.fn(async () => ({ ok: true, outcome: 'injected' as const })),
-    resetConsent: vi.fn(async () => undefined),
-    openOptionsPage: vi.fn(async () => undefined),
-    openOnboarding: vi.fn(async () => undefined),
-    ...overrides,
+    enhancement: {
+      claim: vi.fn(async () => ({ ok: true })),
+      release: vi.fn(async () => undefined),
+      loadActive: vi.fn(async () => ({ tabId: 7 })),
+      clearActive: vi.fn(async () => undefined),
+      ...overrides.enhancement,
+    },
+    native: {
+      startFallback: vi.fn(async () => ({ ok: true, sessionId: 'session-1' })),
+      activeSession: vi.fn(() => SESSION),
+      hasActiveSession: vi.fn(() => true),
+      isControlAuthorized: vi.fn((_message, sender) => sender.tab?.id === SESSION.tabId
+        && (sender.frameId ?? 0) === SESSION.frameId),
+      isPlaybackStateAuthorized: vi.fn((_message, sender) => sender.tab?.id === SESSION.tabId
+        && (sender.frameId ?? 0) === SESSION.frameId),
+      isSenderAuthorized: vi.fn(sender => sender.tab?.id === SESSION.tabId
+        && (sender.frameId ?? 0) === SESSION.frameId),
+      updateConfiguration: vi.fn(async () => undefined),
+      stopSession: vi.fn(async () => undefined),
+      status: vi.fn(() => ({ active: true, state: 'streaming' })),
+      sendPlaybackState: vi.fn(async () => undefined),
+      forwardMediaCommand: vi.fn(async () => undefined),
+      forwardPointer: vi.fn(async () => undefined),
+      readConfiguration: vi.fn(async () => ({ mode: 'A', quality: 'M', frameGenerationEnabled: false })),
+      ...overrides.native,
+    },
+    platform: {
+      serialized: vi.fn(task => task()),
+      isExtensionEnabled: vi.fn(async () => true),
+      updateSiteAccess: vi.fn(async () => undefined),
+      requestFrameSiteAccess: vi.fn(async () => ({ ok: true, outcome: 'injected' as const })),
+      resetConsent: vi.fn(async () => undefined),
+      openOptionsPage: vi.fn(async () => undefined),
+      openOnboarding: vi.fn(async () => undefined),
+      ...overrides.platform,
+    },
   };
   return { deps, handleMessage: createBackgroundRouter(deps) };
 }
@@ -57,7 +76,7 @@ describe('background router', () => {
   });
 
   it('denies native fallback while the extension is disabled', async () => {
-    const { deps, handleMessage } = installDeps({ isExtensionEnabled: vi.fn(async () => false) });
+    const { deps, handleMessage } = installDeps({ platform: { isExtensionEnabled: vi.fn(async () => false) } });
     await expect(handleMessage({
       type: 'NATIVE_FALLBACK_REQUEST',
       videoId: 'video-1',
@@ -70,7 +89,7 @@ describe('background router', () => {
       status: 'denied',
       message: 'AniWebScale is disabled.',
     });
-    expect(deps.startNativeFallback).not.toHaveBeenCalled();
+    expect(deps.native.startFallback).not.toHaveBeenCalled();
   });
 
   it('rejects control messages from senders outside the active session', async () => {
@@ -87,45 +106,91 @@ describe('background router', () => {
     });
   });
 
+  it('rejects native input commands from a different tab or frame', async () => {
+    const { deps, handleMessage } = installDeps();
+    const outsider = { tab: { id: 99 }, frameId: 4 } as unknown as chrome.runtime.MessageSender;
+
+    await expect(handleMessage({ type: 'NATIVE_MEDIA_COMMAND', command: 'pause' }, outsider))
+      .resolves.toEqual({
+        ok: false,
+        message: 'The native media command did not come from the active session.',
+      });
+    await expect(handleMessage({
+      type: 'NATIVE_POINTER', event: 'move', x: 0.5, y: 0.5,
+    }, outsider)).resolves.toEqual({
+      ok: false,
+      message: 'The native pointer event did not come from the active session.',
+    });
+    expect(deps.native.forwardMediaCommand).not.toHaveBeenCalled();
+    expect(deps.native.forwardPointer).not.toHaveBeenCalled();
+  });
+
+  it('forwards native input commands only from the owning frame', async () => {
+    const { deps, handleMessage } = installDeps();
+    const owner = senderFrom();
+
+    await expect(handleMessage({ type: 'NATIVE_MEDIA_COMMAND', command: 'pause' }, owner))
+      .resolves.toEqual({ ok: true });
+    await expect(handleMessage({
+      type: 'NATIVE_POINTER', event: 'move', x: 0.5, y: 0.5,
+    }, owner)).resolves.toEqual({ ok: true });
+    expect(deps.native.forwardMediaCommand).toHaveBeenCalledWith('pause', undefined);
+    expect(deps.native.forwardPointer).toHaveBeenCalledWith(expect.objectContaining({ event: 'move' }));
+  });
+
   it('stops the session and clears the claim when settings arrive while disabled', async () => {
-    const { deps, handleMessage } = installDeps({ isExtensionEnabled: vi.fn(async () => false) });
+    const { deps, handleMessage } = installDeps({ platform: { isExtensionEnabled: vi.fn(async () => false) } });
 
     await expect(handleMessage({ type: 'SETTINGS_UPDATED' }, senderFrom())).resolves.toEqual({ ok: true });
-    expect(deps.stopSession).toHaveBeenCalledWith('AniWebScale was disabled.', true);
-    expect(deps.persistActiveEnhancement).toHaveBeenCalledWith(null);
-    expect(deps.updateConfiguration).not.toHaveBeenCalled();
+    expect(deps.native.stopSession).toHaveBeenCalledWith('AniWebScale was disabled.', true);
+    expect(deps.enhancement.clearActive).toHaveBeenCalled();
+    expect(deps.native.updateConfiguration).not.toHaveBeenCalled();
   });
 
   it('pushes the persisted configuration only for an orphaned live session', async () => {
     const { deps, handleMessage } = installDeps();
 
     await expect(handleMessage({ type: 'SETTINGS_UPDATED' }, senderFrom())).resolves.toEqual({ ok: true });
-    expect(deps.readNativeConfiguration).toHaveBeenCalled();
-    expect(deps.updateConfiguration).toHaveBeenCalledWith({
+    expect(deps.native.readConfiguration).toHaveBeenCalled();
+    expect(deps.native.updateConfiguration).toHaveBeenCalledWith({
       mode: 'A', quality: 'M', frameGenerationEnabled: false,
     });
 
-    const idle = installDeps({ activeSession: vi.fn(() => null) });
+    const idle = installDeps({
+      native: {
+        activeSession: vi.fn(() => null),
+        hasActiveSession: vi.fn(() => false),
+      },
+    });
     await idle.handleMessage({ type: 'SETTINGS_UPDATED' }, senderFrom());
-    expect(idle.deps.updateConfiguration).not.toHaveBeenCalled();
+    expect(idle.deps.native.updateConfiguration).not.toHaveBeenCalled();
   });
 
   it('resets one consent origin or all of them', async () => {
     const { deps, handleMessage } = installDeps();
     await handleMessage({ type: 'NATIVE_RESET_CONSENT', origin: 'https://a.example' }, senderFrom());
-    expect(deps.resetConsent).toHaveBeenCalledWith('https://a.example');
+    expect(deps.platform.resetConsent).toHaveBeenCalledWith('https://a.example');
     await handleMessage({ type: 'NATIVE_RESET_CONSENT' }, senderFrom());
-    expect(deps.resetConsent).toHaveBeenCalledWith(undefined);
+    expect(deps.platform.resetConsent).toHaveBeenCalledWith(undefined);
+  });
+
+  it('rejects an invalid consent origin without clearing all consents', async () => {
+    const { deps, handleMessage } = installDeps();
+    await expect(handleMessage({
+      type: 'NATIVE_RESET_CONSENT',
+      origin: 'javascript:alert(1)',
+    }, senderFrom())).resolves.toEqual({ ok: false, message: 'Invalid consent origin.' });
+    expect(deps.platform.resetConsent).not.toHaveBeenCalled();
   });
 
   it('routes site-access sync, options and onboarding to their deps', async () => {
     const { deps, handleMessage } = installDeps();
     await handleMessage({ type: 'SITE_ACCESS_SYNC' }, senderFrom());
-    expect(deps.updateSiteAccess).toHaveBeenCalledTimes(1);
+    expect(deps.platform.updateSiteAccess).toHaveBeenCalledTimes(1);
     await handleMessage({ type: 'OPEN_OPTIONS_PAGE' }, senderFrom());
-    expect(deps.openOptionsPage).toHaveBeenCalledTimes(1);
+    expect(deps.platform.openOptionsPage).toHaveBeenCalledTimes(1);
     await handleMessage({ type: 'OPEN_ONBOARDING' }, senderFrom());
-    expect(deps.openOnboarding).toHaveBeenCalledTimes(1);
+    expect(deps.platform.openOnboarding).toHaveBeenCalledTimes(1);
   });
 
   it('routes fullscreen player access requests to the manager', async () => {
@@ -135,7 +200,7 @@ describe('background router', () => {
       type: 'SITE_ACCESS_IFRAME_REQUEST',
       origin: 'https://voe.sx',
     }, sender)).resolves.toEqual({ ok: true, outcome: 'injected' });
-    expect(deps.requestFrameSiteAccess).toHaveBeenCalledWith('https://voe.sx', sender);
+    expect(deps.platform.requestFrameSiteAccess).toHaveBeenCalledWith('https://voe.sx', sender);
   });
 
   it('rejects player access requests with a non-http origin', async () => {
@@ -144,7 +209,7 @@ describe('background router', () => {
       type: 'SITE_ACCESS_IFRAME_REQUEST',
       origin: 'chrome://settings',
     }, senderFrom())).resolves.toEqual({ ok: false, message: 'Invalid player origin.' });
-    expect(deps.requestFrameSiteAccess).not.toHaveBeenCalled();
+    expect(deps.platform.requestFrameSiteAccess).not.toHaveBeenCalled();
   });
 
   it('spreads the mirrored status into the status response', async () => {

@@ -7,125 +7,99 @@
   <title>AniWebScale Settings</title>
 </head>
 <body>
-  <header class="site-header">
-    <a class="brand" href="#top" aria-label="AniWebScale settings home" data-i18n-aria-label="settingsHome"><img src="icons/icon128.png" alt="" width="40" height="40"><span>AniWebScale</span></a>
-    <button class="menu-button" type="button" aria-expanded="false" aria-controls="settings-nav"><span></span><span></span><span></span><span class="sr-only" data-i18n="openMenu">Open menu</span></button>
-    <nav id="settings-nav" aria-label="Settings navigation">
-      <a class="active" href="#enhancement" data-i18n="enhancement">Enhancement</a>
-      <a href="#permissions" data-i18n="permissions">Permissions</a>
-      <a href="#appearance" data-i18n="appearance">Appearance</a>
-      <a href="#diagnostics" data-i18n="diagnostics">Diagnostics</a>
-    </nav>
-    <div class="header-actions">
-      <button id="theme-toggle" class="theme-button" type="button" aria-label="Switch to dark theme">
-        <span class="sun icon-sun" aria-hidden="true">
-          <svg class="lucide lucide-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path>
-          </svg>
-        </span>
-        <span class="moon icon-moon" aria-hidden="true">
-          <svg class="lucide lucide-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path>
-          </svg>
-        </span>
-      </button>
-    </div>
-  </header>
-
   <main id="top">
-    <h1 class="sr-only">AniWebScale Settings</h1>
+    <div class="setup-panel">
+      <header class="panel-header">
+        <a class="brand" href="#top" aria-label="AniWebScale settings home" data-i18n-aria-label="settingsHome"><img src="icons/icon128.png" alt="" width="30" height="30"><span>AniWebScale</span></a>
+        <div class="header-actions">
+          <button id="theme-toggle" class="theme-button" type="button" aria-label="Switch to dark theme">
+            <span class="sun icon-sun" aria-hidden="true">
+              <svg class="lucide lucide-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path>
+              </svg>
+            </span>
+            <span class="moon icon-moon" aria-hidden="true">
+              <svg class="lucide lucide-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path>
+              </svg>
+            </span>
+          </button>
+        </div>
+      </header>
 
-    <div class="section-intro" id="enhancement">
-      <span class="heading-icon lavender" aria-hidden="true">&#10022;</span>
-      <h2 data-i18n="enhancement">Enhancement</h2>
-    </div>
-    <section class="card enhancement-card">
-      <div class="card-main">
-        <div class="settings-grid">
-          <label class="mode-select-field"><span data-i18n="enhancementMode">Enhancement mode</span>
-            <select id="mode">
-              <option value="OFF">Off</option>
-              <optgroup label="Anime4K presets">
-                <option value="A">A</option><option value="B">B</option><option value="C">C</option>
-                <option value="AA">A+A</option><option value="BB">B+B</option><option value="CA">C+A</option>
-              </optgroup>
-              <optgroup label="AI upscaling">
-                <option value="CNNX2">CNN Upscale x2</option><option value="ARTCNN">ArtCNN C4F16 x2 (GLSL)</option><option value="ACNET">ACNet F8B4 x2 (GLSL)</option><option value="ARNET">ARNet F8B8 x2 (GLSL)</option>
-              </optgroup>
-            </select>
-          </label>
-          <label><span data-i18n="quality">Quality</span><select id="quality"><option value="M">Medium (M)</option><option value="VL">Very Large (VL)</option><option value="UL">Ultra Large (UL)</option></select></label>
-          <label><span data-i18n="backend">Backend</span><select id="backend"><option value="auto">Auto</option><option value="webgpu">WebGPU (hardware acceleration required)</option><option value="native">Native Windows renderer (hardware acceleration off)</option></select></label>
-        </div>
-        <div class="mode-summary">
-          <p id="mode-description"></p>
-          <span id="mode-profile" class="mode-profile"></span>
-        </div>
+      <h1 class="sr-only">AniWebScale Settings</h1>
 
-        <div class="toggle-list">
-          <label class="check"><input id="frame-generation" type="checkbox"><span class="check-control"></span><span><strong>Frame generation</strong><small id="frame-generation-description">Generate a motion-aware intermediate frame for 2x frame rate.</small></span></label>
-          <label class="check"><input id="statistics" type="checkbox"><span class="check-control"></span><span><strong>Real-time statistics</strong><small>Show FPS, render time and dropped frames over the video.</small></span></label>
-        </div>
-      </div>
-      <aside class="side-notes">
-        <div class="note-card mint-note"><span aria-hidden="true">&#10003;</span><p><strong>Smart by default</strong>Auto tries WebGPU first and requests native rendering only when needed.</p></div>
+      <nav id="settings-nav" aria-label="Settings navigation">
+        <a class="active" href="#enhancement" data-i18n="enhancement">Enhancement</a>
+        <a href="#permissions" data-i18n="permissions">Permissions</a>
+        <a href="#appearance" data-i18n="appearance">Appearance</a>
+        <a href="#diagnostics" data-i18n="diagnostics">Diagnostics</a>
+      </nav>
+
+      <section class="feature" id="enhancement">
+        <div class="section-heading"><h2 data-i18n="enhancement">Enhancement</h2></div>
+        <div id="enhancement-controls" class="settings-grid"></div>
+
+        <div id="enhancement-toggles" class="toggle-list"></div>
+
         <div class="note-card pink-note"><span aria-hidden="true">!</span><p><strong>Streaming video stays black?</strong>Native capture may work after turning browser hardware acceleration off and restarting. WebGPU requires hardware acceleration.</p></div>
-        <p class="tiny-note">AniWebScale never bypasses DRM and keeps your selected quality when the frame budget is exceeded.</p>
-        <p class="note warning">A+A, B+B and C+A are intended for at least 2x output and may oversharpen at smaller scales.</p>
         <p id="compatibility-hint" class="note warning ai-warning" hidden></p>
-      </aside>
-    </section>
+      </section>
 
-    <div class="section-intro" id="permissions">
-      <span class="heading-icon blue" aria-hidden="true">&#9671;</span>
-      <h2 data-i18n="sitePermissions">Website permissions</h2>
-    </div>
-    <section class="card permission-card">
-      <div><h3 data-i18n="websiteAccess">Website access</h3><p class="note" data-i18n="websiteAccessDescription">AniWebScale runs only on sites you explicitly allow from the popup.</p></div>
-      <div id="website-sites"></div>
-      <button id="clear-website-sites" class="outline" type="button" data-i18n="clearWebsiteAccess">Clear website access</button>
-    </section>
-    <section class="card permission-card">
-      <div><h3 data-i18n="nativeRendererPermissions">Native renderer permissions</h3><p class="note">Permission is requested once per site and stored only on this computer.</p></div>
-      <div id="native-sites"></div>
-      <button id="clear-native-sites" class="outline" type="button" data-i18n="clearPermissions">Clear all permissions</button>
-    </section>
+      <section class="feature" id="permissions">
+        <div class="section-heading"><h2 data-i18n="sitePermissions">Website permissions</h2></div>
+        <div class="perm-group">
+          <h3 data-i18n="websiteAccess">Website access</h3><p class="note" data-i18n="websiteAccessDescription">AniWebScale runs only on sites you explicitly allow from the popup.</p>
+          <div id="website-sites" class="site-list"></div>
+          <button id="clear-website-sites" class="outline" type="button" data-i18n="clearWebsiteAccess">Clear website access</button>
+        </div>
+        <div class="perm-group">
+          <h3 data-i18n="nativeRendererPermissions">Native renderer permissions</h3><p class="note">Permission is requested once per site and stored only on this computer.</p>
+          <div id="native-sites" class="site-list"></div>
+          <button id="clear-native-sites" class="outline" type="button" data-i18n="clearPermissions">Clear all permissions</button>
+        </div>
+      </section>
 
-    <div class="section-intro" id="appearance">
-      <span class="heading-icon pink" aria-hidden="true">&#9788;</span>
-      <h2 data-i18n="appearance">Appearance</h2>
-    </div>
-    <section class="card appearance-card">
-      <div><h3 data-i18n="theme">Theme</h3><p class="note">Follow your system or choose your favorite atmosphere.</p></div>
-      <label class="theme-field"><span data-i18n="colorTheme">Color theme</span><select id="theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-    </section>
+      <section class="feature" id="appearance">
+        <div class="section-heading"><h2 data-i18n="appearance">Appearance</h2></div>
+        <div class="perm-group">
+          <h3 data-i18n="colorTheme">Color theme</h3><p class="note">Follow your system or choose your favorite atmosphere.</p>
+          <label class="theme-field"><span data-i18n="colorTheme">Color theme</span><select id="theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        </div>
+        <div class="perm-group">
+          <h3 data-i18n="language">Language</h3><p class="note" data-i18n="languageDescription">Language of the extension interface.</p>
+          <label class="theme-field"><span data-i18n="language">Language</span><select id="language"><option value="auto" data-i18n="languageAuto">Auto (browser language)</option><option value="en">English</option><option value="de">Deutsch</option></select></label>
+        </div>
+      </section>
 
-    <div class="section-intro" id="diagnostics">
-      <span class="heading-icon lavender" aria-hidden="true">&#9881;</span>
-      <h2 data-i18n="diagnostics">Diagnostics</h2>
-    </div>
-    <section class="card permission-card">
-      <div><h3 data-i18n="verboseLogging">Verbose logging</h3><p class="note" data-i18n="verboseLoggingDescription">Write detailed diagnostic messages to the browser console. Useful when troubleshooting; leave off for normal use.</p></div>
-      <label class="check"><input id="verbose-logging" type="checkbox"><span class="check-control"></span><span><strong data-i18n="enableVerboseLogging">Enable verbose logging</strong><small data-i18n="verboseLoggingHint">Logs stash, pipeline and renderer events to the DevTools console.</small></span></label>
-    </section>
-    <section class="card diagnostics-card">
-      <div class="diagnostics-head">
-        <h3 data-i18n="systemStatus">System status</h3>
-        <p class="note" data-i18n="systemStatusDescription">Current rendering capabilities of this browser.</p>
+      <section class="feature" id="diagnostics">
+        <div class="section-heading"><h2 data-i18n="diagnostics">Diagnostics</h2></div>
+        <div class="perm-group">
+          <h3 data-i18n="verboseLogging">Verbose logging</h3><p class="note" data-i18n="verboseLoggingDescription">Write detailed diagnostic messages to the browser console. Useful when troubleshooting; leave off for normal use.</p>
+          <div id="verbose-logging-toggle"></div>
+        </div>
+        <div class="perm-group">
+          <h3 data-i18n="systemStatus">System status</h3><p class="note" data-i18n="systemStatusDescription">Current rendering capabilities of this browser.</p>
+          <div class="status-rows">
+            <div class="status-row"><span data-i18n="webgpuStatusLabel">WebGPU</span><span id="webgpu-status" class="status-badge checking">Checking...</span></div>
+            <div class="status-row"><span data-i18n="nativeHostStatusLabel">Native renderer</span><span id="native-host-status" class="status-badge checking">Checking...</span></div>
+          </div>
+          <div class="diagnostics-actions">
+            <button id="test-render" class="outline" type="button" data-i18n="testRender">Run test render</button>
+            <button id="copy-diagnostics" class="outline" type="button" data-i18n="copyDiagnostics">Copy diagnostics</button>
+            <button id="reset-settings" class="outline danger" type="button" data-i18n="resetToDefaults">Reset to defaults</button>
+          </div>
+          <p class="help-link"><a href="https://github.com/Daniel-Nikoulchine/AniWebScale#readme" target="_blank" rel="noopener" data-i18n="documentationLink">Documentation and support</a></p>
+        </div>
+      </section>
+
+      <div class="actions">
+        <span class="auto-save-hint" data-i18n="autoSaveHint">Changes are saved automatically.</span>
+        <div id="status" role="status" aria-live="polite"></div>
       </div>
-      <div class="status-rows">
-        <div class="status-row"><span data-i18n="webgpuStatusLabel">WebGPU</span><span id="webgpu-status" class="status-badge checking">Checking...</span></div>
-        <div class="status-row"><span data-i18n="nativeHostStatusLabel">Native renderer</span><span id="native-host-status" class="status-badge checking">Checking...</span></div>
-      </div>
-      <button id="reset-settings" class="outline" type="button" data-i18n="resetToDefaults">Reset to defaults</button>
-    </section>
-
-    <div class="actions">
-      <span class="auto-save-hint" data-i18n="autoSaveHint">Changes are saved automatically.</span>
-      <div id="status" role="status" aria-live="polite"></div>
     </div>
-    <div id="undo-toast" class="undo-toast" role="status" aria-live="polite" hidden></div>
-    <footer>AniWebScale <span id="version"></span><i></i>MIT-licensed shaders<i></i>No telemetry</footer>
   </main>
+  <div id="undo-toast" class="undo-toast" role="status" aria-live="polite" hidden></div>
+  <footer>AniWebScale <span id="version"></span><i></i>MIT-licensed shaders<i></i>No telemetry</footer>
 </body>
 </html>

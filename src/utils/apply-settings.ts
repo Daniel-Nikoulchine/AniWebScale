@@ -5,15 +5,37 @@ import { saveLocalSettings, saveSettings } from './settings';
 
 export type SettingsApplyResult = 'applied' | 'saved-not-applied' | 'failed';
 
+/** The only settings shape UI surfaces may submit for persistence. */
+export type SettingsUpdate = Partial<Anime4KWebExtSettings>;
+
+/** Local-only values saved together with a render settings update. */
+export interface SettingsApplyOptions {
+  local?: Partial<LocalSettings>;
+}
+
 /**
  * The one home for "save settings and make them take effect": persist the
  * render settings (plus any local-only flags), notify the background and
  * report the three-phase outcome. UI pages collect fields; they no longer
  * compose save/notify/error tiers themselves.
  */
-export async function applySettings(
-  update: Partial<Anime4KWebExtSettings>,
-  extraLocal: Partial<LocalSettings> = {},
+let applyChain: Promise<unknown> = Promise.resolve();
+
+export function applySettings(
+  update: SettingsUpdate,
+  options: SettingsApplyOptions = {},
+): Promise<SettingsApplyResult> {
+  const result = applyChain.then(
+    () => applySettingsNow(update, options.local ?? {}),
+    () => applySettingsNow(update, options.local ?? {}),
+  );
+  applyChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function applySettingsNow(
+  update: SettingsUpdate,
+  extraLocal: Partial<LocalSettings>,
 ): Promise<SettingsApplyResult> {
   try {
     await saveSettings(update);

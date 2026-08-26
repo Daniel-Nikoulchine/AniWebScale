@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 function messages(locale: string): Record<string, { message: string }> {
   return JSON.parse(readFileSync(`public/_locales/${locale}/messages.json`, 'utf8'));
@@ -31,5 +31,80 @@ describe('extension localization catalog', () => {
         expect(website[key], `website locale "${locale}" is missing extension key "${key}"`).toEqual(value);
       }
     }
+  });
+});
+
+describe('user-selected UI language', () => {
+  type StorageValue = Record<string, { message?: string } | string | undefined>;
+
+  const storage: { data: StorageValue; browserLanguage: string } = {
+    data: {},
+    browserLanguage: 'en',
+  };
+
+  function reimportModule() {
+    vi.resetModules();
+    return import('../src/ui/i18n');
+  }
+
+  beforeEach(() => {
+    storage.data = {};
+    storage.browserLanguage = 'en';
+    vi.stubGlobal('chrome', {
+      i18n: { getUILanguage: () => storage.browserLanguage },
+      storage: {
+        local: {
+          get: vi.fn(async (keys: string[]) => {
+            const out: Record<string, unknown> = {};
+            for (const key of keys) if (key in storage.data) out[key] = storage.data[key];
+            return out;
+          }),
+          set: vi.fn(async (values: StorageValue) => {
+            Object.assign(storage.data, values);
+          }),
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it('follows the browser UI language when set to auto', async () => {
+    storage.browserLanguage = 'de';
+    const { initI18n, getResolvedLanguage, message } = await reimportModule();
+    await initI18n();
+    expect(getResolvedLanguage()).toBe('de');
+    expect(message('theme')).toBe('Design');
+  });
+
+  it('uses the explicitly selected catalog over the browser language', async () => {
+    storage.browserLanguage = 'en';
+    storage.data.uiLanguage = 'de';
+    const { initI18n, getResolvedLanguage, message, getUiLanguage } = await reimportModule();
+    await initI18n();
+    expect(getUiLanguage()).toBe('de');
+    expect(getResolvedLanguage()).toBe('de');
+    expect(message('theme')).toBe('Design');
+  });
+
+  it('switches the catalog immediately without a reload', async () => {
+    storage.browserLanguage = 'de';
+    const { initI18n, setUiLanguage, getResolvedLanguage, message } = await reimportModule();
+    await initI18n();
+    await setUiLanguage('en');
+    expect(getResolvedLanguage()).toBe('en');
+    expect(message('theme')).toBe('Theme');
+    expect(storage.data.uiLanguage).toBe('en');
+  });
+
+  it('keeps the shared chrome.i18n fallback for keys only the engine knows', async () => {
+    storage.browserLanguage = 'en';
+    const { initI18n, message } = await reimportModule();
+    await initI18n();
+    // Not a catalog key (extensions provide it at runtime) — envelope fallback.
+    expect(message('totallyMissingKey', 'fallback')).toBe('fallback');
   });
 });

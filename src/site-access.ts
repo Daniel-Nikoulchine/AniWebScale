@@ -88,13 +88,6 @@ export async function getGrantedSitePatterns(): Promise<string[]> {
   return [...new Set((granted.origins ?? []).filter(isHttpMatchPattern))].sort();
 }
 
-export async function requestSiteAccess(input: string | undefined): Promise<boolean> {
-  const pattern = sitePatternForUrl(input);
-  if (!pattern) return false;
-  if (isBroadSitePattern(pattern)) return true;
-  return chrome.permissions.request({ origins: [pattern] });
-}
-
 export async function removeSiteAccess(input: string | undefined): Promise<boolean> {
   const pattern = sitePatternForUrl(input);
   return pattern ? chrome.permissions.remove({ origins: [pattern] }) : false;

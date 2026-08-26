@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  FULLSCREEN_EXIT_GRACE_MS,
   fullscreenContainsVideo,
   getAuthoritativeFullscreenElement,
   hasFullscreenContext,
   isFullscreenVideoEligible,
   isVideoInFullscreenContext,
+  isWithinFullscreenExitGrace,
   rectOccupiesViewport,
   resetFullscreenApiTracking,
   videoFillsOwnViewport,
@@ -245,7 +247,7 @@ describe('fullscreen geometry fallback', () => {
     }
   });
 
-  it('blocks the geometry fallback once after the Fullscreen API exits, then allows it again', () => {
+  it('blocks the geometry fallback while the Fullscreen API exit grace runs, then allows it again', () => {
     const video = {
       parentNode: null,
       getRootNode: () => null,
@@ -263,7 +265,7 @@ describe('fullscreen geometry fallback', () => {
     topWindow.top = topWindow;
     vi.stubGlobal('window', topWindow);
     vi.stubGlobal('screen', { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040 });
-    // First call: fullscreen is active, API usage is recorded.
+    // First call: fullscreen is active, the API usage timestamp is recorded.
     const fullscreenEl = { parentNode: null, getRootNode: () => null } as unknown as Element;
     vi.stubGlobal('document', {
       fullscreenElement: fullscreenEl,
@@ -274,19 +276,29 @@ describe('fullscreen geometry fallback', () => {
       display: 'block', visibility: 'visible', opacity: '1',
     }));
     try {
-      // Video is not inside the fullscreen element, so this returns false,
-      // but fullscreenApiActive is now set to true.
       isVideoInFullscreenContext(video);
-      // Second call: fullscreen exited (null), geometry would pass but must be blocked.
-      vi.stubGlobal('document', {
+      expect(isWithinFullscreenExitGrace()).toBe(false);
+      // Second call: fullscreen just exited (null). Geometry would pass, but
+      // players keep the video near-fullscreen size while collapsing, so it
+      // stays blocked for the whole grace window.
+      const exitedDocument = {
         fullscreenElement: null,
         webkitFullscreenElement: null,
         documentElement: { hasAttribute: () => false, clientWidth: 1920, clientHeight: 1080 },
-      });
+      };
+      vi.stubGlobal('document', exitedDocument);
       expect(isVideoInFullscreenContext(video)).toBe(false);
-      // Third call: flag was reset, geometry fallback is allowed again (CSS fullscreen).
+      expect(isWithinFullscreenExitGrace()).toBe(true);
+      // Repeated reconciles inside the window agree instead of the first
+      // caller consuming a one-shot block.
+      expect(isVideoInFullscreenContext(video)).toBe(false);
+      // After the grace expires, a later CSS fullscreen may use geometry again.
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + FULLSCREEN_EXIT_GRACE_MS + 1);
       expect(isVideoInFullscreenContext(video)).toBe(true);
+      expect(isWithinFullscreenExitGrace()).toBe(false);
     } finally {
+      vi.useRealTimers();
       vi.unstubAllGlobals();
     }
   });

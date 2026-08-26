@@ -32,6 +32,7 @@ import { matchesExpectedNativeEvent } from '../shared/session-recovery';
 import { getEffectsForPreset, getSettings } from '../utils/settings';
 import {
   isVideoInFullscreenContext,
+  isWithinFullscreenExitGrace,
   videoFillsOwnViewport,
 } from '../shared/fullscreen-video';
 import { OverlayManager } from './overlay-manager';
@@ -891,6 +892,11 @@ export class VideoEnhancer {
   private hasPlayerFullscreenSignal(): boolean {
     const fullscreen = fullscreenContext.element;
     if (fullscreen && fullscreen.contains && fullscreen.contains(this.video)) return true;
+    // A player that just left real fullscreen often keeps the video at
+    // near-fullscreen size while its layout settles. The embedded-player
+    // geometry signal must not read that as an active player fullscreen and
+    // resurrect the session the exit was supposed to end.
+    if (isWithinFullscreenExitGrace()) return false;
     return videoFillsOwnViewport(this.video);
   }
 

@@ -33,10 +33,6 @@ export function setVerboseLogging(enabled: boolean): void {
   initialized = true;
 }
 
-export function isVerboseLoggingEnabled(): boolean {
-  return verboseEnabled;
-}
-
 /**
  * Log a verbose diagnostic message. No-op unless verbose logging is enabled.
  * Accepts printf-style interpolation via the console's own formatting.

@@ -28,13 +28,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const backend = document.getElementById('backend') as HTMLSelectElement;
   const statistics = document.getElementById('statistics') as HTMLInputElement;
   const frameGeneration = document.getElementById('frame-generation') as HTMLInputElement;
-  const save = document.getElementById('save') as HTMLButtonElement;
   const openOptions = document.getElementById('open-options') as HTMLButtonElement;
   const status = document.getElementById('status') as HTMLDivElement;
   const version = document.getElementById('version') as HTMLSpanElement;
   const siteAccessCard = document.getElementById('site-access-card') as HTMLElement;
   const siteAccessSummary = document.getElementById('site-access-summary') as HTMLElement;
   const siteAccessButton = document.getElementById('site-access') as HTMLButtonElement;
+  const nativeWarning = document.getElementById('native-warning') as HTMLElement;
 
   // Site access is approved per origin: the popup offers the active tab's
   // site only, never a blanket grant. The one exception is a broad grant
@@ -164,36 +164,59 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderModeDescription(selectedMode, modeDescription);
     quality.disabled = !modeUsesQuality(selectedMode);
     backend.disabled = processingDisabled;
+    // The hardware-acceleration warning only applies when the native Windows
+    // backend is actually in use.
+    nativeWarning.style.display = !processingDisabled && backend.value === 'native' ? '' : 'none';
   };
+
   mode.addEventListener('change', refreshModeUi);
   frameGeneration.addEventListener('change', refreshModeUi);
   backend.addEventListener('change', refreshModeUi);
   refreshModeUi();
 
-  save.addEventListener('click', async () => {
-    save.disabled = true;
-    status.textContent = message('saving', 'Saving...');
-    const update = {
+  // ── Autosave ─────────────────────────────────────────────────────────────
+
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  let statusTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function showStatus(text: string): void {
+    status.textContent = text;
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => { status.textContent = ''; }, 3000);
+  }
+
+  function collectSettingsUpdate() {
+    return {
       extensionEnabled: extensionEnabled.checked,
       mode: mode.value as EnhancementMode,
       quality: quality.value as QualityTier,
-      output: 'auto' as const,
       backend: backend.value as RenderBackend,
       statsEnabled: statistics.checked,
-      autoFullscreenEnabled: true,
       frameGenerationEnabled: frameGeneration.checked,
     };
-    const result = await applySettings(update).catch(() => 'failed' as const);
+  }
+
+  async function saveNow(): Promise<void> {
+    clearTimeout(saveTimer);
+    const result = await applySettings(collectSettingsUpdate()).catch(() => 'failed' as const);
     if (result === 'failed') {
       console.error('[AniWebScale] Could not save popup settings.');
-      status.textContent = message('settingsSaveFailed', 'Could not save settings.');
+      showStatus(message('settingsSaveFailed', 'Could not save settings.'));
     } else if (result === 'saved-not-applied') {
-      status.textContent = message('settingsSavedNotApplied', 'Settings saved, but could not be applied.');
-    } else {
-      status.textContent = message('settingsSavedApplied', 'Settings saved and applied.');
+      showStatus(message('settingsSavedNotApplied', 'Settings saved, but could not be applied.'));
+    } else if (result === 'applied') {
+      showStatus(message('settingsSavedApplied', 'Settings saved and applied.'));
     }
-    save.disabled = false;
-  });
+  }
+
+  function scheduleSave(): void {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => void saveNow(), 300);
+  }
+
+  for (const control of [mode, quality, backend, statistics, frameGeneration]) {
+    control.addEventListener('change', scheduleSave);
+  }
 
   openOptions.addEventListener('click', () => chrome.runtime.openOptionsPage());
 });

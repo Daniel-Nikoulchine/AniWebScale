@@ -1,32 +1,67 @@
 import { ANIME4K_APPLIED_ATTR, ANIME4K_FULLSCREEN_DOCUMENT_ATTR } from '../constants';
 
 /**
- * Tracks whether the Fullscreen API is currently active on this page.
- * Set to true when a non-null fullscreenElement is observed, reset to false
- * when fullscreenchange fires with a null element. This ensures the geometry
- * fallback is only blocked immediately after an explicit API exit, not
- * permanently (which would break CSS fullscreen in SPAs like YouTube/Netflix).
+ * Tracks Fullscreen API activity on this page so a player exit (minimize
+ * button, Esc, exitFullscreen) can briefly block geometry-based fullscreen
+ * signals: collapsed players often keep the video at near-fullscreen size
+ * while their layout settles, and reading that as CSS fullscreen would keep
+ * the enhancement alive after the user left fullscreen.
+ *
+ * State is "fullscreen seen" plus the moment the exit became known:
+ * - A non-null element observation marks fullscreen as active.
+ * - The exit timestamp is stamped when null is FIRST observed after that
+ *   (via this document's `fullscreenchange` event or by a predicate call).
+ *   Stamping at first-null instead of last-active matters in cross-origin
+ *   guest frames, where the event never fires locally and the exit can be
+ *   observed minutes later; the grace window must run from that moment,
+ *   not from an ancient active observation.
+ * After the grace expires geometry is trusted again, so CSS-fullscreen
+ * sites (YouTube/Netflix theater layouts) keep working.
  */
-let fullscreenApiActive = false;
+let fullscreenSeen = false;
+let fullscreenExitAt = 0;
 
-// Reset the flag from the event, as documented above, so that consecutive
-// predicate calls after one explicit exit agree instead of the first caller
-// consuming the reset. Cross-origin frames never see this event fire locally;
-// the per-call reset below remains as their fallback. Registered lazily: this
-// module is also imported by DOM-less unit tests.
+/** How long after an explicit Fullscreen API exit geometry stays blocked. */
+export const FULLSCREEN_EXIT_GRACE_MS = 1500;
+
+// Stamp the exit when this document's own event announces it, so the window
+// starts even before the next reconcile runs. Registered lazily: this module
+// is also imported by DOM-less unit tests.
 let fullscreenChangeListenerInstalled = false;
 function ensureFullscreenChangeListener(): void {
   if (fullscreenChangeListenerInstalled) return;
   if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
   fullscreenChangeListenerInstalled = true;
   document.addEventListener('fullscreenchange', () => {
-    if (!getFullscreenElement()) fullscreenApiActive = false;
+    const fullscreen = getFullscreenElement();
+    if (fullscreen) {
+      fullscreenSeen = true;
+    } else if (fullscreenSeen && fullscreenExitAt === 0) {
+      fullscreenExitAt = Date.now();
+    }
   });
 }
 
 /** Reset the fullscreen API tracking state. Used by tests. */
-export function resetFullscreenApiTracking(): void {
-  fullscreenApiActive = false;
+export function resetFullscreenApiTracking(now: number = Date.now()): void {
+  fullscreenSeen = false;
+  // Anchor any later exit stamp far enough in the past that tests which
+  // observe a null element see an already-expired grace unless they opt in
+  // by first observing a non-null element.
+  fullscreenExitAt = now - (FULLSCREEN_EXIT_GRACE_MS + 1);
+}
+
+/**
+ * True while the short post-exit grace window after an explicit Fullscreen
+ * API exit is still running. Consumers treat this as "the player just left
+ * real fullscreen": geometry-based fullscreen signals are untrustworthy
+ * until the grace expires because players often keep the video at
+ * near-fullscreen size right after collapsing it.
+ */
+export function isWithinFullscreenExitGrace(): boolean {
+  return fullscreenSeen
+    && fullscreenExitAt > 0
+    && Date.now() - fullscreenExitAt < FULLSCREEN_EXIT_GRACE_MS;
 }
 
 /** True when the video belongs to the composed subtree placed in fullscreen. */
@@ -193,15 +228,23 @@ export function isVideoInFullscreenContext(
   // document.fullscreenElement is then null, so resolve the authoritative
   // top-level element before the local one.
   const fullscreen = getAuthoritativeFullscreenElement();
-  if (fullscreen) fullscreenApiActive = true;
+  if (fullscreen) {
+    fullscreenSeen = true;
+    // Re-arm: a later null observation must start a NEW grace window even
+    // though an earlier cycle already stamped one.
+    fullscreenExitAt = 0;
+  }
   if (isFullscreenVideoEligible(fullscreen, video)) return true;
-  // When the Fullscreen API was active and the element just became null, the
-  // player explicitly exited fullscreen (minimize button, Esc, etc.). Block
-  // the geometry fallback for THIS call so the native renderer stops, then
-  // reset the flag so a later CSS fullscreen can still use the fallback.
-  if (fullscreenApiActive && !fullscreen) {
-    fullscreenApiActive = false;
-    return false;
+  // While the player has just explicitly exited the Fullscreen API (minimize
+  // button, Esc, etc.), geometry is untrustworthy: collapsed players often
+  // keep the video at near-fullscreen size. Stamp the exit when null is FIRST
+  // observed after an active period (cross-origin guest frames never receive
+  // the local fullscreenchange event, so this call is their only signal),
+  // block the geometry fallback for the whole grace window, then let a later
+  // CSS fullscreen use it again.
+  if (!fullscreen) {
+    if (fullscreenSeen && fullscreenExitAt === 0) fullscreenExitAt = Date.now();
+    if (isWithinFullscreenExitGrace()) return false;
   }
   // A top-level document must have an actual Fullscreen API element. Without
   // this guard, Anime4K's own fixed fullscreen layout can keep satisfying the

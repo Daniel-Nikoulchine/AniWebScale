@@ -567,76 +567,12 @@ export function nativeResetConsentMessage(origin?: string): NativeResetConsentRe
   return { type: 'NATIVE_RESET_CONSENT', ...(origin !== undefined ? { origin } : {}) };
 }
 
-export function openOptionsPageMessage(): OpenOptionsPageRequest {
-  return { type: 'OPEN_OPTIONS_PAGE' };
-}
-
-export function openOnboardingMessage(): OpenOnboardingRequest {
-  return { type: 'OPEN_ONBOARDING' };
-}
-
-// ── Frame senders: the wire form of every background→frame message ────────
-
 export function urlUpdatedMessage(url?: string): UrlUpdatedMessage {
   return { type: 'URL_UPDATED', ...(url !== undefined ? { url } : {}) };
 }
 
 export function nativeConsentRequestMessage(origin?: string): NativeConsentRequestMessage {
   return { type: 'NATIVE_CONSENT_REQUEST', ...(origin !== undefined ? { origin } : {}) };
-}
-
-export function nativePrepareFullscreenMessage(payload: {
-  sessionId: string;
-  nonce: string;
-  videoId?: string;
-}): NativePrepareFullscreenMessage {
-  return { type: 'NATIVE_PREPARE_FULLSCREEN', ...payload };
-}
-
-export function nativeMeasureFullscreenMessage(payload: {
-  sessionId?: string;
-  videoId?: string;
-}): NativeMeasureFullscreenMessage {
-  return { type: 'NATIVE_MEASURE_FULLSCREEN', ...payload };
-}
-
-export function nativeSetTitleNonceMessage(payload: {
-  sessionId: string;
-  nonce: string;
-  captureKind?: string;
-}): NativeSetTitleNonceMessage {
-  return { type: 'NATIVE_SET_TITLE_NONCE', ...payload };
-}
-
-export function nativeRestoreSessionMessage(payload: {
-  sessionId?: string;
-  nonce?: string;
-  originalTitle?: string;
-}): NativeRestoreSessionMessage {
-  return { type: 'NATIVE_RESTORE_SESSION', ...payload };
-}
-
-export function nativeRestoreTitleMessage(payload: {
-  sessionId?: string;
-  nonce?: string;
-  originalTitle?: string;
-}): NativeRestoreTitleMessage {
-  return { type: 'NATIVE_RESTORE_TITLE', ...payload };
-}
-
-export function nativePointerEventMessage(payload: NativePointerPayload): NativePointerEventMessage {
-  return { type: 'NATIVE_POINTER_EVENT', ...payload };
-}
-
-export function nativeMediaCommandEventMessage(payload: {
-  command: string;
-  value?: number;
-}): NativeMediaCommandEventMessage {
-  return { type: 'NATIVE_MEDIA_COMMAND_EVENT', ...payload };
-}
-
-export function nativeSessionEventMessage(event?: NativeEvent): NativeSessionEventMessage {
-  return { type: 'NATIVE_SESSION_EVENT', ...(event !== undefined ? { event } : {}) };
 }
 
 // ── Response forms ───────────────────────────────────────────────────────
@@ -701,10 +637,4 @@ export function parseNativeFallbackResponse(value: unknown): NativeFallbackRespo
     ...(typeof record.message === 'string' ? { message: record.message } : {}),
     ...(typeof record.sessionId === 'string' ? { sessionId: record.sessionId } : {}),
   };
-}
-
-export interface SettingsUpdateResponse {
-  ok?: boolean;
-  status?: string;
-  message?: string;
 }

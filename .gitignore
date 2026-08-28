@@ -160,3 +160,4 @@ dist
 **/__pycache__/
 *.pyc
 /experiment
+web-ext-artifacts/

@@ -95,6 +95,12 @@ export function resolveAiUpscaleEffect(mode: AiUpscaleMode, quality: QualityTier
       upscaleFactor: 4,
       alwaysApply: true,
       webgpuAvailable: true,
+      // Cap inference input height at 480px. animevideov3 x4 is ~1.2M params
+      // and a 1080p source would feed the kernel roughly 6x more pixels than
+      // a 480p source, with no perceptual quality gain that justifies the
+      // extra latency on consumer GPUs. The presentation pass upscales the
+      // 4x output to the canvas with its adaptive area sampler.
+      params: { maxInferenceHeight: 480 },
     };
   }
   throw new Error(`Unknown AI upscale mode: ${mode satisfies never}`);

@@ -56,9 +56,15 @@ export function setupRealEsrganBrowserRuntime(): Promise<void> {
     const cores = typeof navigator !== 'undefined' && navigator.hardwareConcurrency > 0
       ? navigator.hardwareConcurrency
       : 4;
+    // Cap at 16, not 4. The previous floor of 4 was a holdover from the
+    // RealCUGAN reference path; animevideov3 is a 16-block VGG-style CNN
+    // where the kernel cost is roughly linear in thread count up to the
+    // number of physical cores. The Cascade in session.ts still drops to
+    // numThreads=1 on its last level if SharedArrayBuffer is unavailable,
+    // so this is safe on Firefox/Chrome alike.
     setRealEsrganThreadingConfig({
       proxy: false,
-      numThreads: Math.min(4, cores),
+      numThreads: Math.min(16, cores),
     });
   })();
   // A failed setup must not poison the singleton; drop it so a retry can

@@ -146,13 +146,37 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
       const blobUrl = createBlobUrl(source);
       worker = spawnWorker(blobUrl);
       revokeBlobUrl(blobUrl);
-    } catch {
+    } catch (error) {
+      // Visible on the page console so the user can tell us *why* the
+      // worker path is dead on this browser. The pipeline falls back to
+      // the main-thread session automatically.
+      const message = error instanceof Error ? error.message : String(error);
+      const name = error instanceof Error ? error.name : 'Error';
+      console.warn(
+        '[RealESRGAN] worker spawn failed (%s: %s); falling back to main-thread session.',
+        name, message,
+      );
       return null;
     }
+
+    // Surface worker.onerror too -- the constructor may succeed but the
+    // worker can fail to load its module or fail to start afterwards. Without
+    // this hook the failure is silent and the user sees only "main" in the
+    // stats overlay with no clue why.
+    worker.onerror = (event: { message?: string }) => {
+      console.warn(
+        '[RealESRGAN] worker runtime error: %s',
+        event.message ?? 'unknown',
+      );
+    };
 
     const client = new RealEsrganWorkerClient(worker, inferTimeoutMs);
     const initialised = await client.initialise(resolveUrl, initTimeoutMs);
     if (!initialised) {
+      console.warn(
+        '[RealESRGAN] worker init handshake timed out (>%dms); main-thread session will be used.',
+        initTimeoutMs,
+      );
       client.dispose();
       return null;
     }

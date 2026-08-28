@@ -25,6 +25,7 @@ export const MODE_PRESENTATIONS: Record<EnhancementMode, ModePresentation> = {
   ARTCNN: { optionKey: 'modeArtCnnOption', optionLabel: 'ArtCNN C4F16 2x - Line/detail reconstruction (GPU: real-time)', descriptionKey: 'modeArtCnnDescription', description: 'Fixed 2x GLSL network for reconstructing anime line art and natural detail at real-time speed.' },
   ACNET: { optionKey: 'modeAcNetOption', optionLabel: 'ACNet F8B4 2x - Fast lightweight upscale (GPU: very light)', descriptionKey: 'modeAcNetDescription', description: 'Small fixed 2x GLSL network that prioritizes speed and very low GPU load over maximum detail recovery.' },
   ARNET: { optionKey: 'modeArNetOption', optionLabel: 'ARNet F8B8 2x - Strong detail recovery (GPU: balanced)', descriptionKey: 'modeArNetDescription', description: 'Deeper fixed 2x GLSL network with stronger detail recovery than ACNet at a higher, balanced GPU load.' },
+  REALESRGAN: { optionKey: 'modeRealEsrganOption', optionLabel: 'Real-ESRGAN AnimeVideo v3 4x - Max detail (GPU: very heavy, SD sources)', descriptionKey: 'modeRealEsrganDescription', description: 'Fixed 4x ESRGAN-style network trained on anime video; best detail at the cost of high GPU load, intended for SD sources.' },
 };
 
 function optionFor(mode: EnhancementMode): HTMLOptionElement {

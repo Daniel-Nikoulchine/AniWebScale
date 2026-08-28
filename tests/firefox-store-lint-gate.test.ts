@@ -130,16 +130,53 @@ describe('firefox-store-lint-gate', () => {
       expect(failures.some((f: string) => f.includes('notice(s)'))).toBe(true);
     });
 
-    it('rejects when warning count is not exactly 1', () => {
+    it('rejects an unknown (non-allowlisted) warning', () => {
       const output = {
         count: 0,
-        summary: { errors: 0, notices: 0, warnings: 0 },
+        summary: { errors: 0, notices: 0, warnings: 1 },
         errors: [],
         notices: [],
-        warnings: [],
+        warnings: [
+          {
+            code: 'SOME_OTHER_CODE',
+            message: 'Some unexpected warning',
+            description: 'unexpected',
+            file: 'content.js',
+            line: 1,
+          },
+        ],
       };
       const failures = validateLintOutput(output);
-      expect(failures.some((f: string) => f.includes('expected exactly 1 warning'))).toBe(true);
+      expect(failures.some((f: string) => f.includes('unknown warning'))).toBe(true);
+    });
+
+    it('accepts any number of vendor (onnxruntime-web) warnings', () => {
+      const vendorWarning = (file: string) => ({
+        code: 'DANGEROUS_EVAL',
+        message: 'The Function constructor is eval.',
+        description: 'vendor',
+        file,
+        line: 2,
+      });
+      const output = {
+        count: 3,
+        summary: { errors: 0, notices: 0, warnings: 3 },
+        errors: [],
+        notices: [],
+        warnings: [
+          vendorWarning('ort/ort.webgpu.min.mjs'),
+          vendorWarning('chunks/ort.js'),
+          {
+            code: 'UNSAFE_VAR_ASSIGNMENT',
+            message: EXACT_WARNING.message,
+            description: EXACT_WARNING.description,
+            file: 'content.js',
+            line: 1,
+          },
+        ],
+      };
+      const failures = validateLintOutput(output);
+      expect(failures).toEqual([]);
     });
 
     it('rejects duplicate allowlisted warnings', () => {

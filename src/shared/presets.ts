@@ -14,7 +14,7 @@ import {
 export const ANIME4K_MODES: readonly Anime4KMode[] = GENERATED_ANIME4K_MODES;
 export const QUALITY_TIERS: readonly QualityTier[] = GENERATED_QUALITY_TIERS;
 export const AI_UPSCALE_MODES = [
-  'CNNX2', 'ARTCNN', 'ACNET', 'ARNET',
+  'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'REALESRGAN',
 ] as const;
 export const ENHANCEMENT_MODES: readonly EnhancementMode[] = [
   'OFF',
@@ -34,6 +34,7 @@ export const MODE_DESCRIPTIONS: Record<EnhancementMode, string> = {
   ARTCNN: 'Fixed 2x GLSL network for reconstructing anime line art and natural detail at real-time speed.',
   ACNET: 'Small fixed 2x GLSL network that prioritizes speed and very low GPU load over maximum detail recovery.',
   ARNET: 'Deeper fixed 2x GLSL network with stronger detail recovery than ACNet at a higher, balanced GPU load.',
+  REALESRGAN: 'Fixed 4x ESRGAN-style network trained on anime video; best detail at the cost of high GPU load, intended for SD sources.',
 };
 
 export const MODE_TO_LEGACY_BASE: Record<Anime4KMode, BaseMode> = {
@@ -66,6 +67,7 @@ export const MODE_TO_ID: Record<EnhancementMode, string> = {
   ARTCNN: 'ai-artcnn-c4f16-glsl-x2',
   ACNET: 'ai-acnet-f8b4-glsl-x2',
   ARNET: 'ai-arnet-f8b8-glsl-x2',
+  REALESRGAN: 'ai-realesrgan-animevideo-v3-x4',
 };
 
 export const ID_TO_MODE: Record<string, EnhancementMode> = Object.fromEntries(

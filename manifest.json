@@ -38,7 +38,10 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "chunks/*.js"
+        "chunks/*.js",
+        "models/realesrgan/*",
+        "models/realcugan/*",
+        "ort/*"
       ],
       "matches": [
         "http://*/*",

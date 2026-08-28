@@ -110,7 +110,7 @@ describe('official Anime4K presets', () => {
 
   it('exposes CNN and GLSL anime upscalers at fixed scales', () => {
     expect(AI_UPSCALE_MODES).toEqual([
-      'CNNX2', 'ARTCNN', 'ACNET', 'ARNET',
+      'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'REALESRGAN',
     ]);
     expect(resolveEnhancementGraph('CNNX2', 'VL')[0]).toMatchObject({
       className: 'CNNx2VL', upscaleFactor: 2, alwaysApply: true,
@@ -123,6 +123,9 @@ describe('official Anime4K presets', () => {
     });
     expect(resolveEnhancementGraph('ARNET', 'M')[0]).toMatchObject({
       className: 'ARNetX2', upscaleFactor: 2, alwaysApply: true,
+    });
+    expect(resolveEnhancementGraph('REALESRGAN', 'M')[0]).toMatchObject({
+      className: 'RealEsrganX4', upscaleFactor: 4, alwaysApply: true,
     });
   });
 

@@ -87,5 +87,15 @@ export function resolveAiUpscaleEffect(mode: AiUpscaleMode, quality: QualityTier
       webgpuAvailable: true,
     };
   }
+  if (mode === 'REALESRGAN') {
+    return {
+      id: 'realesrgan/animevideo-v3/x4',
+      name: 'Real-ESRGAN AnimeVideo v3 x4',
+      className: 'RealEsrganX4',
+      upscaleFactor: 4,
+      alwaysApply: true,
+      webgpuAvailable: true,
+    };
+  }
   throw new Error(`Unknown AI upscale mode: ${mode satisfies never}`);
 }

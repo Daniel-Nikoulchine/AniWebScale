@@ -145,6 +145,18 @@ module.exports = (env, argv) => {
           { from: '*.png', context: 'public/icons', to: 'icons' },
           { from: 'public/_locales', to: '_locales' },
           { from: 'public/licenses', to: 'licenses' },
+          // onnxruntime-web runtime (WebGPU + WASM) for the RealESRGAN/RealCUGAN
+          // ONNX inference paths. The session factory points env.wasm.wasmPaths
+          // and the worker bundle import at these extension-relative URLs.
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs',
+            to: 'ort/ort.webgpu.min.mjs',
+          },
+          {
+            from: 'node_modules/onnxruntime-web/dist/*.wasm',
+            to: 'ort/[name][ext]',
+          },
+          { from: 'models', to: 'models' },
         ],
       }),
       new HtmlWebpackPlugin({

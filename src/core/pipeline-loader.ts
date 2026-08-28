@@ -1,6 +1,12 @@
 import type { ExternalGlslModelDefinition } from '../shared/generated-external-glsl-models';
 import { createGeneratedPipelineClass } from '../shared/generated-pipelines';
 import { createExternalGlslPipelineClass } from './external-glsl-pipeline';
+import { REALESRGAN_CLASS_TO_MODEL_FILE } from '../shared/realesrgan-models';
+import { createRealEsrganPipelineClass } from './realesrgan-pipeline';
+import { setupRealEsrganBrowserRuntime } from './realesrgan-browser-setup';
+import { createRealEsrganSession } from './realesrgan-session';
+import { RealEsrganWorkerClient, type RealEsrganInferenceRunner } from './realesrgan-worker-client';
+import type { RealEsrganWorkerBinding } from './realesrgan-pipeline';
 import type { GeneratedKernelSet, PipelineConstructor } from './pipeline-types';
 
 type ModuleLoader = () => Promise<Record<string, unknown>>;
@@ -59,13 +65,46 @@ const localLoaders: Record<string, ConstructorLoader> = {
   )),
 };
 
+// One worker serves every RealESRGAN variant: the worker caches ORT sessions
+// per model URL, so spawning a second client per class would only add a
+// redundant worker. The promise is shared; a failed spawn resolves to null
+// and the pipeline falls back to the main-thread session.
+let realEsrganWorkerClientPromise: Promise<RealEsrganInferenceRunner | null> | null = null;
+
+function getRealEsrganWorkerRunner(): Promise<RealEsrganInferenceRunner | null> {
+  if (!realEsrganWorkerClientPromise) {
+    realEsrganWorkerClientPromise = RealEsrganWorkerClient.create();
+  }
+  return realEsrganWorkerClientPromise;
+}
+
+function realEsrganLoader(className: string): ConstructorLoader {
+  return async () => {
+    await setupRealEsrganBrowserRuntime();
+    const session = await createRealEsrganSession(className);
+    const runner = await getRealEsrganWorkerRunner();
+    const worker: RealEsrganWorkerBinding | null = runner
+      ? {
+        runner,
+        modelUrl: chrome.runtime.getURL(`models/realesrgan/${REALESRGAN_CLASS_TO_MODEL_FILE[className]}`),
+      }
+      : null;
+    return createRealEsrganPipelineClass(session, undefined, worker);
+  };
+}
+
+const realEsrganLoaders: Record<string, ConstructorLoader> = Object.fromEntries(
+  Object.keys(REALESRGAN_CLASS_TO_MODEL_FILE).map(className => [className, realEsrganLoader(className)]),
+);
+
 const constructorCache = new Map<string, PipelineConstructor>();
 
 export async function loadPipelineConstructor(className: string): Promise<PipelineConstructor | null> {
   const cached = constructorCache.get(className);
   if (cached) return cached;
 
-  const localLoader = localLoaders[className];
+  const localLoader = localLoaders[className]
+    ?? realEsrganLoaders[className];
   const Constructor = localLoader
     ? await localLoader()
     : await loadVendorConstructor(className);

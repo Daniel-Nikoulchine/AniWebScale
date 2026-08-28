@@ -255,8 +255,12 @@ test('presents enhancement modes with readable names and relevant controls', asy
 
     await expect(mode.locator('option[value="REALESRGANX4"]')).toHaveCount(0);
 
+    // RealESRGAN is a valid browser-only mode and must appear in the selector.
+    await expect(mode.locator('option[value="REALESRGAN"]')).toHaveCount(1);
+    await mode.selectOption('REALESRGAN');
+    await expect(mode.locator('option:checked')).toHaveText(/Real-ESRGAN AnimeVideo v3 4x/);
     await mode.selectOption('OFF');
-    await expect(mode.locator('option:checked')).toHaveText('Off - No image enhancement');
+    await expect(popup.locator('option:checked')).toHaveText('Off - No image enhancement');
     await expect(popup.locator('#backend')).toBeDisabled();
   } finally {
     await popup.close();

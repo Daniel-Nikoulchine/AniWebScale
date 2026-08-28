@@ -1,0 +1,21 @@
+{
+  "upstream": "https://github.com/ntsc-rs-fan/RealESRGAN-AnimeVideo-v3-x4-ONNX",
+  "upstream_commit": "a6e81ae81892b9cb888f2744c289657063f28b4f",
+  "upstream_date": "2026-03-03T10:59:12Z",
+  "source_origin": "xinntao/Real-ESRGAN release v0.2.5.0 (realesr-animevideov3.pth)",
+  "model_name": "RealESR-AnimeVideo-v3_x4",
+  "scale": 4,
+  "architecture": "SRVGGNetCompact",
+  "opset": 16,
+  "ir_version": 8,
+  "input_shape": [1, 3, "height", "width"],
+  "output_shape": [1, 3, "height", "width"],
+  "precision": "fp32",
+  "variants": {
+    "x4": {
+      "file": "RealESR-AnimeVideo-v3_x4.onnx",
+      "onnx_sha256": "00ece3ac21c43ee31459216b5174b2cea0c5325044c5142aeb840f4890e175ff",
+      "onnx_bytes": 2495473
+    }
+  }
+}

@@ -16,7 +16,8 @@ type AiUpscaleMode =
   | 'CNNX2'
   | 'ARTCNN'
   | 'ACNET'
-  | 'ARNET';
+  | 'ARNET'
+  | 'REALESRGAN';
 type EnhancementMode = 'OFF' | Anime4KMode | AiUpscaleMode;
 type QualityTier = GeneratedQualityTier;
 type RenderBackend = 'auto' | 'webgpu' | 'native';

@@ -17,6 +17,12 @@ export type PipelineConstructor = new (options: {
   inputTexture: GPUTexture;
   nativeDimensions?: Dimensions;
   targetDimensions?: Dimensions;
+  /**
+   * Optional per-effect runtime parameters. RealESRGAN reads
+   * `maxInferenceHeight` from it; other pipelines ignore the field. Optional
+   * so existing call sites that don't pass it keep working unchanged.
+   */
+  params?: { [key: string]: unknown };
 }) => Anime4KPipeline;
 
 export type GeneratedKernelSet = Readonly<Record<string, string>>;

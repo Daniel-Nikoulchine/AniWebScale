@@ -4,6 +4,13 @@ import type { Anime4KPipeline, PipelineConstructor } from './pipeline-types';
 interface PipelineDescriptor {
   device: GPUDevice;
   inputTexture: GPUTexture;
+  /**
+   * Optional per-effect runtime parameters. RealESRGAN reads
+   * `maxInferenceHeight` from it; external-GLSL pipelines (ArtCNN/ACNet/ARNet)
+   * ignore it. Optional so existing call sites that only need
+   * device+inputTexture keep working unchanged.
+   */
+  params?: { [key: string]: unknown };
 }
 
 const lumaWGSL = `

@@ -491,6 +491,9 @@ export class Renderer {
           inputTexture: currentTexture,
           nativeDimensions: { width, height },
           targetDimensions: this.targetDimensions,
+          // Forward effect-level params (e.g. RealESRGAN's maxInferenceHeight)
+          // so pipelines that accept runtime config can read them.
+          params: effect.params,
         });
         pipelines.push(pipeline);
         currentTexture = pipeline.getOutputTexture();

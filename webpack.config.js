@@ -145,16 +145,49 @@ module.exports = (env, argv) => {
           { from: '*.png', context: 'public/icons', to: 'icons' },
           { from: 'public/_locales', to: '_locales' },
           { from: 'public/licenses', to: 'licenses' },
-          // onnxruntime-web runtime (WebGPU + WASM) for the RealESRGAN/RealCUGAN
-          // ONNX inference paths. The session factory points env.wasm.wasmPaths
-          // and the worker bundle import at these extension-relative URLs.
+          // onnxruntime-web runtime for the RealESRGAN/RealCUGAN ONNX inference
+          // paths. The session factory points env.wasm.wasmPaths and the worker
+          // bundle import at these extension-relative URLs.
+          //
+          // ort.webgpu.bundle.min.mjs is the standalone WebGPU-enabled bundle
+          // (matches the `ort/ort.webgpu.min.mjs` path the worker hands to the
+          // blob-URL import).
           {
-            from: 'node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs',
+            from: 'node_modules/onnxruntime-web/dist/ort.webgpu.bundle.min.mjs',
             to: 'ort/ort.webgpu.min.mjs',
           },
+          // The .mjs + .wasm pair for the jsep (WebGPU + multi-thread) WASM
+          // module. onnxruntime-web dynamically imports the .mjs wrapper to
+          // initialise the WebGPU execution provider; copying only the .wasm
+          // (as we did previously) makes that import fail with
+          // "error loading dynamically imported module: ...jsep.mjs".
           {
-            from: 'node_modules/onnxruntime-web/dist/*.wasm',
-            to: 'ort/[name][ext]',
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs',
+            to: 'ort/ort-wasm-simd-threaded.jsep.mjs',
+          },
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm',
+            to: 'ort/ort-wasm-simd-threaded.jsep.wasm',
+          },
+          // Single-threaded WASM fallback (no WebGPU, no SharedArrayBuffer).
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm',
+            to: 'ort/ort-wasm-simd-threaded.wasm',
+          },
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs',
+            to: 'ort/ort-wasm-simd-threaded.mjs',
+          },
+          // The asyncify build is what onnxruntime-web actually uses in the
+          // browser by default (the WebGPU .bundle + asyncify WASM are the
+          // pair the runtime is wired against in 1.29+).
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm',
+            to: 'ort/ort-wasm-simd-threaded.asyncify.wasm',
+          },
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs',
+            to: 'ort/ort-wasm-simd-threaded.asyncify.mjs',
           },
           { from: 'models', to: 'models' },
         ],

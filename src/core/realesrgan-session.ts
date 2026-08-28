@@ -113,6 +113,18 @@ export function createRealEsrganSession(className: string): Promise<InferenceSes
     const modelUrl = resolveModelUrl(fileName);
     const ort = await import(/* webpackChunkName: "ort" */ 'onnxruntime-web');
 
+    // Diagnostics: capture the runtime environment so the cascade log tells
+    // us *why* a level failed (e.g. no SharedArrayBuffer on Zen/FF without
+    // crossOriginIsolation, which forces single-threaded WASM and disables
+    // the jsep WebGPU path).
+    const crossOriginIsolated = (globalThis as { crossOriginIsolated?: boolean })
+      .crossOriginIsolated === true;
+    const sharedArrayBuffer = typeof SharedArrayBuffer !== 'undefined';
+    console.log(
+      '[RealESRGAN] session create: model=%s crossOriginIsolated=%s sharedArrayBuffer=%s',
+      fileName, crossOriginIsolated, sharedArrayBuffer,
+    );
+
     const levels = buildCascadeLevels(threadingConfig);
     const start = workingLevelIndex === null
       ? 0
@@ -120,16 +132,43 @@ export function createRealEsrganSession(className: string): Promise<InferenceSes
     let lastError: unknown = null;
     for (let index = start; index < levels.length; index += 1) {
       const level = levels[index];
+      // Skip levels that the environment cannot satisfy at all. Doing this
+      // BEFORE the first Session.create avoids poisoning onnxruntime-web's
+      // global initWasm() state with a configuration we know is dead.
+      if (level.numThreads > 1 && !sharedArrayBuffer) {
+        console.warn(
+          '[RealESRGAN] skip level %d (numThreads=%d): SharedArrayBuffer unavailable',
+          index, level.numThreads,
+        );
+        continue;
+      }
       ort.env.wasm.proxy = level.proxy;
       ort.env.wasm.numThreads = level.numThreads;
+      console.log(
+        '[RealESRGAN] try level %d: proxy=%s numThreads=%d EPs=%s',
+        index, String(level.proxy), level.numThreads, level.executionProviders.join(','),
+      );
       try {
         const session = await ort.InferenceSession.create(modelUrl, {
           executionProviders: level.executionProviders,
         });
         workingLevelIndex = index;
+        console.log('[RealESRGAN] session created at level %d', index);
         return session;
       } catch (error) {
         lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[RealESRGAN] level %d failed: %s', index, message);
+        // Once initWasm() has failed inside the runtime, every subsequent
+        // Session.create with a different numThreads will throw the same
+        // poisoned error. Stop cascading and surface the original cause.
+        if (/previous call to 'initWasm\(\)' failed/i.test(message)) {
+          console.error(
+            '[RealESRGAN] initWasm() poisoned; remaining cascade levels skipped. ' +
+            'Underlying cause was on level %d (see warning above).', index,
+          );
+          break;
+        }
       }
     }
     throw lastError instanceof Error

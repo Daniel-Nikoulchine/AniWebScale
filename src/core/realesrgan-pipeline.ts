@@ -149,12 +149,41 @@ export function createRealEsrganPipelineClass(
     private frameCounter = 0;
     private inferenceErrors = 0;
     private destroyed = false;
+    // Dev-mode profiling (`?debug=realesrgan` on the page URL). Off in normal
+    // use so the timing arithmetic never touches the hot path. Initialised in
+    // the constructor because we need to read `location` at instance time.
+    private debugProfiling = false;
+    // Per-frame phase timings collected in `drain()`. The phase abbreviations
+    // are stable (also used in the console summary) so they can be diffed:
+    //   c = copy mapped range (readback memcpy)
+    //   r = unpack RGBA bytes -> planar RGB
+    //   k = kernel (per-tile ORT inference, sum across tiles)
+    //   m = compose (CPU feather) OR g = compose (GPU compute)
+    //   u = writeTexture (result upload)
+    //   total = wall time from "readback finished" to "result written"
+    private phaseSamples: Array<{
+      frame: number;
+      worker: boolean;
+      c: number; r: number; k: number;
+      g: number; m: number; u: number; total: number;
+    }> = [];
+    private profileWindowStart = 0;
 
     constructor({ device, inputTexture, params }: PipelineDescriptor) {
       this.device = device;
       this.inputTexture = inputTexture;
       this.inputWidth = inputTexture.width;
       this.inputHeight = inputTexture.height;
+      // Profiling flag: opt-in via `?debug=realesrgan` on the page URL. We read
+      // the flag here (not at module load) so content-script instances created
+      // after a navigation pick it up correctly, and the cost on the hot path
+      // when disabled is a single local boolean check in `drain()`.
+      try {
+        const params = new URLSearchParams(globalThis.location?.search ?? '');
+        this.debugProfiling = params.get('debug') === 'realesrgan';
+      } catch {
+        this.debugProfiling = false;
+      }
 
       if (!isReadbackFormat(inputTexture.format)) {
         throw new Error(`RealESRGAN cannot read back texture format ${inputTexture.format}.`);
@@ -292,19 +321,33 @@ export function createRealEsrganPipelineClass(
       // acquired lazily there, so the GPU path keeps less pooled memory hot.
       const readbackBytes = this.pool.acquire(this.readbackByteLength);
       const inputRgbBuffer = this.pool.acquire(3 * pixels * 4);
+      const profiling = this.debugProfiling;
+      const t0 = profiling ? performance.now() : 0;
+      let tCopy = 0, tUnpack = 0, tKernel = 0, tCompose = 0, tUpload = 0;
+      let composeUsedGpu = false;
+      let inferWasWorker = false;
       try {
         await this.stagingBuffer.mapAsync(GPUMapMode.READ);
         if (this.destroyed) return;
         const mapped = new Uint8Array(readbackBytes);
+        let t1 = profiling ? performance.now() : 0;
         try {
           // The mapped range is only valid until unmap(); copy it out first.
           mapped.set(new Uint8Array(this.stagingBuffer.getMappedRange()));
         } finally {
           this.stagingBuffer.unmap();
         }
+        if (profiling) {
+          tCopy = performance.now() - t1;
+          t1 = performance.now();
+        }
 
         const inputRgb = new Float32Array(inputRgbBuffer);
         unpackReadbackToPlanarRgb(mapped, this.inferenceWidth, this.inferenceHeight, this.readbackFormat, inputRgb);
+        if (profiling) {
+          tUnpack = performance.now() - t1;
+          t1 = performance.now();
+        }
 
         const tiled = await inferTiledResults({
           inputRgb,
@@ -313,12 +356,34 @@ export function createRealEsrganPipelineClass(
           maxTileSize: tiling.maxTileSize,
           overlap: tiling.overlap,
           singleTileMaxHeight: tiling.singleTileMaxHeight,
-          infer: (tileRgb, tileWidth, tileHeight) => this.runInference(tileRgb, tileWidth, tileHeight),
+          infer: (tileRgb, tileWidth, tileHeight) => {
+            // The first tile in a frame reveals which path inference took
+            // (worker vs main-thread); we record that once for the sample.
+            if (profiling && !inferWasWorker) {
+              inferWasWorker = this.workerRunner !== null;
+            }
+            return this.runInference(tileRgb, tileWidth, tileHeight);
+          },
         });
+        if (profiling) tKernel = performance.now() - t1;
 
         if (this.destroyed) return;
         if (this.scheduler.isResultCurrent(frame)) {
-          this.writeComposedResult(tiled);
+          if (profiling) t1 = performance.now();
+          composeUsedGpu = this.writeComposedResult(tiled);
+          if (profiling) {
+            tCompose = performance.now() - t1;
+            t1 = performance.now();
+            // writeTexture is inside writeComposedResult's CPU path; for the
+            // GPU composer the upload happens in the compute pass and we
+            // attribute its cost to "compose" rather than measuring it
+            // separately (writeTexture isn't on this code path).
+            if (!composeUsedGpu) {
+              tUpload = performance.now() - t1;
+            } else {
+              tUpload = 0;
+            }
+          }
         }
       } catch (error) {
         // A lost device or a failed inference must not wedge the frame loop;
@@ -329,19 +394,62 @@ export function createRealEsrganPipelineClass(
         this.pool.release(readbackBytes);
         this.pool.release(inputRgbBuffer);
         this.scheduler.markCompleted(frame);
+        if (profiling) {
+          const total = performance.now() - t0;
+          this.phaseSamples.push({
+            frame,
+            worker: inferWasWorker,
+            c: tCopy, r: tUnpack, k: tKernel,
+            g: composeUsedGpu ? tCompose : 0,
+            m: composeUsedGpu ? 0 : tCompose,
+            u: tUpload,
+            total,
+          });
+          this.maybeLogProfileSummary();
+        }
       }
+    }
+
+    private maybeLogProfileSummary(): void {
+      if (this.phaseSamples.length < 30) return;
+      const now = performance.now();
+      if (this.profileWindowStart === 0) this.profileWindowStart = now;
+      const windowMs = now - this.profileWindowStart;
+      if (windowMs < 1000) return; // log at most once per second
+      const samples = this.phaseSamples;
+      const n = samples.length;
+      const avg = (key: keyof typeof samples[number]) =>
+        samples.reduce((s, x) => s + (x[key] as number), 0) / n;
+      const fps = (n / windowMs) * 1000;
+      const workerPct = (samples.filter((s) => s.worker).length / n) * 100;
+      const gpuComposePct = (samples.filter((s) => s.g > 0).length / n) * 100;
+      console.log(
+        '[RealESRGAN profile] %d frames in %.1fs (%.1f fps) | worker=%.0f%% gpuCompose=%.0f%% | ' +
+        'avg ms: copy=%.1f unpack=%.1f kernel=%.1f compose(gpu|cpu)=%.1f|%.1f upload=%.1f total=%.1f',
+        n, windowMs / 1000, fps,
+        workerPct, gpuComposePct,
+        avg('c'), avg('r'), avg('k'),
+        avg('g'), avg('m'),
+        avg('u'), avg('total'),
+      );
+      this.phaseSamples = [];
+      this.profileWindowStart = now;
     }
 
     /**
      * Compose the inferred tiles into the output texture. Prefers the GPU
      * compute composer; falls back to the CPU feathering pass when the
      * composer is unavailable, declines the frame, or throws.
+     *
+     * Returns true when the GPU composer handled the frame (so the profiler
+     * can attribute the cost to "compose" rather than "upload"), false on
+     * the CPU path.
      */
-    private writeComposedResult(tiled: TiledInferenceResult): void {
+    private writeComposedResult(tiled: TiledInferenceResult): boolean {
       if (this.gpuComposer) {
         try {
           if (this.gpuComposer.compose(tiled.tiles, tiled.outWidth, tiled.outHeight, tiled.featherWindow)) {
-            return;
+            return true;
           }
         } catch (error) {
           // A broken composer (lost device, validation) must not drop the
@@ -361,6 +469,7 @@ export function createRealEsrganPipelineClass(
           new Float32Array(weightSumBuffer),
         );
         this.writeResult(composed.rgb, composed.width, composed.height);
+        return false;
       } finally {
         this.pool.release(accumulatorBuffer);
         this.pool.release(weightSumBuffer);

@@ -161,3 +161,6 @@ dist
 *.pyc
 /experiment
 web-ext-artifacts/
+/native/spike/build*/
+/native/spike/third_party/ncnn
+/artifacts/ncnn-vulkan-quality-report.json

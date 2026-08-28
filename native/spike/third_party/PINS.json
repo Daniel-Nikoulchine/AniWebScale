@@ -1,0 +1,29 @@
+{
+  "description": "Pinned upstream sources for the ncnn-Vulkan RealESRGAN spike. Verify every hash before trusting the artifacts; fetch via native/spike/fetch-sources.py.",
+  "ncnn": {
+    "repo": "https://github.com/Tencent/ncnn",
+    "tag": "20260526",
+    "source_tarball": "https://github.com/Tencent/ncnn/archive/refs/tags/20260526.tar.gz",
+    "sha256": "da1ade826bc22858a9fb87ae052789bbd614d042b3ec2c22e6544ca83db6bc04",
+    "glslang_submodule_commit": "fe88f421038e1bb0a25cd5c1b2dfe505db82d08f",
+    "glslang_tarball": "https://github.com/nihui/glslang/archive/fe88f421038e1bb0a25cd5c1b2dfe505db82d08f.tar.gz",
+    "glslang_sha256": "dc78c7f2c479779db66c60582bf8c4173b75b89f689b7edaff3a97d8820dbecd",
+    "license": "BSD 3-Clause (ncnn/LICENSE.txt)",
+    "pinned_date": "2026-08-28"
+  },
+  "realesr_animevideov3_ncnn_artifacts": {
+    "source_release": "https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0",
+    "source_zip": "realesrgan-ncnn-vulkan-20220424-ubuntu.zip",
+    "upstream_model_origin": "xinntao/Real-ESRGAN v0.2.5.0 realesr-animevideov3.pth (same training revision as the browser ONNX in models/realesrgan/SOURCE_REVISION.json)",
+    "files": {
+      "realesr-animevideov3-x4.param": "850a248e7c14c27e5bd8cf7265113a9441036a7db63963bb8aa5169d788a435e",
+      "realesr-animevideov3-x4.bin": "548a36f9c3f4ab8da56cd3b13badf23968bee207b396dad14d04b830e5f2ab2d"
+    },
+    "license": "MIT (Real-ESRGAN-ncnn-vulkan), BSD 3-Clause (Real-ESRGAN model weights); see LICENSE-RealESRGAN.txt",
+    "prepadding": 10,
+    "input_blobs": ["data"],
+    "output_blobs": ["output"],
+    "scale": 4,
+    "pinned_date": "2026-08-28"
+  }
+}

@@ -37,7 +37,7 @@
  *      with shape [1, 3, height, width]. Sessions are created lazily per
  *      modelUrl and cached. Replies:
  *        { type: 'infer', id, ok: true, width, height, data, ep }  (data is the
- *         transferred planar output at 2x resolution; ep is 'webgpu' or 'wasm')
+ *         transferred planar output at 4x resolution; ep is 'webgpu' or 'wasm')
  *        { type: 'infer', id, ok: false, error }
  *
  * A failed inference never terminates the worker; the session cache is only
@@ -148,8 +148,8 @@ export async function handleInfer(message) {
         type: 'infer',
         id: message.id,
         ok: true,
-        width: message.width * 2,
-        height: message.height * 2,
+        width: message.width * 4,
+        height: message.height * 4,
         data,
         ep,
       },

@@ -108,7 +108,7 @@ export interface RealEsrganWorkerBinding {
 }
 
 export function createRealEsrganPipelineClass(
-  session: InferenceSession,
+  session: InferenceSession | null,
   tiling: RealEsrganTilingConfig = DEFAULT_REALESRGAN_TILING,
   worker: RealEsrganWorkerBinding | null = null,
 ): PipelineConstructor {
@@ -116,7 +116,9 @@ export function createRealEsrganPipelineClass(
     private readonly device: GPUDevice;
     private readonly inputTexture: GPUTexture;
     private readonly outputTexture: GPUTexture;
-    private readonly stagingBuffer: GPUBuffer;
+    private readonly stagingBuffers: GPUBuffer[];
+    private readonly stagingBufferCount = 2;
+    private readbackSlot = 0;
     private readonly readbackFormat: ReadbackFormat;
     private readonly readbackBytesPerRow: number;
     private readonly readbackByteLength: number;
@@ -145,6 +147,7 @@ export function createRealEsrganPipelineClass(
     // start. Mutable so a broken worker can be disabled at runtime, falling
     // back to the main-thread session for good (same pattern as gpuComposer).
     private workerRunner: RealEsrganInferenceRunner | null;
+    private workerUsedForFrame = false;
     private readonly workerModelUrl: string | null;
     private frameCounter = 0;
     private inferenceErrors = 0;
@@ -232,11 +235,11 @@ export function createRealEsrganPipelineClass(
       const plan = planReadback(this.inferenceWidth, this.inferenceHeight, this.readbackFormat);
       this.readbackBytesPerRow = plan.bytesPerRow;
       this.readbackByteLength = plan.byteLength;
-      this.stagingBuffer = device.createBuffer({
-        label: 'RealESRGAN readback staging',
+      this.stagingBuffers = Array.from({ length: this.stagingBufferCount }, (_, index) => device.createBuffer({
+        label: `RealESRGAN readback staging ${index}`,
         size: Math.max(1, plan.byteLength),
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-      });
+      }));
 
       this.outputTexture = device.createTexture({
         label: 'RealESRGAN output',
@@ -274,6 +277,8 @@ export function createRealEsrganPipelineClass(
       this.scheduler.noteNewerFrame(frame);
       if (!canStart) return; // latest-frame-wins: keep presenting the last result
 
+      const stagingBuffer = this.stagingBuffers[this.readbackSlot];
+      this.readbackSlot = (this.readbackSlot + 1) % this.stagingBuffers.length;
       this.scheduler.markStarted(frame);
       let readbackSource = this.inputTexture;
       if (this.downscaleTexture && this.downscalePipeline && this.downscaleBindGroup) {
@@ -292,7 +297,7 @@ export function createRealEsrganPipelineClass(
       }
       encoder.copyTextureToBuffer(
         { texture: readbackSource },
-        { buffer: this.stagingBuffer, bytesPerRow: this.readbackBytesPerRow },
+        { buffer: stagingBuffer, bytesPerRow: this.readbackBytesPerRow },
         [this.inferenceWidth, this.inferenceHeight, 1],
       );
       // The renderer submits this encoder synchronously right after every
@@ -301,11 +306,11 @@ export function createRealEsrganPipelineClass(
       // microtask so the registration lands after the renderer's submit(), at
       // which point the promise covers the copy and resolves once it has run.
       queueMicrotask(() => {
-        void this.device.queue.onSubmittedWorkDone().then(() => this.drain(frame));
+        void this.device.queue.onSubmittedWorkDone().then(() => this.drain(frame, stagingBuffer));
       });
     }
 
-    private async drain(frame: number): Promise<void> {
+    private async drain(frame: number, stagingBuffer: GPUBuffer): Promise<void> {
       const pixels = this.inferenceWidth * this.inferenceHeight;
       // Acquire the readback and model-input buffers up front; the (large)
       // composition buffers are only needed on the CPU fallback path and are
@@ -321,14 +326,14 @@ export function createRealEsrganPipelineClass(
       let inferWasWorker = false;
       let t1 = performance.now();
       try {
-        await this.stagingBuffer.mapAsync(GPUMapMode.READ);
+        await stagingBuffer.mapAsync(GPUMapMode.READ);
         if (this.destroyed) return;
         const mapped = new Uint8Array(readbackBytes);
         try {
           // The mapped range is only valid until unmap(); copy it out first.
-          mapped.set(new Uint8Array(this.stagingBuffer.getMappedRange()));
+          mapped.set(new Uint8Array(stagingBuffer.getMappedRange()));
         } finally {
-          this.stagingBuffer.unmap();
+          stagingBuffer.unmap();
         }
         tCopy = performance.now() - t1;
         t1 = performance.now();
@@ -348,9 +353,9 @@ export function createRealEsrganPipelineClass(
           infer: (tileRgb, tileWidth, tileHeight) => {
             // Record worker-vs-main-thread once per frame, based on the
             // first tile. Later tiles in the same frame follow the same path.
-            if (!inferWasWorker) {
-              inferWasWorker = this.workerRunner !== null;
-            }
+            const usingWorker = this.workerRunner !== null;
+            inferWasWorker = inferWasWorker || usingWorker;
+            this.workerUsedForFrame = this.workerUsedForFrame || usingWorker;
             return this.runInference(tileRgb, tileWidth, tileHeight);
           },
         });
@@ -378,7 +383,8 @@ export function createRealEsrganPipelineClass(
         this.pool.release(readbackBytes);
         this.pool.release(inputRgbBuffer);
         this.scheduler.markCompleted(frame);
-        this.recordPhaseSample(tCopy, tUnpack, tKernel, tCompose, tUpload, composeUsedGpu, inferWasWorker);
+        this.recordPhaseSample(tCopy, tUnpack, tKernel, tCompose, tUpload, composeUsedGpu, this.workerUsedForFrame);
+        this.workerUsedForFrame = false;
       }
     }
 
@@ -490,6 +496,7 @@ export function createRealEsrganPipelineClass(
           this.workerRunner = null;
         }
       }
+      if (!session) throw new Error('RealESRGAN main-thread fallback session is unavailable.');
       const { Tensor: OrtTensor } = await import(/* webpackChunkName: "ort" */ 'onnxruntime-web');
       const inputName = session.inputNames[0] ?? 'input';
       const outputName = session.outputNames[0] ?? 'output';
@@ -522,6 +529,18 @@ export function createRealEsrganPipelineClass(
 
     public getOutputTexture(): GPUTexture {
       return this.outputTexture;
+    }
+
+    public destroy(): void {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      this.scheduler.reset();
+      worker?.runner.dispose?.();
+      this.gpuComposer?.destroy();
+      this.gpuComposer = null;
+      this.downscaleTexture?.destroy();
+      this.stagingBuffers.forEach(buffer => buffer.destroy());
+      this.outputTexture.destroy();
     }
 
     public getSkippedFrames(): number {

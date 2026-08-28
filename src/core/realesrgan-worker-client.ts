@@ -100,6 +100,7 @@ function isWorkerReply(value: unknown): value is WorkerReply {
  */
 export interface RealEsrganInferenceRunner {
   run(modelUrl: string, width: number, height: number, data: Float32Array): Promise<Float32Array>;
+  dispose?(): void;
 }
 
 export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
@@ -243,7 +244,7 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
 
   /**
    * Run one tile through the worker. `data` is planar NCHW RGB ([1,3,h,w]);
-   * the returned array is the 2x planar result. The input is copied into a
+   * the returned array is the 4x planar result. The input is copied into a
    * transferable buffer; the caller keeps its own buffer untouched.
    */
   run(modelUrl: string, width: number, height: number, data: Float32Array): Promise<Float32Array> {

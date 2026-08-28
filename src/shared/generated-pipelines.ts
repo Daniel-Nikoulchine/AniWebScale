@@ -21,7 +21,7 @@ abstract class GeneratedPipeline implements Anime4KPipeline {
   protected pipelines: Anime4KPipeline[] = [];
 
   public updateParam(): void {
-    throw new Error('Generated Anime4K kernels have no runtime parameters.');
+    // Generated Anime4K kernels have no runtime parameters.
   }
 
   public pass(encoder: GPUCommandEncoder): void {
@@ -30,6 +30,10 @@ abstract class GeneratedPipeline implements Anime4KPipeline {
 
   public getOutputTexture(): GPUTexture {
     return this.pipelines[this.pipelines.length - 1].getOutputTexture();
+  }
+
+  public destroy(): void {
+    this.pipelines.forEach(pipeline => pipeline.destroy?.());
   }
 
   protected conv(

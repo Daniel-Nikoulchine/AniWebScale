@@ -507,6 +507,7 @@ export class Renderer {
       this.buildingPipelineTextures = null;
     }
 
+    this.pipelines.forEach(pipeline => pipeline.destroy?.());
     this.destroyPipelineTextures(this.pipelineTextures);
     this.pipelineTextures = pipelineTextures;
     this.pipelines = pipelines;
@@ -1025,6 +1026,7 @@ export class Renderer {
   private releaseResources(): void {
     try {
       this.frameGeneration.destroyResources();
+      this.pipelines.forEach(pipeline => pipeline.destroy?.());
       this.destroyPipelineTextures(this.pipelineTextures);
       if (this.buildingPipelineTextures) this.destroyPipelineTextures(this.buildingPipelineTextures);
       this.videoFrameTexture?.destroy();

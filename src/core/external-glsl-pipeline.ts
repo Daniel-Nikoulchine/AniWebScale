@@ -81,7 +81,7 @@ class GlslConvPipeline implements Anime4KPipeline {
   }
 
   public updateParam(): void {
-    throw new Error('External GLSL models have no runtime parameters.');
+    // External GLSL models have no runtime parameters.
   }
 
   public pass(encoder: GPUCommandEncoder): void {
@@ -97,6 +97,10 @@ class GlslConvPipeline implements Anime4KPipeline {
 
   public getOutputTexture(): GPUTexture {
     return this.outputTexture;
+  }
+
+  public destroy(): void {
+    this.outputTexture.destroy();
   }
 }
 
@@ -170,7 +174,7 @@ class PixelShuffleColorMerge implements Anime4KPipeline {
   }
 
   public updateParam(): void {
-    throw new Error('External GLSL models have no runtime parameters.');
+    // External GLSL models have no runtime parameters.
   }
 
   public pass(encoder: GPUCommandEncoder): void {
@@ -186,6 +190,10 @@ class PixelShuffleColorMerge implements Anime4KPipeline {
 
   public getOutputTexture(): GPUTexture {
     return this.outputTexture;
+  }
+
+  public destroy(): void {
+    this.outputTexture.destroy();
   }
 }
 
@@ -225,7 +233,7 @@ class ExternalGlslPipeline implements Anime4KPipeline {
   }
 
   public updateParam(): void {
-    throw new Error('External GLSL models have no runtime parameters.');
+    // External GLSL models have no runtime parameters.
   }
 
   public pass(encoder: GPUCommandEncoder): void {

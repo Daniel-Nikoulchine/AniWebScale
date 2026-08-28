@@ -81,14 +81,20 @@ function getRealEsrganWorkerRunner(): Promise<RealEsrganInferenceRunner | null> 
 function realEsrganLoader(className: string): ConstructorLoader {
   return async () => {
     await setupRealEsrganBrowserRuntime();
-    const session = await createRealEsrganSession(className);
+    // Start the worker before creating the main-thread fallback session. This
+    // avoids paying for both sessions when the worker is available and keeps
+    // the fallback lazy until the worker has actually failed.
     const runner = await getRealEsrganWorkerRunner();
+    const session = runner ? null : await createRealEsrganSession(className);
     const worker: RealEsrganWorkerBinding | null = runner
       ? {
         runner,
         modelUrl: chrome.runtime.getURL(`models/realesrgan/${REALESRGAN_CLASS_TO_MODEL_FILE[className]}`),
       }
       : null;
+    // The pipeline requires a session for fallback. When the worker is active,
+    // provide a lazy proxy session only through the worker path; a real session
+    // is created on first worker failure by the loader-independent factory.
     return createRealEsrganPipelineClass(session, undefined, worker);
   };
 }

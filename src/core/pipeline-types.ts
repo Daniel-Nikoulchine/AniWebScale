@@ -4,6 +4,8 @@ export interface Anime4KPipeline {
   updateParam(param?: string, value?: unknown): void;
   pass(encoder: GPUCommandEncoder): void;
   getOutputTexture(): GPUTexture;
+  /** Release GPU resources owned by this pipeline. */
+  destroy?(): void;
   /**
    * Optional per-phase timings (averaged over the renderer's stat window).
    * Pipelines that don't expose phase breakdowns omit this; the renderer then

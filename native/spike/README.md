@@ -50,6 +50,24 @@ modes pass the official-shader tolerances with large margins. The machine
 readable report is written to `artifacts/ncnn-vulkan-quality-report.json`
 (gitignored; regenerate with the validator).
 
+## GPU post-process (zero-copy output)
+
+With `--fp16` the spike converts the network's planar fp16 output to packed
+RGBA8 **on the GPU** (`shaders/realesrgan_spike_postproc.comp`, compiled at
+build time and recorded into the same VkCompute as the graph). The host then
+downloads 4 bytes per pixel instead of 8 and performs no per-pixel work.
+Rounding matches the reference postproc exactly (`x*255+0.5`, floor, clamp);
+the GPU and CPU paths produce bit-identical PNGs. Measured A/B on the real
+anime frame: GPU postproc ~19.5 ms p50 vs CPU convert+download ~32.6 ms p50
+(both under system load; the relative ~40% saving is the point).
+
+Two build-chain pitfalls are worth repeating: `file(READ ... HEX)` yields the
+SPIR-V in file byte order, so each uint32 word must be assembled little-endian
+(bytes `03 02 23 07` form the word `0x07230203`); and with a mappable blob
+allocator (ReBAR) every download must be followed by `submit_and_wait()` before
+the host touches the data — the CPU fallback initially raced the queue and read
+zeros.
+
 ## Lifetime rules encoded in the spike (RADV + ReBAR)
 
 - The blob allocator is mappable under ReBAR, so the download clone returns a

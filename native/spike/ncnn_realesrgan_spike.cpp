@@ -13,7 +13,8 @@
  *   its preproc compute shader),
  * - the graph handles border padding itself (prepadding=10 reflect semantics
  *   are baked into the official model artifacts; Conv pads are replicated),
- * - output scaled back to packed RGB8 with clamping (reference: to_pixels).
+ * - GPU post-process shader converts planar fp16/fp32 output to packed RGBA8
+ *   with the reference rounding (x * 255 + 0.5, floor, clamp).
  *
  * Memory-lifetime notes, learned the hard way on RADV with ReBAR:
  * - With ReBAR the ncnn blob allocator is mappable, so the download clone
@@ -27,9 +28,7 @@
  *   before ncnn::destroy_gpu_instance() tears down the shared device.
  *
  * Storage precision is selected with --fp16. It only packs/stores in half
- * precision (like the reference implementation's fp16s mode); arithmetic stays
- * fp32, which the quality gate (Phase 2) must confirm before any wider fp16
- * use.
+ * precision (fp32 arithmetic unless --fp16-arith is given for an experiment).
  */
 
 #include <algorithm>
@@ -53,6 +52,10 @@
 #include "net.h"
 #include "gpu.h"
 
+#if NCNN_VULKAN
+#include "realesrgan_spike_postproc.comp.hex.h"
+#endif
+
 namespace {
 
 struct Options {
@@ -61,6 +64,9 @@ struct Options {
     const char* param_path = nullptr;
     const char* bin_path = nullptr;
     bool fp16 = false;
+    bool fp16_arith = false;
+    bool no_winograd = false;
+    bool no_gpu_postproc = false;
     int warmup_frames = 0;
     int sample_frames = 1;
 };
@@ -68,7 +74,7 @@ struct Options {
 void print_usage()
 {
     fprintf(stderr,
-        "Usage: ncnn-spike -i input.png -o output.png -p model.param -b model.bin [--fp16] [--warmup N] [--frames N]\n");
+        "Usage: ncnn-spike -i input.png -o output.png -p model.param -b model.bin [--fp16] [--fp16-arith] [--no-winograd] [--warmup N] [--frames N]\n");
 }
 
 void report_device(const ncnn::VulkanDevice* device)
@@ -104,18 +110,19 @@ double milliseconds_since(std::chrono::steady_clock::time_point start)
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
-// Loads the model, runs the frame loop, and returns through output_rgb8.
+// Loads the model, runs the frame loop, and returns through output_rgba.
 // Everything ncnn-owned dies when this function returns, before the caller
 // destroys the GPU instance.
 int process_frame_loop(const Options& options, const stbi_uc* pixels, int width, int height,
-    std::vector<unsigned char>& output_rgb8)
+    std::vector<unsigned char>& output_rgba)
 {
     ncnn::Net net;
     net.opt.use_vulkan_compute = true;
     net.opt.num_threads = 4;
     net.opt.use_fp16_packed = options.fp16;
     net.opt.use_fp16_storage = options.fp16;
-    net.opt.use_fp16_arithmetic = false;
+    net.opt.use_fp16_arithmetic = options.fp16_arith;
+    net.opt.use_winograd_convolution = !options.no_winograd;
     net.opt.use_bf16_storage = false;
     net.opt.use_int8_storage = false;
     net.opt.use_int8_arithmetic = false;
@@ -129,10 +136,35 @@ int process_frame_loop(const Options& options, const stbi_uc* pixels, int width,
         fprintf(stderr, "failed to load model: %s\n", options.bin_path);
         return 1;
     }
-    fprintf(stderr, "[model] param=%s bin=%s fp16_storage=%d\n",
-        options.param_path, options.bin_path, options.fp16);
+    fprintf(stderr, "[model] param=%s bin=%s fp16_storage=%d fp16_arith=%d winograd=%d\n",
+        options.param_path, options.bin_path, options.fp16, options.fp16_arith,
+        !options.no_winograd);
 
-    const ncnn::VulkanDevice* device = net.vulkan_device();
+    // The net uses device 0 (default); get_gpu_device returns the mutable
+    // pointer the const accessor hides. Single-GPU spike, so this is the same
+    // device the net runs on.
+    ncnn::VulkanDevice* device = ncnn::get_gpu_device(0);
+
+#if NCNN_VULKAN
+    // GPU post-process: one dispatch converts the planar output to packed
+    // RGBA8; the host then downloads 4 bytes per pixel and does no per-pixel
+    // work at all. Created once; destroyed at function end (before the net).
+    ncnn::Pipeline* postproc = nullptr;
+    if (options.fp16 && !options.no_gpu_postproc)
+    {
+        postproc = new ncnn::Pipeline(device);
+        postproc->set_optimal_local_size_xyz(32, 32, 1);
+        std::vector<ncnn::vk_specialization_type> specializations(1);
+        specializations[0].i = 0;  // bgr = 0 on non-Windows, like the reference
+        if (postproc->create(realesrgan_spike_postproc_comp_data,
+                sizeof(realesrgan_spike_postproc_comp_data), specializations) != 0)
+        {
+            fprintf(stderr, "failed to create postproc pipeline\n");
+            delete postproc;
+            return 1;
+        }
+    }
+#endif
 
     // CPU pre-processing: packed RGBA8 -> planar RGB floats in [0,1].
     // Channel-major layout with cstep floats per channel; planes are disjoint.
@@ -157,14 +189,25 @@ int process_frame_loop(const Options& options, const stbi_uc* pixels, int width,
         }
     }
 
+    // With fp16 storage the graph consumes half tensors: cast the fp32 CPU
+    // tensor once here (same values the reference preproc shader writes in
+    // its fp16s path) and upload the half Mat every frame.
+    ncnn::Mat input_converted;
+    const ncnn::Mat* upload_source = &input;
+    if (options.fp16)
+    {
+        ncnn::cast_float32_to_float16(input, input_converted, ncnn::Option());
+        upload_source = &input_converted;
+    }
+
     std::vector<double> frame_times;
     frame_times.reserve(options.sample_frames);
-    int logged_out_w = 0;
-    int logged_out_h = 0;
     const int scale = 4;
     const size_t out_width = (size_t)width * scale;
     const size_t out_height = (size_t)height * scale;
-    output_rgb8.resize(out_width * out_height * 3);
+    output_rgba.resize(out_width * out_height * 4);
+    int logged_out_w = 0;
+    int logged_out_h = 0;
 
     for (int frame = 0; frame < options.warmup_frames + options.sample_frames; ++frame)
     {
@@ -180,6 +223,7 @@ int process_frame_loop(const Options& options, const stbi_uc* pixels, int width,
         if (!blob_allocator || !staging_allocator)
         {
             fprintf(stderr, "failed to acquire Vulkan allocators\n");
+            delete postproc;
             return 1;
         }
 
@@ -191,16 +235,7 @@ int process_frame_loop(const Options& options, const stbi_uc* pixels, int width,
 
         ncnn::VkCompute cmd(device);
 
-        // Upload. With fp16 storage the graph consumes half tensors, so the
-        // fp32 CPU tensor is cast once before the upload (same values the
-        // reference preproc shader writes in its fp16s path).
-        ncnn::Mat input_converted;
-        const ncnn::Mat* upload_source = &input;
-        if (options.fp16)
-        {
-            ncnn::cast_float32_to_float16(input, input_converted, opt);
-            upload_source = &input_converted;
-        }
+        // Upload the fp16 (or fp32) planar input.
         ncnn::VkMat input_gpu;
         input_gpu.create(width, height, 3, upload_source->elemsize, upload_source->elempack, blob_allocator);
         cmd.record_clone(*upload_source, input_gpu, opt);
@@ -216,54 +251,85 @@ int process_frame_loop(const Options& options, const stbi_uc* pixels, int width,
             extractor.extract("output", output_gpu, cmd);
         }
 
-        // Download.
-        ncnn::Mat output;
-        cmd.record_clone(output_gpu, output, opt);
-        cmd.submit_and_wait();
-
-        // With fp16 storage the output blob is a half Mat; convert it back to
-        // fp32 before reading, otherwise the planar float reads run past the
-        // half-sized buffer.
-        ncnn::Mat output_f32;
-        const ncnn::Mat* read_source = &output;
-        if (output.elemsize == 2)
+#if NCNN_VULKAN
+        if (postproc)
         {
-            ncnn::cast_float16_to_float32(output, output_f32, opt);
-            read_source = &output_f32;
+        ncnn::VkMat output_rgba_gpu;
+        output_rgba_gpu.create(output_gpu.w, output_gpu.h, (size_t)4, 1, blob_allocator);
+        {
+            std::vector<ncnn::VkMat> bindings(2);
+            bindings[0] = output_gpu;
+            bindings[1] = output_rgba_gpu;
+
+            std::vector<ncnn::vk_constant_type> constants(3);
+            constants[0].i = output_gpu.w;
+            constants[1].i = output_gpu.h;
+            constants[2].i = output_gpu.cstep;
+
+            ncnn::VkMat dispatcher;
+            dispatcher.w = output_gpu.w;
+            dispatcher.h = output_gpu.h;
+            dispatcher.c = 1;
+
+            cmd.record_pipeline(postproc, bindings, constants, dispatcher);
         }
 
-        // CPU post-processing: planar RGB [0,1] -> packed RGB8, read before
-        // the blob allocator is reclaimed (see the lifetime notes above).
+        ncnn::Mat output;
+        cmd.record_clone(output_rgba_gpu, output, opt);
+        cmd.submit_and_wait();
+
+        logged_out_w = output.w;
+        logged_out_h = output.h;
+        if ((size_t)logged_out_w * logged_out_h * 4 == output_rgba.size())
+            memcpy(output_rgba.data(), output.data, output_rgba.size());
+        }
+        else
         {
+            // CPU fallback: download planar fp16, cast, convert to RGBA8.
+            ncnn::Mat output;
+            cmd.record_clone(output_gpu, output, opt);
+            cmd.submit_and_wait();
+
+            ncnn::Mat output_f32;
+            const ncnn::Mat* read_source = &output;
+            if (output.elemsize == 2)
+            {
+                ncnn::cast_float16_to_float32(output, output_f32, opt);
+                read_source = &output_f32;
+            }
+
             logged_out_w = read_source->w;
             logged_out_h = read_source->h;
             const float* plane_r = (const float*)read_source->data;
             const float* plane_g = plane_r + read_source->cstep;
             const float* plane_b = plane_g + read_source->cstep;
-            const int out_w = output.w;
-            const int out_h = output.h;
+            const int out_w = read_source->w;
+            const int out_h = read_source->h;
             for (int y = 0; y < out_h; ++y)
             {
-                unsigned char* row = output_rgb8.data() + (size_t)y * out_w * 3;
+                unsigned char* row = output_rgba.data() + (size_t)y * out_w * 4;
                 const float* r = plane_r + (size_t)y * out_w;
                 const float* g = plane_g + (size_t)y * out_w;
                 const float* b = plane_b + (size_t)y * out_w;
                 for (int x = 0; x < out_w; ++x)
                 {
-                    row[x * 3 + 0] = (unsigned char)std::round(std::min(1.0f, std::max(0.0f, r[x])) * 255.0f);
-                    row[x * 3 + 1] = (unsigned char)std::round(std::min(1.0f, std::max(0.0f, g[x])) * 255.0f);
-                    row[x * 3 + 2] = (unsigned char)std::round(std::min(1.0f, std::max(0.0f, b[x])) * 255.0f);
+                    row[x * 4 + 0] = (unsigned char)std::round(std::min(1.0f, std::max(0.0f, r[x])) * 255.0f);
+                    row[x * 4 + 1] = (unsigned char)std::round(std::min(1.0f, std::max(0.0f, g[x])) * 255.0f);
+                    row[x * 4 + 2] = (unsigned char)std::round(std::min(1.0f, std::max(0.0f, b[x])) * 255.0f);
+                    row[x * 4 + 3] = 255;
                 }
             }
         }
+#else
+        (void)0;
+#endif
 
-        // The output Mat may alias the blob allocator's memory (ReBAR); its
-        // data has been copied out above, so reclaiming here is safe. The GPU
-        // mats and the command buffer release in their own destructors.
+        // The RGBA download may alias the blob allocator's memory (ReBAR); its
+        // data has been copied out above, so reclaiming after the inner scope
+        // is safe. The GPU mats and the command buffer release in their own
+        // destructors at the closing brace above.
         }
 
-        // Every GPU object (cmd, input_gpu, output_gpu, download Mat) is now
-        // destroyed; the allocators own no outstanding buffers anymore.
         device->reclaim_blob_allocator(blob_allocator);
         device->reclaim_staging_allocator(staging_allocator);
 
@@ -271,7 +337,7 @@ int process_frame_loop(const Options& options, const stbi_uc* pixels, int width,
         if (measure)
             frame_times.push_back(frame_ms);
         if (frame == 0)
-            fprintf(stderr, "[output] %dx%d rgb8\n", logged_out_w, logged_out_h);
+            fprintf(stderr, "[output] %dx%d rgba8 (gpu postproc)\n", logged_out_w, logged_out_h);
     }
 
     if (!frame_times.empty())
@@ -288,6 +354,10 @@ int process_frame_loop(const Options& options, const stbi_uc* pixels, int width,
         fprintf(stderr, "[timing] input=%dx%d -> fps=%.2f\n", width, height,
             1000.0 / (sum / frame_times.size()));
     }
+
+#if NCNN_VULKAN
+    delete postproc;  // destructor releases the pipeline; runs before net dies
+#endif
     return 0;
 }
 
@@ -322,15 +392,15 @@ int run(const Options& options)
     }
     report_device(ncnn::get_gpu_device(0));
 
-    std::vector<unsigned char> output_rgb8;
-    int result = process_frame_loop(options, pixels, width, height, output_rgb8);
+    std::vector<unsigned char> output_rgba;
+    int result = process_frame_loop(options, pixels, width, height, output_rgba);
 
     if (result == 0)
     {
         const size_t out_width = (size_t)width * 4;
         const size_t out_height = (size_t)height * 4;
-        if (!stbi_write_png(options.output_path, (int)out_width, (int)out_height, 3,
-                output_rgb8.data(), (int)out_width * 3))
+        if (!stbi_write_png(options.output_path, (int)out_width, (int)out_height, 4,
+                output_rgba.data(), (int)out_width * 4))
         {
             fprintf(stderr, "failed to write output: %s\n", options.output_path);
             result = 1;
@@ -363,6 +433,12 @@ int main(int argc, char** argv)
             options.bin_path = argv[++i];
         else if (strcmp(argv[i], "--fp16") == 0)
             options.fp16 = true;
+        else if (strcmp(argv[i], "--fp16-arith") == 0)
+            options.fp16_arith = true;
+        else if (strcmp(argv[i], "--no-gpu-postproc") == 0)
+            options.no_gpu_postproc = true;
+        else if (strcmp(argv[i], "--no-winograd") == 0)
+            options.no_winograd = true;
         else if (strcmp(argv[i], "--warmup") == 0 && i + 1 < argc)
             options.warmup_frames = atoi(argv[++i]);
         else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc)

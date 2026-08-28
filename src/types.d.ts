@@ -50,6 +50,21 @@ interface RenderStats {
   renderMs: number;
   droppedFrames: number;
   warning: boolean;
+  /**
+   * Optional RealESRGAN phase timings (averaged over the same window as
+   * `renderMs`). Only populated when the active pipeline implements
+   * `Anime4KPipeline.getPhaseStats`; non-RealESRGAN pipelines omit them and
+   * the overlay falls back to the basic FPS/renderMs line.
+   */
+  realesrgan?: RealEsrganPhaseStats;
+}
+
+interface RealEsrganPhaseStats {
+  readbackMs: number;
+  inferMs: number;
+  composeMs: number;
+  workerPct: number;
+  gpuComposePct: number;
 }
 
 interface VideoEnhancer {
@@ -90,6 +105,7 @@ export {
   Anime4KWebExtSettings,
   LocalSettings,
   RenderStats,
+  RealEsrganPhaseStats,
   VideoEnhancer,
   EnhancementEffect,
   Dimensions,

@@ -682,16 +682,35 @@ export class Renderer {
 
     if (now - this.lastStatsEmit >= 500) {
       const elapsed = Math.max(1, now - this.statsWindowStarted);
+      const realesrgan = this.collectRealesrganPhaseStats();
       this.onStats?.({
         fps: this.renderedSinceSample * 1000 / elapsed,
         renderMs: this.smoothedRenderMs,
         droppedFrames: this.droppedFrames,
         warning: this.warning,
+        ...(realesrgan ? { realesrgan } : {}),
       });
       this.lastStatsEmit = now;
       this.statsWindowStarted = now;
       this.renderedSinceSample = 0;
     }
+  }
+
+  /**
+   * Pull per-phase timings from any active pipeline that implements
+   * `getPhaseStats()` (RealESRGAN today; other ONNX pipelines can follow).
+   * The active pipeline is the last one in the schedule -- the same one that
+   * produces the output texture the presentation pass samples.
+   */
+  private collectRealesrganPhaseStats(): {
+    readbackMs: number;
+    inferMs: number;
+    composeMs: number;
+    workerPct: number;
+    gpuComposePct: number;
+  } | null {
+    const last = this.pipelines[this.pipelines.length - 1];
+    return last?.getPhaseStats?.() ?? null;
   }
 
   private startFrameCallbacks(): void {

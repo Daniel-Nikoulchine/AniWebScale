@@ -149,41 +149,32 @@ export function createRealEsrganPipelineClass(
     private frameCounter = 0;
     private inferenceErrors = 0;
     private destroyed = false;
-    // Dev-mode profiling (`?debug=realesrgan` on the page URL). Off in normal
-    // use so the timing arithmetic never touches the hot path. Initialised in
-    // the constructor because we need to read `location` at instance time.
-    private debugProfiling = false;
-    // Per-frame phase timings collected in `drain()`. The phase abbreviations
-    // are stable (also used in the console summary) so they can be diffed:
-    //   c = copy mapped range (readback memcpy)
-    //   r = unpack RGBA bytes -> planar RGB
-    //   k = kernel (per-tile ORT inference, sum across tiles)
-    //   m = compose (CPU feather) OR g = compose (GPU compute)
-    //   u = writeTexture (result upload)
-    //   total = wall time from "readback finished" to "result written"
-    private phaseSamples: Array<{
-      frame: number;
-      worker: boolean;
+    // The renderer reads the most recent stat window via `getPhaseStats()` and
+    // ships it in `RenderStats.realesrgan`, which feeds the live-stats overlay
+    // when `statsEnabled` is on. Aggregation window is owned by the renderer
+    // (it already emits RenderStats every 500ms), so we keep two snapshots:
+    // the previous (read-only) and the currently accumulating one. Reset is
+    // driven by `consumePhaseStats()` from the renderer.
+    private phaseAccumulator: {
+      n: number;
       c: number; r: number; k: number;
-      g: number; m: number; u: number; total: number;
-    }> = [];
-    private profileWindowStart = 0;
+      g: number; m: number; u: number;
+      workerCount: number;
+      gpuComposeCount: number;
+    } | null = null;
+    private phaseSnapshot: {
+      readbackMs: number;
+      inferMs: number;
+      composeMs: number;
+      workerPct: number;
+      gpuComposePct: number;
+    } | null = null;
 
     constructor({ device, inputTexture, params }: PipelineDescriptor) {
       this.device = device;
       this.inputTexture = inputTexture;
       this.inputWidth = inputTexture.width;
       this.inputHeight = inputTexture.height;
-      // Profiling flag: opt-in via `?debug=realesrgan` on the page URL. We read
-      // the flag here (not at module load) so content-script instances created
-      // after a navigation pick it up correctly, and the cost on the hot path
-      // when disabled is a single local boolean check in `drain()`.
-      try {
-        const params = new URLSearchParams(globalThis.location?.search ?? '');
-        this.debugProfiling = params.get('debug') === 'realesrgan';
-      } catch {
-        this.debugProfiling = false;
-      }
 
       if (!isReadbackFormat(inputTexture.format)) {
         throw new Error(`RealESRGAN cannot read back texture format ${inputTexture.format}.`);
@@ -321,33 +312,31 @@ export function createRealEsrganPipelineClass(
       // acquired lazily there, so the GPU path keeps less pooled memory hot.
       const readbackBytes = this.pool.acquire(this.readbackByteLength);
       const inputRgbBuffer = this.pool.acquire(3 * pixels * 4);
-      const profiling = this.debugProfiling;
-      const t0 = profiling ? performance.now() : 0;
+      // Phase timings: always on. The arithmetic is cheap (a `performance.now`
+      // and four additions per frame), and the live-stats overlay is the
+      // primary UI for understanding inference cost. `getPhaseStats()` returns
+      // null until at least one frame has been measured.
       let tCopy = 0, tUnpack = 0, tKernel = 0, tCompose = 0, tUpload = 0;
       let composeUsedGpu = false;
       let inferWasWorker = false;
+      let t1 = performance.now();
       try {
         await this.stagingBuffer.mapAsync(GPUMapMode.READ);
         if (this.destroyed) return;
         const mapped = new Uint8Array(readbackBytes);
-        let t1 = profiling ? performance.now() : 0;
         try {
           // The mapped range is only valid until unmap(); copy it out first.
           mapped.set(new Uint8Array(this.stagingBuffer.getMappedRange()));
         } finally {
           this.stagingBuffer.unmap();
         }
-        if (profiling) {
-          tCopy = performance.now() - t1;
-          t1 = performance.now();
-        }
+        tCopy = performance.now() - t1;
+        t1 = performance.now();
 
         const inputRgb = new Float32Array(inputRgbBuffer);
         unpackReadbackToPlanarRgb(mapped, this.inferenceWidth, this.inferenceHeight, this.readbackFormat, inputRgb);
-        if (profiling) {
-          tUnpack = performance.now() - t1;
-          t1 = performance.now();
-        }
+        tUnpack = performance.now() - t1;
+        t1 = performance.now();
 
         const tiled = await inferTiledResults({
           inputRgb,
@@ -357,32 +346,27 @@ export function createRealEsrganPipelineClass(
           overlap: tiling.overlap,
           singleTileMaxHeight: tiling.singleTileMaxHeight,
           infer: (tileRgb, tileWidth, tileHeight) => {
-            // The first tile in a frame reveals which path inference took
-            // (worker vs main-thread); we record that once for the sample.
-            if (profiling && !inferWasWorker) {
+            // Record worker-vs-main-thread once per frame, based on the
+            // first tile. Later tiles in the same frame follow the same path.
+            if (!inferWasWorker) {
               inferWasWorker = this.workerRunner !== null;
             }
             return this.runInference(tileRgb, tileWidth, tileHeight);
           },
         });
-        if (profiling) tKernel = performance.now() - t1;
+        tKernel = performance.now() - t1;
 
         if (this.destroyed) return;
         if (this.scheduler.isResultCurrent(frame)) {
-          if (profiling) t1 = performance.now();
+          t1 = performance.now();
           composeUsedGpu = this.writeComposedResult(tiled);
-          if (profiling) {
-            tCompose = performance.now() - t1;
-            t1 = performance.now();
-            // writeTexture is inside writeComposedResult's CPU path; for the
-            // GPU composer the upload happens in the compute pass and we
-            // attribute its cost to "compose" rather than measuring it
-            // separately (writeTexture isn't on this code path).
-            if (!composeUsedGpu) {
-              tUpload = performance.now() - t1;
-            } else {
-              tUpload = 0;
-            }
+          tCompose = performance.now() - t1;
+          if (!composeUsedGpu) {
+            // writeTexture happened inside writeComposedResult's CPU branch.
+            // We can't separate compose from upload post-hoc without more
+            // instrumentation; for the CPU path the two are short, so
+            // report them together as "compose+upload".
+            tUpload = 0;
           }
         }
       } catch (error) {
@@ -394,46 +378,65 @@ export function createRealEsrganPipelineClass(
         this.pool.release(readbackBytes);
         this.pool.release(inputRgbBuffer);
         this.scheduler.markCompleted(frame);
-        if (profiling) {
-          const total = performance.now() - t0;
-          this.phaseSamples.push({
-            frame,
-            worker: inferWasWorker,
-            c: tCopy, r: tUnpack, k: tKernel,
-            g: composeUsedGpu ? tCompose : 0,
-            m: composeUsedGpu ? 0 : tCompose,
-            u: tUpload,
-            total,
-          });
-          this.maybeLogProfileSummary();
-        }
+        this.recordPhaseSample(tCopy, tUnpack, tKernel, tCompose, tUpload, composeUsedGpu, inferWasWorker);
       }
     }
 
-    private maybeLogProfileSummary(): void {
-      if (this.phaseSamples.length < 30) return;
-      const now = performance.now();
-      if (this.profileWindowStart === 0) this.profileWindowStart = now;
-      const windowMs = now - this.profileWindowStart;
-      if (windowMs < 1000) return; // log at most once per second
-      const samples = this.phaseSamples;
-      const n = samples.length;
-      const avg = (key: keyof typeof samples[number]) =>
-        samples.reduce((s, x) => s + (x[key] as number), 0) / n;
-      const fps = (n / windowMs) * 1000;
-      const workerPct = (samples.filter((s) => s.worker).length / n) * 100;
-      const gpuComposePct = (samples.filter((s) => s.g > 0).length / n) * 100;
-      console.log(
-        '[RealESRGAN profile] %d frames in %.1fs (%.1f fps) | worker=%.0f%% gpuCompose=%.0f%% | ' +
-        'avg ms: copy=%.1f unpack=%.1f kernel=%.1f compose(gpu|cpu)=%.1f|%.1f upload=%.1f total=%.1f',
-        n, windowMs / 1000, fps,
-        workerPct, gpuComposePct,
-        avg('c'), avg('r'), avg('k'),
-        avg('g'), avg('m'),
-        avg('u'), avg('total'),
-      );
-      this.phaseSamples = [];
-      this.profileWindowStart = now;
+    private recordPhaseSample(
+      tCopy: number, tUnpack: number, tKernel: number,
+      tCompose: number, tUpload: number,
+      composeUsedGpu: boolean, inferWasWorker: boolean,
+    ): void {
+      const a = this.phaseAccumulator ?? {
+        n: 0, c: 0, r: 0, k: 0, g: 0, m: 0, u: 0,
+        workerCount: 0, gpuComposeCount: 0,
+      };
+      a.n += 1;
+      a.c += tCopy;
+      a.r += tUnpack;
+      a.k += tKernel;
+      if (composeUsedGpu) {
+        a.g += tCompose;
+      } else {
+        // CPU path bundles compose + writeTexture. Surface the cost in
+        // composeMs; the overlay hides the upload field on the CPU path.
+        a.m += tCompose;
+        a.u += tUpload;
+      }
+      if (inferWasWorker) a.workerCount += 1;
+      if (composeUsedGpu) a.gpuComposeCount += 1;
+      this.phaseAccumulator = a;
+    }
+
+    /**
+     * Average phase timings over the window since the last call. The renderer
+     * pulls this once per stats emit (every 500ms) and resets the accumulator.
+     * Returns null when no frames have been measured yet, so the overlay can
+     * fall back to the basic FPS/renderMs line.
+     */
+    public getPhaseStats(): {
+      readbackMs: number;
+      inferMs: number;
+      composeMs: number;
+      workerPct: number;
+      gpuComposePct: number;
+    } | null {
+      const a = this.phaseAccumulator;
+      if (!a || a.n === 0) return this.phaseSnapshot;
+      const snapshot = {
+        // Readback = GPU→CPU mapped-range copy + RGBA→planar unpack; both are
+        // paid by the readback side of the pipeline, before inference starts.
+        readbackMs: (a.c + a.r) / a.n,
+        inferMs: a.k / a.n,
+        // Compose time on whichever path ran; the overlay treats `composeMs`
+        // as "time spent producing the output texture" regardless of GPU/CPU.
+        composeMs: (Math.max(a.g, a.m)) / a.n,
+        workerPct: (a.workerCount / a.n) * 100,
+        gpuComposePct: (a.gpuComposeCount / a.n) * 100,
+      };
+      this.phaseSnapshot = snapshot;
+      this.phaseAccumulator = null;
+      return snapshot;
     }
 
     /**

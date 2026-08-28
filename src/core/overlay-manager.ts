@@ -190,9 +190,32 @@ export class OverlayManager {
   public setStats(stats: RenderStats | null): void {
     if (!stats) {
       this.statsPanel.hidden = true;
+      this.statsPanel.textContent = '';
       return;
     }
-    this.statsPanel.textContent = `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
+    const head = `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
+    if (stats.realesrgan) {
+      const r = stats.realesrgan;
+      // Inline two-line layout: a plain <br> keeps the same monospace pill
+      // and avoids the alternative of a second DOM node + flexbox in the
+      // shadow root. The phase breakdown only shows on RealESRGAN; other
+      // modes use the single-line version above.
+      const composePath = r.gpuComposePct >= 50 ? 'gpu' : 'cpu';
+      const worker = r.workerPct >= 50 ? 'worker' : 'main';
+      this.statsPanel.replaceChildren();
+      const line1 = document.createElement('div');
+      line1.textContent = head;
+      const line2 = document.createElement('div');
+      line2.textContent =
+        `readback ${r.readbackMs.toFixed(1)}ms  infer ${r.inferMs.toFixed(1)}ms  ` +
+        `compose ${r.composeMs.toFixed(1)}ms (${composePath}, ${worker})`;
+      line2.style.marginTop = '3px';
+      line2.style.opacity = '0.85';
+      this.statsPanel.appendChild(line1);
+      this.statsPanel.appendChild(line2);
+    } else {
+      this.statsPanel.textContent = head;
+    }
     this.statsPanel.hidden = false;
     this.statsPanel.classList.toggle('overloaded', stats.warning);
   }

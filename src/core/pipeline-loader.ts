@@ -6,6 +6,7 @@ import { createRealEsrganPipelineClass } from './realesrgan-pipeline';
 import { setupRealEsrganBrowserRuntime } from './realesrgan-browser-setup';
 import { createRealEsrganSession } from './realesrgan-session';
 import { RealEsrganWorkerClient, type RealEsrganInferenceRunner } from './realesrgan-worker-client';
+import { RealEsrganNativeVulkanClient } from './realesrgan-native-vulkan-client';
 import type { RealEsrganWorkerBinding } from './realesrgan-pipeline';
 import type { GeneratedKernelSet, PipelineConstructor } from './pipeline-types';
 
@@ -70,6 +71,17 @@ const localLoaders: Record<string, ConstructorLoader> = {
 // redundant worker. The promise is shared; a failed spawn resolves to null
 // and the pipeline falls back to the main-thread session.
 let realEsrganWorkerClientPromise: Promise<RealEsrganInferenceRunner | null> | null = null;
+// Native Vulkan host is tried first on Linux (REBAR+RADV 14ms vs WASM 70ms).
+// Also a shared singleton; a missing host or Vulkan init failure resolves to
+// null and the pipeline falls through to the worker path.
+let realEsrganNativeClientPromise: Promise<RealEsrganInferenceRunner | null> | null = null;
+
+function getRealEsrganNativeRunner(): Promise<RealEsrganInferenceRunner | null> {
+  if (!realEsrganNativeClientPromise) {
+    realEsrganNativeClientPromise = RealEsrganNativeVulkanClient.create();
+  }
+  return realEsrganNativeClientPromise;
+}
 
 function getRealEsrganWorkerRunner(): Promise<RealEsrganInferenceRunner | null> {
   if (!realEsrganWorkerClientPromise) {
@@ -81,21 +93,52 @@ function getRealEsrganWorkerRunner(): Promise<RealEsrganInferenceRunner | null> 
 function realEsrganLoader(className: string): ConstructorLoader {
   return async () => {
     await setupRealEsrganBrowserRuntime();
-    // Start the worker before creating the main-thread fallback session. This
-    // avoids paying for both sessions when the worker is available and keeps
-    // the fallback lazy until the worker has actually failed.
-    const runner = await getRealEsrganWorkerRunner();
-    const session = runner ? null : await createRealEsrganSession(className);
+    // Try native Vulkan first (Linux), then worker, then main-thread.
+    // The native host is persistent and ~10x faster than WASM on NAVI22,
+    // so paying its 4s handshake once is worth it.
+    let runner: RealEsrganInferenceRunner | null = await getRealEsrganNativeRunner();
+    if (!runner) {
+      runner = await getRealEsrganWorkerRunner();
+    }
+    // No eager main-thread session here: sessions are shape-pinned (one per
+    // inference size) and the inference size is only known once the pipeline
+    // is constructed for a source. The pipeline warms its size via getSession
+    // in its constructor, and the drain path awaits the same cached promise.
+    // E2E override: the clip runner can point the pipeline at a
+    // static-shape model variant via storage. Guarded by the E2E flag so
+    // production builds never consult storage for model URLs.
+    let modelFileOverride: string | null = null;
+    if (__ANIME4K_E2E__) {
+      try {
+        const stored = await chrome.storage.local.get('e2eModelFile');
+        if (typeof stored.e2eModelFile === 'string') modelFileOverride = stored.e2eModelFile;
+      } catch { /* storage unavailable */ }
+    }
+    // Both model URLs are resolved here because the worker has no chrome.*
+    // APIs. The worker prefers the FP16 asset and falls back to the FP32
+    // file when the session cascade fails or the asset is missing. FP16 is
+    // currently dead on RDNA2 (ORT 1.29 WebGPU EP emits invalid f16 WGSL for
+    // the Clip kernel), so getSession()'s fp16 attempt fails and the fp32
+    // attempt below is what actually serves frames.
     const worker: RealEsrganWorkerBinding | null = runner
       ? {
         runner,
-        modelUrl: chrome.runtime.getURL(`models/realesrgan/${REALESRGAN_CLASS_TO_MODEL_FILE[className]}`),
+        modelUrl: chrome.runtime.getURL(`models/realesrgan/${modelFileOverride ?? REALESRGAN_CLASS_TO_MODEL_FILE[className]}`),
+        // FP16 disabled: ORT-web 1.29's WebGPU EP compiles an invalid WGSL
+        // Clip kernel for the fp16 graph on RDNA2 ("ShaderModule with 'Clip'
+        // label is invalid"), so handing the worker the fp16 URL only burns
+        // a session attempt + a timed-out frame before the fp32 attempt.
+        // Pass null to skip the fp16 probe until the EP ships valid kernels.
+        modelUrlFp16: null,
       }
       : null;
-    // The pipeline requires a session for fallback. When the worker is active,
-    // provide a lazy proxy session only through the worker path; a real session
-    // is created on first worker failure by the loader-independent factory.
-    return createRealEsrganPipelineClass(session, undefined, worker);
+    // Worker-death recovery: if the worker dies MID-STREAM, the pipeline's
+    // runner is nulled and it needs a main-thread session that did not exist
+    // at load time. createRealEsrganSession() caches per class AND shape, so
+    // the first frame at a new size pays the session cost and every later
+    // frame at that size reuses it.
+    const getSession = (width: number, height: number) => createRealEsrganSession(className, width, height);
+    return createRealEsrganPipelineClass(null, undefined, worker, getSession);
   };
 }
 

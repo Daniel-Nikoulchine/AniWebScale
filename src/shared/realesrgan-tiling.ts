@@ -3,7 +3,7 @@
  *
  * Sources up to `singleTileMaxHeight` are processed whole. Larger sources are
  * split into overlapping tiles so each inference call stays within the
- * `maxTileSize` bound required by the fixed-shape ONNX session. Overlap gives
+ * `maxTileSize` bound (sessions are shape-pinned per tile). Overlap gives
  * the compositor room to feather tile borders away.
  */
 
@@ -21,6 +21,25 @@ export interface TilePlanOptions {
   overlap: number;
   /** Sources at or below this height are processed as one whole frame. */
   singleTileMaxHeight: number;
+}
+
+/**
+ * Select conservative tile geometry for the current input. Larger tiles reduce
+ * per-tile ORT/message overhead; smaller tiles avoid large transient tensors.
+ */
+export function adaptiveRealEsrganTiling(
+  width: number,
+  height: number,
+  options: Partial<TilePlanOptions> = {},
+): TilePlanOptions {
+  const pixels = width * height;
+  const maxTileSize = options.maxTileSize ?? (pixels >= 1920 * 1080 ? 384 : 512);
+  const overlap = options.overlap ?? Math.min(24, Math.floor(maxTileSize / 16));
+  return {
+    maxTileSize,
+    overlap: Math.min(overlap, Math.max(0, maxTileSize - 1)),
+    singleTileMaxHeight: options.singleTileMaxHeight ?? Math.min(576, maxTileSize),
+  };
 }
 
 export interface TilePlan {
@@ -58,6 +77,9 @@ export function planRealEsrganTiles(
   }
   if (!Number.isInteger(options.overlap) || options.overlap < 0 || options.overlap >= options.maxTileSize) {
     throw new Error(`Invalid overlap: ${options.overlap} for maxTileSize ${options.maxTileSize}`);
+  }
+  if (!Number.isInteger(options.singleTileMaxHeight) || options.singleTileMaxHeight <= 0) {
+    throw new Error(`Invalid singleTileMaxHeight: ${options.singleTileMaxHeight}`);
   }
 
   if (sourceHeight <= options.singleTileMaxHeight) {

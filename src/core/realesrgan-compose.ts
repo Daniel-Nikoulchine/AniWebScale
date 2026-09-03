@@ -198,6 +198,11 @@ export class RealEsrganGpuComposer {
     featherWindow: number,
   ): boolean {
     if (this.destroyed || tiles.length === 0) return false;
+    // The shader stores at (px,py) for px<outWidth/py<outHeight; the texture
+    // must therefore be at least compose-sized. A target-sized output
+    // texture (p8 transport downscale) would silently drop the frame bottom/
+    // right instead of erroring, so refuse it up front.
+    if (outWidth > this.outputTexture.width || outHeight > this.outputTexture.height) return false;
     const { descs, data } = buildComposeBuffers(tiles, featherWindow);
     const bindingLimit = this.device.limits?.maxStorageBufferBindingSize ?? Number.POSITIVE_INFINITY;
     if (data.byteLength > bindingLimit) return false;

@@ -21,7 +21,12 @@
  * Call `setupRealEsrganBrowserRuntime()` once before the first RealESRGAN
  * session is created. It is idempotent.
  */
-import { setRealEsrganModelUrlResolver, setRealEsrganThreadingConfig } from './realesrgan-session';
+import {
+  setRealEsrganExecutionConfig,
+  setRealEsrganModelAssetExists,
+  setRealEsrganModelUrlResolver,
+  setRealEsrganThreadingConfig,
+} from './realesrgan-session';
 
 let configured: Promise<void> | null = null;
 
@@ -38,6 +43,16 @@ export function setupRealEsrganBrowserRuntime(): Promise<void> {
   configured = (async () => {
     setRealEsrganModelUrlResolver(fileName =>
       chrome.runtime.getURL(`models/realesrgan/${fileName}`));
+    setRealEsrganModelAssetExists(async fileName => {
+      try {
+        const response = await fetch(chrome.runtime.getURL(`models/realesrgan/${fileName}`), {
+          method: 'HEAD',
+        });
+        return response.ok;
+      } catch {
+        return false;
+      }
+    });
 
     // Point the WASM backend at the bundled runtime. onnxruntime-web appends
     // the specific .wasm file name to this prefix when it instantiates.
@@ -65,6 +80,18 @@ export function setupRealEsrganBrowserRuntime(): Promise<void> {
     setRealEsrganThreadingConfig({
       proxy: false,
       numThreads: Math.min(16, cores),
+    });
+    // INT8 is enabled by default: static quantized QDQ model (666K, 1.8x WASM speedup, PSNR 32.5dB on anime).
+    // FP16 is disabled by default: ORT-web 1.29's WebGPU EP fails the fp16
+    // model on RDNA2 with "Failed to create a WebGPU compute pipeline:
+    // ShaderModule with 'Clip' label is invalid" (its f16 WGSL uses the
+    // bitcast<vec2<f16>> pattern the worker hook cannot fully rewrite), and
+    // the FP32 model must remain the quality reference anyway. Flip to true
+    // only after the EP ships valid f16 kernels; session creation still
+    // requires the packaged FP16 asset and falls back to FP32 when missing.
+    setRealEsrganExecutionConfig({
+      preferFloat16: false,
+      preferInt8: true,
     });
   })();
   // A failed setup must not poison the singleton; drop it so a retry can

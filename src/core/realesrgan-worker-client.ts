@@ -38,9 +38,13 @@ interface WorkerInferMessage {
   type: 'infer';
   id: number;
   modelUrl: string;
+  modelUrlFp16: string | null;
   width: number;
   height: number;
   data: Float32Array;
+  /** Presentation target (absent/0 = full 4x). The worker box-averages down to a valid target. */
+  targetWidth?: number;
+  targetHeight?: number;
 }
 
 interface WorkerInitReply {
@@ -55,7 +59,8 @@ interface WorkerInferReply {
   ok: boolean;
   width?: number;
   height?: number;
-  data?: Float32Array;
+  data?: Uint8Array;
+  path?: string;
   error?: string;
 }
 
@@ -77,16 +82,21 @@ export interface RealEsrganWorkerClientOptions {
   initTimeoutMs?: number;
   /** Milliseconds to wait for a single inference reply. */
   inferTimeoutMs?: number;
+  /** Maximum simultaneous worker inference requests. */
+  maxConcurrentRequests?: number;
 }
 
 interface PendingInference {
-  resolve: (data: Float32Array) => void;
+  resolve: (data: RealEsrganFrameResult) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
 const DEFAULT_INIT_TIMEOUT_MS = 15_000;
-const DEFAULT_INFER_TIMEOUT_MS = 30_000;
+// 18s: the first fp32 inference includes WebGPU shader compilation for every
+// kernel; on a busy system that measured >12s (the old cap), which disabled a
+// perfectly good worker after ONE slow frame.
+const DEFAULT_INFER_TIMEOUT_MS = 18_000;
 
 function isWorkerReply(value: unknown): value is WorkerReply {
   return typeof value === 'object' && value !== null
@@ -97,9 +107,31 @@ function isWorkerReply(value: unknown): value is WorkerReply {
  * Minimal inference contract the pipeline depends on. The worker client
  * implements it; tests stub it. Keeps the pipeline decoupled from the
  * client's spawn/protocol machinery.
+ *
+ * `runFrame` hands the WHOLE frame to the worker: tile planning, batched
+ * inference, feathered composition and RGBA8 packing happen there. The
+ * returned frame is tightly packed RGBA8. `targetWidth/targetHeight` are
+ * OPTIONAL (0 = legacy full 4x frame): a runner that supports
+ * transport-sized output box-averages the 4x result down to this size and
+ * reports the actual dimensions alongside the bytes. A runner MAY ignore
+ * the target (returns 4x dims) - the pipeline handles both.
  */
+export interface RealEsrganFrameResult {
+  data: Uint8Array;
+  width: number;
+  height: number;
+}
+
 export interface RealEsrganInferenceRunner {
-  run(modelUrl: string, width: number, height: number, data: Float32Array): Promise<Float32Array>;
+  runFrame(
+    modelUrl: string,
+    modelUrlFp16: string | null,
+    width: number,
+    height: number,
+    data: Float32Array,
+    targetWidth?: number,
+    targetHeight?: number,
+  ): Promise<RealEsrganFrameResult>;
   dispose?(): void;
 }
 
@@ -107,12 +139,23 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
   private readonly worker: RealEsrganWorkerHandle;
   private readonly pending = new Map<number, PendingInference>();
   private readonly inferTimeoutMs: number;
+  private readonly maxConcurrentRequests: number;
+  private activeRequests = 0;
+  private readonly requestQueue: Array<{
+    message: WorkerInferMessage;
+    resolve: (data: RealEsrganFrameResult) => void;
+    reject: (error: Error) => void;
+  }> = [];
   private nextId = 1;
   private disposed = false;
+  /** Optional diagnostics hook: fired once per distinct composition path. */
+  public onFramePath: ((path: string) => void) | null = null;
+  private lastLoggedPath: string | null = null;
 
-  private constructor(worker: RealEsrganWorkerHandle, inferTimeoutMs: number) {
+  private constructor(worker: RealEsrganWorkerHandle, inferTimeoutMs: number, maxConcurrentRequests: number) {
     this.worker = worker;
     this.inferTimeoutMs = inferTimeoutMs;
+    this.maxConcurrentRequests = Math.max(1, Math.floor(maxConcurrentRequests));
     this.worker.onmessage = event => this.handleMessage(event.data);
     this.worker.onerror = event => this.failAll(new Error(event.message ?? 'RealESRGAN worker error'));
   }
@@ -139,14 +182,21 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
       ?? ((blobUrl: string) => URL.revokeObjectURL(blobUrl));
     const initTimeoutMs = options.initTimeoutMs ?? DEFAULT_INIT_TIMEOUT_MS;
     const inferTimeoutMs = options.inferTimeoutMs ?? DEFAULT_INFER_TIMEOUT_MS;
+    const maxConcurrentRequests = options.maxConcurrentRequests
+      ?? Math.max(2, Math.min(8, typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 2 : 2));
 
     let worker: RealEsrganWorkerHandle;
     try {
       const scriptUrl = resolveUrl('chunks/realesrgan-inference-worker.js');
       const source = await loadScript(scriptUrl);
       const blobUrl = createBlobUrl(source);
-      worker = spawnWorker(blobUrl);
-      revokeBlobUrl(blobUrl);
+      try {
+        worker = spawnWorker(blobUrl);
+      } finally {
+        // Revoke even when Worker construction fails; otherwise repeated
+        // fallback attempts leak one Blob URL per attempt.
+        revokeBlobUrl(blobUrl);
+      }
     } catch (error) {
       // Visible on the page console so the user can tell us *why* the
       // worker path is dead on this browser. The pipeline falls back to
@@ -160,18 +210,7 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
       return null;
     }
 
-    // Surface worker.onerror too -- the constructor may succeed but the
-    // worker can fail to load its module or fail to start afterwards. Without
-    // this hook the failure is silent and the user sees only "main" in the
-    // stats overlay with no clue why.
-    worker.onerror = (event: { message?: string }) => {
-      console.warn(
-        '[RealESRGAN] worker runtime error: %s',
-        event.message ?? 'unknown',
-      );
-    };
-
-    const client = new RealEsrganWorkerClient(worker, inferTimeoutMs);
+    const client = new RealEsrganWorkerClient(worker, inferTimeoutMs, maxConcurrentRequests);
     const initialised = await client.initialise(resolveUrl, initTimeoutMs);
     if (!initialised) {
       console.warn(
@@ -224,12 +263,29 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
     const pending = this.pending.get(value.id);
     if (!pending) return;
     this.pending.delete(value.id);
+    this.activeRequests = Math.max(0, this.activeRequests - 1);
     clearTimeout(pending.timer);
     if (value.ok && value.data) {
-      pending.resolve(value.data);
+      const outputWidth = value.width ?? 0;
+      const outputHeight = value.height ?? 0;
+      if (!Number.isInteger(outputWidth) || !Number.isInteger(outputHeight)
+        || outputWidth <= 0 || outputHeight <= 0
+        || value.data.length !== outputWidth * outputHeight * 4) {
+        pending.reject(new Error('RealESRGAN worker returned an invalid output shape.'));
+        this.pumpRequests();
+        return;
+      }
+      // Surface which composition path served this frame; the pipeline logs
+      // it once per distinct value for live diagnostics.
+      if (value.path && value.path !== this.lastLoggedPath) {
+        this.lastLoggedPath = value.path;
+        this.onFramePath?.(value.path);
+      }
+      pending.resolve({ data: value.data, width: outputWidth, height: outputHeight });
     } else {
       pending.reject(new Error(value.error ?? 'RealESRGAN worker inference failed'));
     }
+    this.pumpRequests();
   }
 
   private failAll(error: Error): void {
@@ -240,33 +296,68 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
       pending.reject(error);
     }
     this.pending.clear();
+    while (this.requestQueue.length) this.requestQueue.shift()!.reject(error);
+    this.activeRequests = 0;
+  }
+
+  private pumpRequests(): void {
+    if (this.disposed || this.activeRequests >= this.maxConcurrentRequests) return;
+    const request = this.requestQueue.shift();
+    if (!request) return;
+    this.activeRequests += 1;
+    const { message, resolve, reject } = request;
+    const timer = setTimeout(() => {
+      this.pending.delete(message.id);
+      this.activeRequests = Math.max(0, this.activeRequests - 1);
+      reject(new Error('RealESRGAN worker inference timed out.'));
+      this.pumpRequests();
+    }, this.inferTimeoutMs);
+    this.pending.set(message.id, { resolve, reject, timer });
+    try {
+      this.worker.postMessage(message, [message.data.buffer]);
+    } catch (error) {
+      this.pending.delete(message.id);
+      this.activeRequests = Math.max(0, this.activeRequests - 1);
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
+      this.pumpRequests();
+    }
+    // Fill every available request slot. Otherwise a queue of frames waits
+    // unnecessarily until the first completion even when concurrency > 1.
+    this.pumpRequests();
   }
 
   /**
-   * Run one tile through the worker. `data` is planar NCHW RGB ([1,3,h,w]);
-   * the returned array is the 4x planar result. The input is copied into a
-   * transferable buffer; the caller keeps its own buffer untouched.
+   * Run one whole frame through the worker. `data` is planar NCHW RGB
+   * ([1,3,h,w]); the returned frame is tightly packed RGBA8 with its actual
+   * dimensions. `targetWidth/targetHeight` (0 = full 4x) are forwarded to
+   * the worker, which box-averages the 4x result down to a valid target and
+   * reports the actual dimensions alongside the bytes.
+   * The input is copied into a transferable buffer; the caller keeps its own
+   * buffer untouched. `modelUrlFp16` may be null: the worker then uses
+   * `modelUrl` only.
    */
-  run(modelUrl: string, width: number, height: number, data: Float32Array): Promise<Float32Array> {
+  runFrame(
+    modelUrl: string,
+    modelUrlFp16: string | null,
+    width: number,
+    height: number,
+    data: Float32Array,
+    targetWidth = 0,
+    targetHeight = 0,
+  ): Promise<RealEsrganFrameResult> {
     if (this.disposed) return Promise.reject(new Error('RealESRGAN worker client is disposed.'));
     const id = this.nextId;
     this.nextId += 1;
     // Copy so the transfer never detaches a buffer the caller still owns.
     const payload = new Float32Array(data);
-    const message: WorkerInferMessage = { type: 'infer', id, modelUrl, width, height, data: payload };
-    return new Promise<Float32Array>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error('RealESRGAN worker inference timed out.'));
-      }, this.inferTimeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      try {
-        this.worker.postMessage(message, [payload.buffer]);
-      } catch (error) {
-        this.pending.delete(id);
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
+    const message: WorkerInferMessage = {
+      type: 'infer', id, modelUrl, modelUrlFp16, width, height, data: payload,
+      ...(targetWidth > 0 && targetHeight > 0 ? { targetWidth, targetHeight } : {}),
+    };
+    return new Promise<RealEsrganFrameResult>((resolve, reject) => {
+      this.requestQueue.push({ message, resolve, reject });
+      this.pumpRequests();
     });
   }
 

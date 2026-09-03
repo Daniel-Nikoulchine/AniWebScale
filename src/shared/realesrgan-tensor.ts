@@ -7,7 +7,7 @@
  * tiles back into a single full-size result, feathering tile borders so seams
  * are invisible.
  */
-import { planRealEsrganTiles } from './realesrgan-tiling';
+import { adaptiveRealEsrganTiling, planRealEsrganTiles } from './realesrgan-tiling';
 
 export interface PlanarRgb {
   /** Channel-major floats in [0,1], length 3 * width * height. */
@@ -16,6 +16,12 @@ export interface PlanarRgb {
 }
 
 export function rgbaToPlanarRgb(rgba: Uint8Array, width: number, height: number): PlanarRgb {
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new Error(`rgbaToPlanarRgb: invalid dimensions ${width}x${height}.`);
+  }
+  if (rgba.length < width * height * 4) {
+    throw new Error(`rgbaToPlanarRgb: expected at least ${width * height * 4} bytes, got ${rgba.length}.`);
+  }
   const pixels = width * height;
   const data = new Float32Array(3 * pixels);
   const r = data.subarray(0, pixels);
@@ -31,6 +37,12 @@ export function rgbaToPlanarRgb(rgba: Uint8Array, width: number, height: number)
 }
 
 export function rgbPlanarToRgba(planar: Float32Array, width: number, height: number): Uint8Array {
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new Error(`rgbPlanarToRgba: invalid dimensions ${width}x${height}.`);
+  }
+  if (planar.length < 3 * width * height) {
+    throw new Error(`rgbPlanarToRgba: expected at least ${3 * width * height} floats, got ${planar.length}.`);
+  }
   const pixels = width * height;
   const out = new Uint8Array(4 * pixels);
   const r = planar.subarray(0, pixels);
@@ -194,18 +206,23 @@ export interface TiledInferenceResult {
  */
 export async function inferTiledResults(options: ComposeOptions): Promise<TiledInferenceResult> {
   const { inputRgb, width, height, infer } = options;
-  const plan = planRealEsrganTiles(width, height, {
+  const geometry = adaptiveRealEsrganTiling(width, height, {
     maxTileSize: options.maxTileSize,
     overlap: options.overlap,
     singleTileMaxHeight: options.singleTileMaxHeight,
   });
-  const featherWindow = Math.max(1, options.overlap * 2);
+  const plan = planRealEsrganTiles(width, height, geometry);
+  const featherWindow = Math.max(1, geometry.overlap * 2);
   const tiles: InferredTile[] = [];
-  for (const tile of plan.tiles) {
+  // Tile inference is intentionally concurrent. The worker client applies its
+  // own back-pressure; runners that support parallel execution can overlap
+  // requests, while the serialized runner remains behaviorally identical.
+  const pending = plan.tiles.map(async tile => {
     const tileRgb = extractTileRgb(inputRgb, width, height, tile.x, tile.y, tile.width, tile.height);
     const rgb = await infer(tileRgb, tile.width, tile.height);
-    tiles.push({ x: tile.x, y: tile.y, width: tile.width, height: tile.height, rgb });
-  }
+    return { x: tile.x, y: tile.y, width: tile.width, height: tile.height, rgb };
+  });
+  tiles.push(...await Promise.all(pending));
   return { tiles, featherWindow, outWidth: width * 4, outHeight: height * 4 };
 }
 

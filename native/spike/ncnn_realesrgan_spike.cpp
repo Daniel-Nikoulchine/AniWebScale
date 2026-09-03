@@ -67,6 +67,9 @@ struct Options {
     bool fp16_arith = false;
     bool no_winograd = false;
     bool no_gpu_postproc = false;
+    bool no_winograd23 = false;
+    bool no_winograd43 = false;
+    bool no_sgemm = false;
     int warmup_frames = 0;
     int sample_frames = 1;
 };
@@ -74,7 +77,7 @@ struct Options {
 void print_usage()
 {
     fprintf(stderr,
-        "Usage: ncnn-spike -i input.png -o output.png -p model.param -b model.bin [--fp16] [--fp16-arith] [--no-winograd] [--warmup N] [--frames N]\n");
+        "Usage: ncnn-spike -i input.png -o output.png -p model.param -b model.bin [--fp16] [--fp16-arith] [--no-winograd] [--no-winograd23] [--no-winograd43] [--no-sgemm] [--warmup N] [--frames N]\n");
 }
 
 void report_device(const ncnn::VulkanDevice* device)
@@ -123,6 +126,9 @@ int process_frame_loop(const Options& options, const stbi_uc* pixels, int width,
     net.opt.use_fp16_storage = options.fp16;
     net.opt.use_fp16_arithmetic = options.fp16_arith;
     net.opt.use_winograd_convolution = !options.no_winograd;
+    net.opt.use_winograd23_convolution = !options.no_winograd23;
+    net.opt.use_winograd43_convolution = !options.no_winograd43;
+    net.opt.use_sgemm_convolution = !options.no_sgemm;
     net.opt.use_bf16_storage = false;
     net.opt.use_int8_storage = false;
     net.opt.use_int8_arithmetic = false;
@@ -439,6 +445,12 @@ int main(int argc, char** argv)
             options.no_gpu_postproc = true;
         else if (strcmp(argv[i], "--no-winograd") == 0)
             options.no_winograd = true;
+        else if (strcmp(argv[i], "--no-winograd23") == 0)
+            options.no_winograd23 = true;
+        else if (strcmp(argv[i], "--no-winograd43") == 0)
+            options.no_winograd43 = true;
+        else if (strcmp(argv[i], "--no-sgemm") == 0)
+            options.no_sgemm = true;
         else if (strcmp(argv[i], "--warmup") == 0 && i + 1 < argc)
             options.warmup_frames = atoi(argv[++i]);
         else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc)

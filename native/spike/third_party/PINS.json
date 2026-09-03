@@ -2,14 +2,15 @@
   "description": "Pinned upstream sources for the ncnn-Vulkan RealESRGAN spike. Verify every hash before trusting the artifacts; fetch via native/spike/fetch-sources.py.",
   "ncnn": {
     "repo": "https://github.com/Tencent/ncnn",
-    "tag": "20260526",
-    "source_tarball": "https://github.com/Tencent/ncnn/archive/refs/tags/20260526.tar.gz",
-    "sha256": "da1ade826bc22858a9fb87ae052789bbd614d042b3ec2c22e6544ca83db6bc04",
-    "glslang_submodule_commit": "fe88f421038e1bb0a25cd5c1b2dfe505db82d08f",
-    "glslang_tarball": "https://github.com/nihui/glslang/archive/fe88f421038e1bb0a25cd5c1b2dfe505db82d08f.tar.gz",
-    "glslang_sha256": "dc78c7f2c479779db66c60582bf8c4173b75b89f689b7edaff3a97d8820dbecd",
+    "tag": "master-0a4e85ae4444b325bc6b67ca22000aef6df9b156",
+    "source_tarball": "https://github.com/Tencent/ncnn/archive/0a4e85ae4444b325bc6b67ca22000aef6df9b156.tar.gz",
+    "sha256": "1074da4049b9000ca03f4ea2dddb5600dc7c366a8503979fa7f85612a091cb7b",
+    "glslang_submodule_commit": "780b6a209132dc74e99458f62ebe5fa7e57c41cf",
+    "glslang_tarball": "https://github.com/nihui/glslang/archive/780b6a209132dc74e99458f62ebe5fa7e57c41cf.tar.gz",
+    "glslang_sha256": "9c80e985ae0ea5c7b6a0d59b99de3058ba170fcc0589a913023d12c3473a3617",
     "license": "BSD 3-Clause (ncnn/LICENSE.txt)",
-    "pinned_date": "2026-08-28"
+    "pinned_date": "2026-09-02",
+    "notes": "master post #6751 (vulkan int8 kernels for convolution/convolutiondepthwise, merged 2026-06-17). No newer release tag exists (latest tag 20260526 predates #6751)."
   },
   "realesr_animevideov3_ncnn_artifacts": {
     "source_release": "https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0",

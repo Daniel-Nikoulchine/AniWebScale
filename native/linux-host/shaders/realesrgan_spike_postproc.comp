@@ -1,0 +1,114 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage: require
+
+// AniWebScale ncnn-Vulkan: GPU post-process for the RealESRGAN path.
+// Reads the network's planar fp16 RGB output (cstep-strided channels) and
+// writes packed RGBA8 bytes. When tw/th (presentation target) are smaller
+// than the network output, the shader performs an exact area average (box
+// filter with fractional edge weights) per axis BEFORE the download, so the
+// host ships only target-size bytes instead of the full 4x frame. Rounding
+// matches the reference implementation (x * 255 + 0.5, floor, clamp); the
+// identity path (tw >= w && th >= h) is bit-identical to the previous shader.
+
+layout (constant_id = 0) const int bgr = 0;
+
+layout (binding = 0) readonly buffer bottom_blob { float16_t bottom_blob_data[]; };
+layout (binding = 1) writeonly buffer top_blob { uint top_blob_data[]; };
+
+layout (push_constant) uniform parameter
+{
+    int w;    // network output width  (4x input)
+    int h;    // network output height
+    int cstep;
+    int tw;   // presentation target width  (<= w: box downscale on this axis)
+    int th;   // presentation target height (<= h: box downscale on this axis)
+} p;
+
+void main()
+{
+    const int gx = int(gl_GlobalInvocationID.x);
+    const int gy = int(gl_GlobalInvocationID.y);
+
+    if (gx >= p.tw || gy >= p.th)
+        return;
+
+    // r/g/b are kept in BYTE domain [0,255] on every path so the final
+    // rounding below is the only quantization after any averaging.
+    float r;
+    float g;
+    float b;
+
+    if (p.tw >= p.w && p.th >= p.h)
+    {
+        // Identity: one tap, quantized exactly like the original shader.
+        r = floor(clamp(float(bottom_blob_data[0 * p.cstep + gy * p.w + gx]) * 255.0 + 0.5, 0.0, 255.0));
+        g = floor(clamp(float(bottom_blob_data[1 * p.cstep + gy * p.w + gx]) * 255.0 + 0.5, 0.0, 255.0));
+        b = floor(clamp(float(bottom_blob_data[2 * p.cstep + gy * p.w + gx]) * 255.0 + 0.5, 0.0, 255.0));
+    }
+    else
+    {
+        // Exact box filter. Source footprint of output pixel gx on the x
+        // axis is [gx*w/tw, (gx+1)*w/tw); each covered source pixel
+        // contributes its overlap length.
+        //
+        // Byte-domain averaging: each tap is quantized EXACTLY like the
+        // identity path BEFORE accumulating, and the final average rounds
+        // once. This matches (a) the tiled CPU downscale pass in the host
+        // and (b) the browser presentation sampler, which area-averages the
+        // already-quantized rgba8 texture. Averaging the raw fp16 values
+        // instead would quantize only once (marginally cleaner) but diverge
+        // from all three existing consumers at network-overshoot pixels.
+        // An axis whose target is >= the source falls back to a single
+        // identity tap so mixed cases (one axis downscaled, one not) stay
+        // deterministic.
+        float x0f = (float(gx) * float(p.w)) / float(p.tw);
+        float x1f = (float(gx + 1) * float(p.w)) / float(p.tw);
+        float y0f = (float(gy) * float(p.h)) / float(p.th);
+        float y1f = (float(gy + 1) * float(p.h)) / float(p.th);
+        if (p.tw >= p.w) { x0f = float(gx); x1f = x0f + 1.0; }
+        if (p.th >= p.h) { y0f = float(gy); y1f = y0f + 1.0; }
+        const int x0 = int(floor(x0f));
+        const int x1 = int(ceil(x1f));
+        const int y0 = int(floor(y0f));
+        const int y1 = int(ceil(y1f));
+        float ar = 0.0;
+        float ag = 0.0;
+        float ab = 0.0;
+        float wsum = 0.0;
+        for (int y = y0; y < y1; ++y)
+        {
+            const float wy = min(y1f, float(y + 1)) - max(y0f, float(y));
+            if (wy <= 0.0)
+                continue;
+            const int row = y * p.w;
+            for (int x = x0; x < x1; ++x)
+            {
+                const float wx = min(x1f, float(x + 1)) - max(x0f, float(x));
+                if (wx <= 0.0)
+                    continue;
+                const float wgt = wx * wy;
+                ar += floor(clamp(float(bottom_blob_data[0 * p.cstep + row + x]) * 255.0 + 0.5, 0.0, 255.0)) * wgt;
+                ag += floor(clamp(float(bottom_blob_data[1 * p.cstep + row + x]) * 255.0 + 0.5, 0.0, 255.0)) * wgt;
+                ab += floor(clamp(float(bottom_blob_data[2 * p.cstep + row + x]) * 255.0 + 0.5, 0.0, 255.0)) * wgt;
+                wsum += wgt;
+            }
+        }
+        const float inv = 1.0 / max(wsum, 1e-6);
+        r = ar * inv;
+        g = ag * inv;
+        b = ab * inv;
+    }
+
+    // Single final round (identity values are exact integers, so this is a
+    // no-op there and the output stays bit-identical to the original shader).
+    // bgr flag mirrors the reference preproc convention (0 on non-Windows).
+    uint ur = clamp(uint(floor(r + 0.5f)), 0u, 255u);
+    uint ug = clamp(uint(floor(g + 0.5f)), 0u, 255u);
+    uint ub = clamp(uint(floor(b + 0.5f)), 0u, 255u);
+    if (bgr == 1)
+    {
+        uint t = ur; ur = ub; ub = t;
+    }
+
+    top_blob_data[gy * p.tw + gx] = (ub << 16) | (ug << 8) | (ur << 0) | 0xFF000000u;
+}

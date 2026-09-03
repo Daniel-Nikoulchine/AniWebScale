@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBackgroundRouter, type BackgroundRouterDependencies } from '../src/background/router';
 import type { NativeSessionIdentity } from '../src/shared/native-session-messages';
+import type { RealEsrganHttpEndpoint } from '../src/background/realesrgan-http-info';
 
 const SESSION: NativeSessionIdentity = {
   sessionId: 'session-1',
@@ -49,6 +50,7 @@ function installDeps(overrides: {
       resetConsent: vi.fn(async () => undefined),
       openOptionsPage: vi.fn(async () => undefined),
       openOnboarding: vi.fn(async () => undefined),
+      realEsrganHttpInfo: vi.fn(async (): Promise<RealEsrganHttpEndpoint> => ({ ok: false, message: 'not wired in tests' })),
       ...overrides.platform,
     },
   };

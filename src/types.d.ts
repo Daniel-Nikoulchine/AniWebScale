@@ -22,6 +22,12 @@ type EnhancementMode = 'OFF' | Anime4KMode | AiUpscaleMode;
 type QualityTier = GeneratedQualityTier;
 type RenderBackend = 'auto' | 'webgpu' | 'native';
 type OutputMode = 'auto';
+/**
+ * RealESRGAN inference cap heights (input px). Gemessene Leiter vom 2.9.:
+ * 480 ≈ 16.5 fps, 432 ≈ 21 fps, 405 ≈ 26 fps. Die 24-fps-Marke liegt bei
+ * ≈420 px; 432p ist der sichtbare Kompromiss (Linienart bleibt sauber).
+ */
+type RealEsrganCapHeight = 480 | 432 | 405;
 
 /** Legacy identifiers used only to migrate pre-1.0 settings. */
 type PerformanceTier = 'performance' | 'balanced' | 'quality' | 'ultra';
@@ -36,6 +42,8 @@ interface Anime4KWebExtSettings {
   statsEnabled: boolean;
   autoFullscreenEnabled: boolean;
   frameGenerationEnabled: boolean;
+  /** RealESRGAN-Cap (nur REALESRGAN-Modus); andere Modi ignorieren das Feld. */
+  realesrganCapHeight: RealEsrganCapHeight;
 }
 
 interface LocalSettings {
@@ -65,6 +73,9 @@ interface RealEsrganPhaseStats {
   composeMs: number;
   workerPct: number;
   gpuComposePct: number;
+  precision?: 'fp32' | 'fp16' | 'int8';
+  count: number;
+  enhancedFps: number;
 }
 
 interface VideoEnhancer {
@@ -100,6 +111,7 @@ export {
   QualityTier,
   RenderBackend,
   OutputMode,
+  RealEsrganCapHeight,
   PerformanceTier,
   BaseMode,
   Anime4KWebExtSettings,

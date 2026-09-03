@@ -23,8 +23,40 @@ const contentGlobal = globalThis as typeof globalThis & { [CONTENT_INSTANCE_KEY]
 const isolation = new NativeIsolationSession();
 const inputBridge = new NativeInputBridge(isolation);
 
+/**
+ * Forward content-script-world console lines to the page world as
+ * `anime4k-e2e-log` CustomEvents. E2E runners assert on extension logs, but
+ * the page shim only sees the page world. Installed FIRST, before anything
+ * logs (the build stamp must be visible to the runner).
+ */
+// Ring buffer of recent content-script log lines; E2E runners pull it via
+// the bridge 'get-logs' command (CustomEvents do NOT cross worlds on
+// Firefox, so push-based forwarding silently fails there).
+const E2E_LOG_BUFFER: string[] = [];
+
+function installLogForwarder(): void {
+  if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(location.origin)) return;
+  for (const level of ['log', 'info', 'warn', 'error'] as const) {
+    try {
+      const original = console[level].bind(console);
+      Object.defineProperty(console, level, {
+        value: (...args: unknown[]) => {
+          E2E_LOG_BUFFER.push(`[${level}] ${args.map(value => String(value instanceof Error ? value.message : value)).join(' ')}`);
+          if (E2E_LOG_BUFFER.length > 200) E2E_LOG_BUFFER.shift();
+          original(...args);
+        },
+        writable: true,
+        configurable: true,
+      });
+    } catch { /* console level not overridable in this browser */ }
+  }
+}
+
 function installLocalE2ETestBridge(): void {
-  if (location.origin !== 'http://127.0.0.1:4173' || location.pathname !== '/firefox-self-test.html') return;
+  // Accept the bridge on any 127.0.0.1 loopback origin: the Firefox E2E
+  // fixture server uses 4173, the RealESRGAN clip runner uses 4188. Loopback
+  // only, and the page must still carry a token query param.
+  if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(location.origin)) return;
   const token = new URLSearchParams(location.search).get('token');
   if (!token) return;
   window.addEventListener('message', event => {
@@ -45,9 +77,31 @@ function installLocalE2ETestBridge(): void {
         });
         return;
       }
+      if (data.action === 'configure-realesrgan') {
+        // E2E knobs from the clip runner page (query params): backend
+        // 'native' exercises the ncnn-Vulkan host, realesrganCapHeight
+        // 405|432|480 selects the inference cap preset under test.
+        const backend = data.backend === 'native' ? 'native' : 'webgpu';
+        const cap = data.realesrganCapHeight === 405 || data.realesrganCapHeight === 432
+          || data.realesrganCapHeight === 480 ? data.realesrganCapHeight : undefined;
+        await chrome.storage.local.set({
+          extensionEnabled: true, mode: 'REALESRGAN', quality: 'M', output: 'auto',
+          backend, statsEnabled: true, autoFullscreenEnabled: true,
+          frameGenerationEnabled: false,
+          ...(cap !== undefined ? { realesrganCapHeight: cap } : {}),
+        });
+        // Optional static-shape model override for the clip E2E runner.
+        if (typeof data.modelFile === 'string') {
+          await chrome.storage.local.set({ e2eModelFile: data.modelFile });
+        }
+        return;
+      }
+      if (data.action === 'get-logs') {
+        return { logs: E2E_LOG_BUFFER.slice() };
+      }
       throw new Error('Unsupported local E2E command.');
     })().then(
-      () => window.postMessage({ type: 'anime4k-e2e-response', token, id: data.id, ok: true }, location.origin),
+      result => window.postMessage({ type: 'anime4k-e2e-response', token, id: data.id, ok: true, ...result }, location.origin),
       error => window.postMessage({
         type: 'anime4k-e2e-response', token, id: data.id, ok: false,
         message: error instanceof Error ? error.message : String(error),
@@ -233,9 +287,15 @@ if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
   });
 
   void initDebugLogging();
+  if (__ANIME4K_E2E__) installLogForwarder();
+  if (__ANIME4K_E2E__) installLocalE2ETestBridge();
+  // Build stamp: proves which bundle the browser actually loaded. Bump the
+  // git/package version whenever diagnosing "is the new build live? doubts."
+  // Logged AFTER installLogForwarder so the stamp lands in the E2E log ring;
+  // before the reorder it never reached the clip runner's assertions.
+  console.info('[AniWebScale] content build 1.0.14 (realesrgan freeDimensionOverrides, fp16 disabled)');
   void initializeOnPage();
   installIframeSiteAccessProbe();
-  if (__ANIME4K_E2E__) installLocalE2ETestBridge();
   window.addEventListener('anime4k-video-reattached', event => {
     const detail = (event as CustomEvent<{ videoId?: string; video?: HTMLVideoElement }>).detail;
     if (detail?.video instanceof HTMLVideoElement && typeof detail.videoId === 'string') {

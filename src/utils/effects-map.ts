@@ -1,4 +1,4 @@
-import type { AiUpscaleMode, EnhancementEffect, QualityTier } from '../types';
+import type { AiUpscaleMode, EnhancementEffect, QualityTier, RealEsrganCapHeight } from '../types';
 
 const restore = (quality: QualityTier): EnhancementEffect => ({
   id: `anime4k/Restore/CNN${quality}`,
@@ -53,7 +53,11 @@ export function findEffect(className: string): EnhancementEffect {
   return effect;
 }
 
-export function resolveAiUpscaleEffect(mode: AiUpscaleMode, quality: QualityTier): EnhancementEffect {
+export function resolveAiUpscaleEffect(
+  mode: AiUpscaleMode,
+  quality: QualityTier,
+  capHeight: RealEsrganCapHeight = 480,
+): EnhancementEffect {
   if (mode === 'CNNX2') {
     return { ...findEffect(`CNNx2${quality}`), alwaysApply: true };
   }
@@ -95,12 +99,13 @@ export function resolveAiUpscaleEffect(mode: AiUpscaleMode, quality: QualityTier
       upscaleFactor: 4,
       alwaysApply: true,
       webgpuAvailable: true,
-      // Cap inference input height at 480px. animevideov3 x4 is ~1.2M params
-      // and a 1080p source would feed the kernel roughly 6x more pixels than
-      // a 480p source, with no perceptual quality gain that justifies the
-      // extra latency on consumer GPUs. The presentation pass upscales the
-      // 4x output to the canvas with its adaptive area sampler.
-      params: { maxInferenceHeight: 480 },
+      // Cap inference input height (Preset: 480/432/405, gemessene Leiter
+      // vom 2.9.). animevideov3 x4 is ~1.2M params and a 1080p source would
+      // feed the kernel roughly 6x more pixels than a 480p source, with no
+      // perceptual quality gain that justifies the extra latency on
+      // consumer GPUs. The presentation pass upscales the 4x output to the
+      // canvas with its adaptive area sampler.
+      params: { maxInferenceHeight: capHeight },
     };
   }
   throw new Error(`Unknown AI upscale mode: ${mode satisfies never}`);

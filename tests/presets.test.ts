@@ -129,6 +129,20 @@ describe('official Anime4K presets', () => {
     });
   });
 
+  it('maps the RealESRGAN cap preset to maxInferenceHeight', () => {
+    expect(resolveEnhancementGraph('REALESRGAN', 'M')[0].params).toMatchObject({
+      maxInferenceHeight: 480,
+    });
+    expect(resolveEnhancementGraph('REALESRGAN', 'M', 432)[0].params).toMatchObject({
+      maxInferenceHeight: 432,
+    });
+    expect(resolveEnhancementGraph('REALESRGAN', 'M', 405)[0].params).toMatchObject({
+      maxInferenceHeight: 405,
+    });
+    // Other AI modes ignore the cap.
+    expect(resolveEnhancementGraph('CNNX2', 'VL', 405)[0].params).toBeUndefined();
+  });
+
   it('exposes an off mode that can still run frame generation', () => {
     expect(ENHANCEMENT_MODES[0]).toBe('OFF');
     expect(resolveEnhancementGraph('OFF', 'M')).toEqual([]);

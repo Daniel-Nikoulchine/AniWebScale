@@ -135,67 +135,67 @@
     "message": "Stellt Liniendetails wieder her und skaliert anschließend mit Anime4K CNN. Die ausgewogene Voreinstellung für die meisten Anime."
   },
   "modeAOption": {
-    "message": "Anime4K A - Ausgewogene Wiederherstellung + 2x-Skalierung (Empfohlen)"
+    "message": "Anime4K A · Ausgewogen"
   },
   "modeAaDescription": {
     "message": "Führt die Anime4K-A-Kette zweimal aus, für stärkere Details und bis zu 4x Skalierung. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels."
   },
   "modeAaOption": {
-    "message": "Anime4K A+A - Starke Wiederherstellung in 2 Durchläufen + bis zu 4x"
+    "message": "Anime4K A+A · Stark"
   },
   "modeAcNetDescription": {
     "message": "Kleines festes 2x-GLSL-Netz, das Geschwindigkeit und sehr geringe GPU-Last priorisiert."
   },
   "modeAcNetOption": {
-    "message": "ACNet F8B4 2x - Schnelle leichte Skalierung (GPU: sehr gering)"
+    "message": "ACNet · Schnell"
   },
   "modeArNetDescription": {
     "message": "Tieferes festes 2x-GLSL-Netz mit stärkerer Detailwiederherstellung als ACNet bei ausgewogener GPU-Last."
   },
   "modeArNetOption": {
-    "message": "ARNet F8B8 2x - Starke Detailwiederherstellung (GPU: ausgewogen)"
+    "message": "ARNet · Starke Details"
   },
   "modeArtCnnDescription": {
     "message": "Festes 2x-GLSL-Netz zur Rekonstruktion von Anime-Linien und natürlichen Details in Echtzeit."
   },
   "modeArtCnnOption": {
-    "message": "ArtCNN C4F16 2x - Linien-/Detailrekonstruktion (GPU: Echtzeit)"
+    "message": "ArtCNN · Liniendetails"
   },
   "modeBDescription": {
     "message": "Verwendet eine sanftere Wiederherstellung vor der Anime4K-CNN-Skalierung, um Artefakte bei unscharfen oder komprimierten Videos zu reduzieren."
   },
   "modeBOption": {
-    "message": "Anime4K B - Sanfte Wiederherstellung + 2x-Skalierung"
+    "message": "Anime4K B · Sanfte Wiederherstellung"
   },
   "modeBbDescription": {
     "message": "Führt die sanftere Anime4K-B-Kette für unscharfe Quellen zweimal aus und skaliert bis zu 4x. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels."
   },
   "modeBbOption": {
-    "message": "Anime4K B+B - Starke sanfte Wiederherstellung + bis zu 4x"
+    "message": "Anime4K B+B · Stark sanft"
   },
   "modeCDescription": {
     "message": "Entrauscht und skaliert in einem Anime4K-CNN-Durchlauf. Besonders geeignet für sichtbar verrauschte Animationen."
   },
   "modeCOption": {
-    "message": "Anime4K C - Entrauschen + 2x-Skalierung"
+    "message": "Anime4K C · Entrauschen"
   },
   "modeCaDescription": {
     "message": "Entrauscht und skaliert zuerst, stellt dann wieder her und kann erneut skalieren. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels."
   },
   "modeCaOption": {
-    "message": "Anime4K C+A - Entrauschen, wiederherstellen + bis zu 4x"
+    "message": "Anime4K C+A · Entrauschen+Wiederherstellen"
   },
   "modeCnnDescription": {
     "message": "Offizielles Anime4K CNN mit fester 2x-Skalierung. Liefert ein scharfes Ergebnis; Qualität ändert Modellgröße und GPU-Last."
   },
   "modeCnnOption": {
-    "message": "Anime4K CNN 2x - Scharfe neuronale Skalierung (GPU: mittel)"
+    "message": "Anime4K CNN · Scharf 2x"
   },
   "modeOffDescription": {
     "message": "Deaktiviert die Bildverbesserung. Die Frame-Generierung kann separat aktiv bleiben."
   },
   "modeOffOption": {
-    "message": "Aus - Keine Bildverbesserung"
+    "message": "Aus"
   },
   "nativeHostStatusLabel": {
     "message": "Nativer Renderer"
@@ -385,5 +385,23 @@
   },
   "websiteAccessDescription": {
     "message": "AniWebScale läuft nur auf Websites, die du im Popup ausdrücklich freigibst."
+  },
+  "modeRealEsrganOption": {
+    "message": "Real-ESRGAN · Max. Details"
+  },
+  "modeRealEsrganDescription": {
+    "message": "Festes 4x-ESRGAN-Netz, trainiert auf Anime-Video; beste Details bei sehr hoher GPU-Last. Für SD-Quellen gedacht."
+  },
+  "realesrganCap": {
+    "message": "Real-ESRGAN-Details"
+  },
+  "realesrganCap480": {
+    "message": "480p · Max. Details (~16 fps)"
+  },
+  "realesrganCap432": {
+    "message": "432p · Ausgewogen (~21 fps)"
+  },
+  "realesrganCap405": {
+    "message": "405p · Max. Tempo (~26 fps)"
   }
 }

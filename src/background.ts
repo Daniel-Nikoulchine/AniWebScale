@@ -21,6 +21,7 @@ import {
 } from './site-access';
 import { shouldReopenOnboarding } from './shared/onboarding-gating';
 import { NativeSession } from './background/native-session';
+import { createRealEsrganHttpInfoHandler } from './background/realesrgan-http-info';
 
 const serialized = createAsyncSerializer();
 let siteAccessChain: Promise<void> = Promise.resolve();
@@ -149,6 +150,7 @@ const handleMessage = createBackgroundRouter({
       void chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
       return Promise.resolve();
     },
+    realEsrganHttpInfo: createRealEsrganHttpInfoHandler(),
   },
 });
 

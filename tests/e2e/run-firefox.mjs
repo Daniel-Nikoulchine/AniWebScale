@@ -13,6 +13,7 @@ const sourceDir = path.join(workspace, 'dist-firefox');
 const artifactsDir = path.join(workspace, '.tmp', 'web-ext-artifacts');
 const firefoxHeadless = process.env.E2E_FIREFOX_HEADLESS === '1';
 const firefoxForceNoAdapter = process.env.E2E_FIREFOX_FORCE_NO_ADAPTER === '1';
+const TARGET_WORKSPACE = Number(process.env.E2E_WORKSPACE || 3);
 const execFileAsync = promisify(execFile);
 
 async function findDebuggerOwnerPid(port) {
@@ -81,6 +82,30 @@ try {
     noReload: true,
     verbose: false,
   });
+  // --- Workspace isolation: keep the headed Firefox E2E on workspace 3 so the
+  // user's current desktop stays unobstructed (same as run-realesrgan-clip.mjs).
+  // In sandboxed mode (E2E_SANDBOX=1) we run headed inside Xvfb — invisible by
+  // design, so no hyprctl workspace pinning is needed.
+  const isSandboxed = process.env.E2E_SANDBOX === '1';
+  if (!isSandboxed && !firefoxHeadless && TARGET_WORKSPACE) {
+    try {
+      await new Promise(r => setTimeout(r, 2000));
+      const { stdout } = await execFileAsync('hyprctl', ['clients', '-j']);
+      const clients = JSON.parse(stdout);
+      const firefoxClients = clients.filter(c =>
+        (c.class || '').toLowerCase().includes('firefox') ||
+        (c.initialClass || '').toLowerCase().includes('firefox') ||
+        (c.class || '').toLowerCase().includes('zen'));
+      // Pick the newest Firefox window (largest address = most recent).
+      const target = firefoxClients.sort((a, b) => a.address.localeCompare(b.address)).at(-1);
+      if (target) {
+        await execFileAsync('hyprctl', ['dispatch', 'movetoworkspace', `${TARGET_WORKSPACE},address:${target.address}`]);
+        console.log(`moved Firefox E2E window ${target.address} to workspace ${TARGET_WORKSPACE}`);
+      }
+    } catch (e) {
+      console.warn(`movetoworkspace ${TARGET_WORKSPACE} failed: ${e.message}`);
+    }
+  }
   const result = await servers.waitForResult(token, Number(process.env.E2E_FIREFOX_TIMEOUT || 180_000));
   for (const check of result.checks || []) {
     console.log(`${check.pass ? 'PASS' : 'FAIL'}  ${check.name}${check.detail ? `: ${check.detail}` : ''}`);

@@ -1,4 +1,4 @@
-import type { Dimensions, EnhancementEffect, RenderStats } from '../types';
+import type { Dimensions, EnhancementEffect, RenderStats, RealEsrganPhaseStats } from '../types';
 import {
   scheduleEffectsForTarget,
   scheduledEffectPipelineKey,
@@ -398,6 +398,12 @@ export class Renderer {
       this.buildingPipelineTextures?.add(texture);
     });
     this.useImageBitmap = false;
+    // Surface WebGPU validation errors that otherwise stay silent (prime
+    // failures, lost-context writes). Without this the canvas stays black with
+    // no console trace.
+    this.device.addEventListener('uncapturederror', (event: GPUUncapturedErrorEvent) => {
+      console.warn('[Anime4K] WebGPU uncaptured error:', ((event as unknown as { error: unknown }).error as Error)?.message ?? String((event as unknown as { error: unknown }).error));
+    });
     void this.device.lost.then(info => {
       if (!this.destroyed && info.reason !== 'destroyed') {
         void this.enqueueStateUpdate(() => this.recoverDevice(info.message));
@@ -425,7 +431,8 @@ export class Renderer {
       format: this.sourceTextureFormat,
       usage: GPUTextureUsage.TEXTURE_BINDING
         | GPUTextureUsage.COPY_DST
-        | GPUTextureUsage.COPY_SRC,
+        | GPUTextureUsage.COPY_SRC
+        | GPUTextureUsage.RENDER_ATTACHMENT,
     });
     this.sourceFormatStale = false;
   }
@@ -494,11 +501,30 @@ export class Renderer {
           // Forward effect-level params (e.g. RealESRGAN's maxInferenceHeight)
           // so pipelines that accept runtime config can read them.
           params: effect.params,
+          // Firefox/RDNA2 can drop the WebGPU context without resolving
+          // device.lost; pipelines report it here so recovery actually runs.
+          onDeviceContextLost: () => {
+            void this.enqueueStateUpdate(() => this.recoverDevice('RealESRGAN reported a WebGPU context loss'));
+          },
+          // Chronic inference failure (dead worker, unusable session): surface
+          // as a runtime error so video-enhancer runs its configured fallback
+          // (native path) instead of presenting a static/black canvas forever.
+          onFatalInferenceFailure: () => {
+            this.onError?.(new RendererRuntimeError(
+              'RealESRGAN inference repeatedly failed without producing a frame.',
+            ));
+          },
         });
         pipelines.push(pipeline);
         currentTexture = pipeline.getOutputTexture();
-        width *= effect.upscaleFactor ?? 1;
-        height *= effect.upscaleFactor ?? 1;
+        const out = pipeline.getOutputDimensions?.();
+        if (out) {
+          width = out.width;
+          height = out.height;
+        } else {
+          width *= effect.upscaleFactor ?? 1;
+          height *= effect.upscaleFactor ?? 1;
+        }
       }
     } catch (error) {
       this.destroyPipelineTextures(pipelineTextures);
@@ -679,21 +705,39 @@ export class Renderer {
       : this.smoothedRenderMs * 0.8 + renderMs * 0.2;
     this.renderedSinceSample += 1;
 
-    this.warning = this.overloadTracker.recordSample(
-      this.smoothedRenderMs > this.frameBudgetMs,
-      now,
-    );
-
     if (now - this.lastStatsEmit >= 500) {
       const elapsed = Math.max(1, now - this.statsWindowStarted);
+      const presentationFps = this.renderedSinceSample * 1000 / elapsed;
       const realesrgan = this.collectRealesrganPhaseStats();
-      this.onStats?.({
-        fps: this.renderedSinceSample * 1000 / elapsed,
-        renderMs: this.smoothedRenderMs,
-        droppedFrames: this.droppedFrames,
-        warning: this.warning,
-        ...(realesrgan ? { realesrgan } : {}),
-      });
+      const skippedTotal = this.collectRealesrganSkipped();
+      let warning: boolean;
+
+      if (realesrgan) {
+        realesrgan.enhancedFps = realesrgan.count * 1000 / elapsed;
+        warning = this.overloadTracker.recordSample(
+          realesrgan.inferMs > this.frameBudgetMs || realesrgan.enhancedFps < presentationFps * 0.7,
+          now,
+        );
+        this.onStats?.({
+          fps: presentationFps,
+          renderMs: this.smoothedRenderMs,
+          droppedFrames: this.droppedFrames + skippedTotal,
+          warning,
+          realesrgan,
+        });
+      } else {
+        warning = this.overloadTracker.recordSample(
+          this.smoothedRenderMs > this.frameBudgetMs,
+          now,
+        );
+        this.onStats?.({
+          fps: presentationFps,
+          renderMs: this.smoothedRenderMs,
+          droppedFrames: this.droppedFrames,
+          warning,
+        });
+      }
+      this.warning = warning;
       this.lastStatsEmit = now;
       this.statsWindowStarted = now;
       this.renderedSinceSample = 0;
@@ -706,15 +750,14 @@ export class Renderer {
    * The active pipeline is the last one in the schedule -- the same one that
    * produces the output texture the presentation pass samples.
    */
-  private collectRealesrganPhaseStats(): {
-    readbackMs: number;
-    inferMs: number;
-    composeMs: number;
-    workerPct: number;
-    gpuComposePct: number;
-  } | null {
+  private collectRealesrganPhaseStats(): RealEsrganPhaseStats | null {
     const last = this.pipelines[this.pipelines.length - 1];
     return last?.getPhaseStats?.() ?? null;
+  }
+
+  private collectRealesrganSkipped(): number {
+    const last = this.pipelines[this.pipelines.length - 1];
+    return last?.getSkippedFrames?.() ?? 0;
   }
 
   private startFrameCallbacks(): void {
@@ -981,8 +1024,16 @@ export class Renderer {
   }
 
   private async recoverDevice(message: string): Promise<void> {
-    if (this.destroyed || this.recoveryAttempted) {
-      if (!this.destroyed) this.onError?.(new RendererRuntimeError(`WebGPU device lost: ${message}`));
+    if (this.destroyed) {
+      this.onError?.(new RendererRuntimeError(`WebGPU device lost: ${message}`));
+      return;
+    }
+    if (this.recoveryAttempted) {
+      // A second distinct loss after a successful recovery should still be
+      // recovered once; the renderer already reported the first via
+      // onDeviceContextLost. Allow one more cycle by resetting the guard after
+      // the first successful rebuild (see success path below).
+      this.onError?.(new RendererRuntimeError(`WebGPU device lost: ${message}`));
       return;
     }
     this.recoveryAttempted = true;
@@ -1001,6 +1052,7 @@ export class Renderer {
       await this.buildPipelines();
       await this.createPresentationPipeline();
       this.createPresentationBindGroup();
+      this.recoveryAttempted = false;
       this.startFrameCallbacks();
     } catch (error) {
       this.onError?.(new RendererRuntimeError('WebGPU device recovery failed.', { cause: error as Error }));

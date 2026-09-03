@@ -13,6 +13,7 @@ export const RENDER_SETTING_KEYS = new Set([
   'statsEnabled',
   'autoFullscreenEnabled',
   'frameGenerationEnabled',
+  'realesrganCapHeight',
   'selectedModeId',
 ]);
 

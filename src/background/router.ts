@@ -6,6 +6,7 @@ import {
 import { parseRuntimeRequest, type NativePointerRequest } from '../shared/runtime-messages';
 import type { NativeFallbackRequest } from '../shared/native-fallback-request';
 import type { FrameAccessReply } from './iframe-site-access';
+import type { RealEsrganHttpEndpoint } from './realesrgan-http-info';
 import type {
   NativeSessionControlMessage,
   NativeSessionIdentity,
@@ -45,6 +46,8 @@ export interface BackgroundPlatformOperations {
   resetConsent(origin?: string): Promise<void>;
   openOptionsPage(): Promise<void>;
   openOnboarding(): Promise<void>;
+  /** Loopback HTTP endpoint (port/token) of the ncnn native host, or a failure. */
+  realEsrganHttpInfo(): Promise<RealEsrganHttpEndpoint>;
 }
 
 /**
@@ -179,6 +182,9 @@ export function createBackgroundRouter(deps: BackgroundRouterDependencies): Back
       case 'OPEN_ONBOARDING':
         await deps.platform.openOnboarding();
         return undefined;
+
+      case 'REALESRGAN_HTTP_INFO':
+        return deps.platform.realEsrganHttpInfo();
     }
   };
 }

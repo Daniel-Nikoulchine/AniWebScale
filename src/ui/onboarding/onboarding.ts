@@ -16,6 +16,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const finish = document.getElementById('finish') as HTMLButtonElement;
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
+    'A',
+    // Erstlauf: kein RealESRGAN-Detailschalter, Default 480 greift.
+    { includeRealEsrganCap: false },
   );
   const { mode, quality, backend } = controls;
   const toggles = renderEnhancementToggles(

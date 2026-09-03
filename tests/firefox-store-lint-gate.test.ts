@@ -179,27 +179,24 @@ describe('firefox-store-lint-gate', () => {
       expect(failures).toEqual([]);
     });
 
-    it('rejects duplicate allowlisted warnings', () => {
+    it('rejects duplicate allowlisted warnings beyond the budget', () => {
+      const warn = (file: string, line: number) => ({
+        code: 'UNSAFE_VAR_ASSIGNMENT',
+        message: EXACT_WARNING.message,
+        description: EXACT_WARNING.description,
+        file,
+        line,
+      });
       const output = {
-        count: 2,
-        summary: { errors: 0, notices: 0, warnings: 2 },
+        count: 3,
+        summary: { errors: 0, notices: 0, warnings: 3 },
         errors: [],
         notices: [],
         warnings: [
-          {
-            code: 'UNSAFE_VAR_ASSIGNMENT',
-            message: EXACT_WARNING.message,
-            description: EXACT_WARNING.description,
-            file: 'content.js',
-            line: 1,
-          },
-          {
-            code: 'UNSAFE_VAR_ASSIGNMENT',
-            message: EXACT_WARNING.message,
-            description: EXACT_WARNING.description,
-            file: 'content.js',
-            line: 50,
-          },
+          warn('content.js', 1),
+          warn('chunks/realesrgan-inference-worker.js', 10),
+          // A third identical first-party warning exceeds the budget of two.
+          warn('content.js', 50),
         ],
       };
       const failures = validateLintOutput(output);

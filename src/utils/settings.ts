@@ -4,6 +4,7 @@ import type {
   EnhancementEffect,
   LocalSettings,
   QualityTier,
+  RealEsrganCapHeight,
   RenderBackend,
 } from '../types';
 import { ID_TO_MODE, isEnhancementMode, isQualityTier } from '../shared/presets';
@@ -19,10 +20,15 @@ export const DEFAULT_SETTINGS: Anime4KWebExtSettings = {
   statsEnabled: false,
   autoFullscreenEnabled: true,
   frameGenerationEnabled: false,
+  realesrganCapHeight: 480,
 };
 
 function isBackend(value: unknown): value is RenderBackend {
   return value === 'auto' || value === 'webgpu' || value === 'native';
+}
+
+function isRealEsrganCapHeight(value: unknown): value is RealEsrganCapHeight {
+  return value === 480 || value === 432 || value === 405;
 }
 
 export async function getSettings(): Promise<Anime4KWebExtSettings> {
@@ -47,6 +53,9 @@ export async function getSettings(): Promise<Anime4KWebExtSettings> {
     frameGenerationEnabled: typeof data.frameGenerationEnabled === 'boolean'
       ? data.frameGenerationEnabled
       : DEFAULT_SETTINGS.frameGenerationEnabled,
+    realesrganCapHeight: isRealEsrganCapHeight(data.realesrganCapHeight)
+      ? data.realesrganCapHeight
+      : DEFAULT_SETTINGS.realesrganCapHeight,
   };
   return settings;
 }
@@ -78,10 +87,17 @@ export async function saveSettings(settings: Partial<Anime4KWebExtSettings>): Pr
   if (typeof settings.frameGenerationEnabled === 'boolean') {
     update.frameGenerationEnabled = settings.frameGenerationEnabled;
   }
+  if (isRealEsrganCapHeight(settings.realesrganCapHeight)) {
+    update.realesrganCapHeight = settings.realesrganCapHeight;
+  }
   update.output = 'auto';
   await storageSet(chrome.storage.local, update as Record<string, unknown>);
 }
 
-export function getEffectsForPreset(mode: EnhancementMode, quality: QualityTier): EnhancementEffect[] {
-  return resolveEnhancementGraph(mode, quality);
+export function getEffectsForPreset(
+  mode: EnhancementMode,
+  quality: QualityTier,
+  realesrganCapHeight: RealEsrganCapHeight = DEFAULT_SETTINGS.realesrganCapHeight,
+): EnhancementEffect[] {
+  return resolveEnhancementGraph(mode, quality, realesrganCapHeight);
 }

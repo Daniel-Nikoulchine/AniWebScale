@@ -8,8 +8,12 @@ describe('enhancement mode descriptions', () => {
     expect(Object.keys(MODE_DESCRIPTIONS)).toEqual(ENHANCEMENT_MODES);
 
     for (const mode of ENHANCEMENT_MODES) {
-      expect(MODE_PRESENTATIONS[mode].optionLabel, `${mode} option label`).toContain(' - ');
-      expect(MODE_PRESENTATIONS[mode].optionLabel.length, `${mode} option label`).toBeGreaterThan(20);
+      // Labels follow the "Name · short hint" style (OFF is the bare "Off");
+      // the localization tests cover the full catalog parity.
+      if (mode !== 'OFF') {
+        expect(MODE_PRESENTATIONS[mode].optionLabel, `${mode} option label`).toContain('·');
+        expect(MODE_PRESENTATIONS[mode].optionLabel.length, `${mode} option label`).toBeGreaterThan(8);
+      }
       expect(MODE_DESCRIPTIONS[mode].length, `${mode} detailed description`).toBeGreaterThan(60);
     }
   });

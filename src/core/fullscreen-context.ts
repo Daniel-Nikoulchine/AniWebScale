@@ -88,12 +88,32 @@ export class FullscreenContext {
     }
   }
 
+  private uninstallFullscreenChangeListeners(): void {
+    document.removeEventListener('fullscreenchange', this.change);
+    document.removeEventListener('webkitfullscreenchange', this.change);
+    try {
+      if (window.top && window.top !== window) {
+        window.top.removeEventListener('fullscreenchange', this.change);
+        window.top.removeEventListener('webkitfullscreenchange', this.change);
+      }
+    } catch {
+      // Cross-origin parent: nothing to remove.
+    }
+  }
+
   /** Be notified on every fullscreen change that concerns this document. */
   subscribe(listener: () => void): () => void {
     this.install();
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+      // Last subscriber out removes the document/window.top listeners so
+      // iframe content scripts don't retain a cross-realm window reference
+      // past unload.
+      if (this.listeners.size === 0) {
+        this.uninstallFullscreenChangeListeners();
+        this.installed = false;
+      }
     };
   }
 

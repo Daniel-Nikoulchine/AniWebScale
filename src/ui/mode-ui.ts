@@ -6,6 +6,7 @@ export interface ModeUiElements {
   mode: HTMLSelectElement;
   quality: HTMLSelectElement;
   backend: HTMLSelectElement;
+  realesrganCap?: HTMLSelectElement;
   frameGeneration: HTMLInputElement;
   description?: HTMLElement;
   nativeWarning?: HTMLElement;
@@ -21,6 +22,14 @@ export function refreshModeUi(elements: ModeUiElements): void {
 
   elements.quality.disabled = !modeUsesQuality(selectedMode);
   elements.backend.disabled = processingDisabled;
+  // Der Cap-Schalter gehört nur zum REALESRGAN-Modus; anderswo wäre er
+  // irreführend, also wird das ganze Label versteckt, nicht nur disabled.
+  const capLabel = elements.realesrganCap?.closest('label');
+  if (elements.realesrganCap && capLabel instanceof HTMLElement) {
+    const show = selectedMode === 'REALESRGAN';
+    capLabel.style.display = show ? '' : 'none';
+    elements.realesrganCap.disabled = !show;
+  }
 
   if (elements.description) {
     renderModeDescription(selectedMode, elements.description);

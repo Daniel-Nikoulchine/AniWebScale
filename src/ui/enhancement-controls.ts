@@ -6,6 +6,8 @@ export interface EnhancementSelects {
   mode: HTMLSelectElement;
   quality: HTMLSelectElement;
   backend: HTMLSelectElement;
+  /** Only present when renderEnhancementSelects ran with the cap select. */
+  realesrganCap?: HTMLSelectElement;
 }
 
 export interface ToggleSpec {
@@ -29,6 +31,13 @@ const BACKEND_OPTIONS: readonly SelectOption[] = [
   { value: 'auto', key: 'backendAuto', fallback: 'Auto' },
   { value: 'webgpu', key: 'backendWebGpu', fallback: 'WebGPU (hardware acceleration required)' },
   { value: 'native', key: 'backendNative', fallback: 'Native Windows renderer (hardware acceleration off)' },
+];
+
+// RealESRGAN-Cap-Presets, gemessene Leiter vom 2.9. (Cap-Leiter im Report).
+const REALESRGAN_CAP_OPTIONS: readonly SelectOption[] = [
+  { value: '480', key: 'realesrganCap480', fallback: '480p · Max detail (~16 fps)' },
+  { value: '432', key: 'realesrganCap432', fallback: '432p · Balanced (~21 fps)' },
+  { value: '405', key: 'realesrganCap405', fallback: '405p · Max speed (~26 fps)' },
 ];
 
 function createSelectField(
@@ -68,12 +77,14 @@ function updateSelectLabels(select: HTMLSelectElement): void {
 export function refreshEnhancementControlLabels(controls: EnhancementSelects): void {
   updateSelectLabels(controls.quality);
   updateSelectLabels(controls.backend);
+  if (controls.realesrganCap) updateSelectLabels(controls.realesrganCap);
   populateModeSelect(controls.mode, controls.mode.value);
 }
 
 export function renderEnhancementSelects(
   root: HTMLElement,
   requestedMode: EnhancementMode = 'A',
+  options: { includeRealEsrganCap?: boolean } = {},
 ): EnhancementSelects {
   root.replaceChildren();
 
@@ -94,7 +105,13 @@ export function renderEnhancementSelects(
   const backend = backendLabel.querySelector('select') as HTMLSelectElement;
 
   root.append(modeLabel, qualityLabel, backendLabel);
-  return { mode, quality, backend };
+  if (options.includeRealEsrganCap === false) return { mode, quality, backend };
+  const capLabel = createSelectField(
+    'realesrganCap', 'Real-ESRGAN detail', 'realesrgan-cap', REALESRGAN_CAP_OPTIONS,
+  );
+  const realesrganCap = capLabel.querySelector('select') as HTMLSelectElement;
+  root.append(capLabel);
+  return { mode, quality, backend, realesrganCap };
 }
 
 export function renderToggle(root: HTMLElement, spec: ToggleSpec): HTMLInputElement {

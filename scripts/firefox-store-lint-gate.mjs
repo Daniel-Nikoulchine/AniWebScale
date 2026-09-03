@@ -17,6 +17,16 @@ const ALLOWED_WARNING = {
     'Due to both security and performance concerns, this may not be set using dynamic values which have not been adequately sanitized. This can lead to security issues or fairly serious performance degradation.',
 };
 
+// The RealESRGAN inference worker is a first-party plain-JS module that MUST
+// resolve its ORT bundle from a URL passed in via postMessage (a blob worker
+// has no chrome.* APIs and the bundle lives at a runtime-resolved extension
+// URL). The imported URL comes exclusively from the extension's own
+// chrome.runtime.getURL resolution on the content-script side, never from
+// page input, so this dynamic import is allowlisted like content.js's.
+const EXTRA_ALLOWED_WARNINGS = [
+  { ...ALLOWED_WARNING, file: 'chunks/realesrgan-inference-worker.js' },
+];
+
 const DANGEROUS_PATTERNS = [
   /(?<!typeof\s)\beval\s*\(/,
   /\bnew\s+Function\s*\(/,
@@ -52,10 +62,10 @@ function isVendorWarning(warning) {
 export function isAllowlistedWarning(warning) {
   if (isVendorWarning(warning)) return true;
   return (
-    warning.code === ALLOWED_WARNING.code &&
-    warning.file === ALLOWED_WARNING.file &&
-    warning.message === ALLOWED_WARNING.message &&
-    warning.description === ALLOWED_WARNING.description
+    (warning.code === ALLOWED_WARNING.code &&
+      warning.message === ALLOWED_WARNING.message &&
+      warning.description === ALLOWED_WARNING.description &&
+      [ALLOWED_WARNING.file, ...EXTRA_ALLOWED_WARNINGS.map(w => w.file)].includes(warning.file))
   );
 }
 
@@ -87,11 +97,15 @@ export function validateLintOutput(lintJson) {
   }
 
   // Vendor warnings (onnxruntime-web) may occur any number of times. The single
-  // first-party allowlisted warning (content.js dynamic import) must not be
-  // duplicated; a second identical first-party warning is a regression.
+  // first-party allowlisted warnings (content.js + the inference worker, both
+  // dynamic-importing a runtime-resolved extension URL) must not proliferate;
+  // more identical first-party warnings are a regression.
   const firstPartyAllowlisted = allowlisted.filter((w) => !isVendorWarning(w));
-  if (firstPartyAllowlisted.length > 1) {
-    failures.push(`duplicate allowlisted warnings: ${firstPartyAllowlisted.length} found (expected at most 1)`);
+  const firstPartyAllowlistedBudget = 1 + EXTRA_ALLOWED_WARNINGS.length;
+  if (firstPartyAllowlisted.length > firstPartyAllowlistedBudget) {
+    failures.push(
+      `duplicate allowlisted warnings: ${firstPartyAllowlisted.length} found (expected at most ${firstPartyAllowlistedBudget})`,
+    );
   }
 
   if (lintJson.summary.warnings !== allowlisted.length) {

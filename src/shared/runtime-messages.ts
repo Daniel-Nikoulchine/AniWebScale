@@ -122,6 +122,17 @@ export interface OpenOnboardingRequest {
   type: 'OPEN_ONBOARDING';
 }
 
+/**
+ * Content scripts cannot call chrome.runtime.connectNative (background-only),
+ * so the renderer asks the background for the ncnn host's loopback HTTP
+ * transport (port + per-process bearer token) instead. The background owns
+ * the native-messaging port as the host's lifeline and hands out the
+ * endpoint; frame payloads then cross the loopback socket as raw binary.
+ */
+export interface RealEsrganHttpInfoRequest {
+  type: 'REALESRGAN_HTTP_INFO';
+}
+
 export type RuntimeRequest =
   | EnhancementClaimRequest
   | EnhancementReleaseRequest
@@ -137,7 +148,8 @@ export type RuntimeRequest =
   | SiteAccessSyncRequest
   | SiteAccessIframeRequest
   | OpenOptionsPageRequest
-  | OpenOnboardingRequest;
+  | OpenOnboardingRequest
+  | RealEsrganHttpInfoRequest;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object';
@@ -289,6 +301,8 @@ export function parseRuntimeRequest(value: unknown): RuntimeRequestParseResult {
     case 'OPEN_OPTIONS_PAGE':
       return { kind: 'message', message: { type } };
     case 'OPEN_ONBOARDING':
+      return { kind: 'message', message: { type } };
+    case 'REALESRGAN_HTTP_INFO':
       return { kind: 'message', message: { type } };
     default:
       return { kind: 'unknown' };

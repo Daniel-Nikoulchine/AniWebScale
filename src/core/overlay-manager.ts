@@ -28,7 +28,8 @@ export class OverlayManager {
   private readonly mutationObserver: MutationObserver;
   private readonly updateBound = () => this.schedulePositionUpdate();
   private readonly fullscreenBound = () => this.handleFullscreenChange();
-  private readonly unsubscribeFullscreen: () => void;
+  private unsubscribeFullscreen!: () => void;
+  private globalListenersAttached = false;
   private readonly videoEvents = new EventScope();
 
   private static readonly HOST_MARKER = 'data-anime4k-overlay-host';
@@ -64,10 +65,8 @@ export class OverlayManager {
 
     this.resizeObserver = new ResizeObserver(this.updateBound);
     this.mutationObserver = new MutationObserver(this.updateBound);
-    this.unsubscribeFullscreen = fullscreenContext.subscribe(this.fullscreenBound);
+    this.attachGlobalListeners();
     this.observeVideo();
-    window.addEventListener('resize', this.updateBound);
-    window.addEventListener('scroll', this.updateBound, { capture: true, passive: true });
     this.updatePosition();
   }
 
@@ -86,6 +85,22 @@ export class OverlayManager {
     this.mutationObserver.disconnect();
     this.videoEvents.dispose();
     this.cancelPositionUpdate();
+  }
+
+  private attachGlobalListeners(): void {
+    if (this.globalListenersAttached) return;
+    this.globalListenersAttached = true;
+    this.unsubscribeFullscreen = fullscreenContext.subscribe(this.fullscreenBound);
+    window.addEventListener('resize', this.updateBound);
+    window.addEventListener('scroll', this.updateBound, { capture: true, passive: true });
+  }
+
+  private detachGlobalListeners(): void {
+    if (!this.globalListenersAttached) return;
+    this.globalListenersAttached = false;
+    window.removeEventListener('resize', this.updateBound);
+    window.removeEventListener('scroll', this.updateBound, true);
+    this.unsubscribeFullscreen();
   }
 
   private schedulePositionUpdate(): void {
@@ -193,27 +208,27 @@ export class OverlayManager {
       this.statsPanel.textContent = '';
       return;
     }
-    const head = `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
     if (stats.realesrgan) {
       const r = stats.realesrgan;
-      // Inline two-line layout: a plain <br> keeps the same monospace pill
-      // and avoids the alternative of a second DOM node + flexbox in the
-      // shadow root. The phase breakdown only shows on RealESRGAN; other
-      // modes use the single-line version above.
       const composePath = r.gpuComposePct >= 50 ? 'gpu' : 'cpu';
       const worker = r.workerPct >= 50 ? 'worker' : 'main';
+      const precision = r.precision === 'fp16' ? 'FP16' : r.precision === 'int8' ? 'INT8' : 'FP32';
+      const head = typeof r.enhancedFps === 'number' && typeof r.count === 'number'
+        ? `${stats.fps.toFixed(1)} present / ${r.enhancedFps.toFixed(1)} enhance FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped (${r.count} enhanced)`
+        : `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
       this.statsPanel.replaceChildren();
       const line1 = document.createElement('div');
       line1.textContent = head;
       const line2 = document.createElement('div');
       line2.textContent =
         `readback ${r.readbackMs.toFixed(1)}ms  infer ${r.inferMs.toFixed(1)}ms  ` +
-        `compose ${r.composeMs.toFixed(1)}ms (${composePath}, ${worker})`;
+        `compose ${r.composeMs.toFixed(1)}ms (${composePath}, ${worker}, ${precision})`;
       line2.style.marginTop = '3px';
       line2.style.opacity = '0.85';
       this.statsPanel.appendChild(line1);
       this.statsPanel.appendChild(line2);
     } else {
+      const head = `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
       this.statsPanel.textContent = head;
     }
     this.statsPanel.hidden = false;
@@ -222,6 +237,7 @@ export class OverlayManager {
 
   public detach(): void {
     this.unobserveVideo();
+    this.detachGlobalListeners();
     this.host.style.display = 'none';
     this.host.remove();
     this.canvas?.remove();
@@ -254,6 +270,7 @@ export class OverlayManager {
       this.canvasVisible = false;
     }
     this.observeVideo();
+    this.attachGlobalListeners();
     this.updatePosition();
   }
 
@@ -261,9 +278,7 @@ export class OverlayManager {
     if (this.destroyed) return;
     this.destroyed = true;
     this.unobserveVideo();
-    window.removeEventListener('resize', this.updateBound);
-    window.removeEventListener('scroll', this.updateBound, true);
-    this.unsubscribeFullscreen();
+    this.detachGlobalListeners();
     this.hideCanvas();
     this.host.remove();
   }

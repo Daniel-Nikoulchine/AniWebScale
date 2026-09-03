@@ -7,6 +7,7 @@ import { createNativeSessionClient } from '../src/core/native-session-client';
 import { BackendState } from '../src/core/backend-state';
 import { OverloadTracker } from '../src/core/render-stats';
 import { EnhancerLifecycle } from '../src/core/enhancer-lifecycle';
+import { EventScope } from '../src/shared/event-scope';
 import { DEFAULT_SETTINGS } from '../src/utils/settings';
 
 function deferred<T>() {
@@ -86,6 +87,14 @@ function createBareEnhancer() {
     lifecycle: new EnhancerLifecycle(),
     automaticSession: false,
     nativeRetryBlocked: false,
+    events: new EventScope(),
+    videoEvents: new EventScope(),
+    encryptedHandler: () => undefined,
+    mediaActivityHandler: () => undefined,
+    videoFrameHandler: () => undefined,
+    targetChangeHandler: () => undefined,
+    fullscreenChangeHandler: () => undefined,
+    windowScrollHandler: () => undefined,
   });
   return { enhancer, video, overlay, fullscreenLayout, targetResizeObserver };
 }

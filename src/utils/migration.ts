@@ -1,4 +1,4 @@
-import type { EnhancementMode, QualityTier, RenderBackend } from '../types';
+import type { EnhancementMode, QualityTier, RealEsrganCapHeight, RenderBackend } from '../types';
 import {
   ID_TO_MODE,
   isEnhancementMode,
@@ -24,6 +24,10 @@ function isBackend(value: unknown): value is RenderBackend {
   return value === 'auto' || value === 'webgpu' || value === 'native';
 }
 
+function isCapHeight(value: unknown): value is RealEsrganCapHeight {
+  return value === 480 || value === 432 || value === 405;
+}
+
 async function needsMigration(): Promise<boolean> {
   const data = await chrome.storage.local.get(['_configVersion']);
   return (data._configVersion ?? 0) < CURRENT_CONFIG_VERSION;
@@ -41,6 +45,7 @@ export function normalizeLegacySettings(
   statsEnabled: boolean;
   autoFullscreenEnabled: boolean;
   frameGenerationEnabled: boolean;
+  realesrganCapHeight: RealEsrganCapHeight;
   hasCompletedOnboarding: boolean;
 } {
   const mode: EnhancementMode = isEnhancementMode(syncData.mode)
@@ -66,6 +71,9 @@ export function normalizeLegacySettings(
     frameGenerationEnabled: typeof syncData.frameGenerationEnabled === 'boolean'
       ? syncData.frameGenerationEnabled
       : false,
+    realesrganCapHeight: isCapHeight(localData.realesrganCapHeight)
+      ? localData.realesrganCapHeight
+      : 480,
     hasCompletedOnboarding: typeof localData.hasCompletedOnboarding === 'boolean'
       ? localData.hasCompletedOnboarding
       : false,
@@ -94,6 +102,8 @@ async function migrateV1ToV2(): Promise<void> {
       ...PREFERENCE_KEYS,
       'performanceTier',
       'hasCompletedOnboarding',
+      'uiLanguage',
+      'verboseLogging',
     ]),
   ]);
 
@@ -112,8 +122,13 @@ async function migrateV1ToV2(): Promise<void> {
     statsEnabled: normalized.statsEnabled,
     autoFullscreenEnabled: normalized.autoFullscreenEnabled,
     frameGenerationEnabled: normalized.frameGenerationEnabled,
+    realesrganCapHeight: normalized.realesrganCapHeight,
     theme,
     hasCompletedOnboarding: normalized.hasCompletedOnboarding,
+    uiLanguage: sourceData.uiLanguage === 'en' || sourceData.uiLanguage === 'de'
+      ? sourceData.uiLanguage
+      : 'auto',
+    verboseLogging: sourceData.verboseLogging === true,
     _configVersion: CURRENT_CONFIG_VERSION,
   });
 

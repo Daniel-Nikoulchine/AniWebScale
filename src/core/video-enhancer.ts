@@ -66,6 +66,7 @@ export class VideoEnhancer {
   /** The one serialized lifecycle: settings and fullscreen reconcile never interleave. */
   private readonly lifecycle = new EnhancerLifecycle();
   private readonly events = new EventScope();
+  private videoEvents = new EventScope();
   private automaticSession = false;
   private nativeRetryBlocked = false;
 
@@ -193,10 +194,7 @@ export class VideoEnhancer {
     this.events.on(window, 'resize', this.targetChangeHandler);
     this.events.on(window, 'scroll', this.windowScrollHandler, true);
     this.unsubscribeFullscreenContext = fullscreenContext.subscribe(this.fullscreenChangeHandler);
-    this.events.on(this.video, 'loadedmetadata', this.mediaActivityHandler);
-    this.events.on(this.video, 'playing', this.mediaActivityHandler);
-    this.events.on(this.video, 'resize', this.mediaActivityHandler);
-    this.events.on(this.video, 'timeupdate', this.videoFrameHandler);
+    this.observeVideoEvents(this.video);
     this.events.on(window, 'anime4k-native-session', this.nativeSessionHandler);
     this.events.on(window, 'pageshow', this.bfcacheRestoreHandler);
     void getSettings().then(settings => {
@@ -219,6 +217,13 @@ export class VideoEnhancer {
     const revision = this.lifecycle.begin();
     this.backend.beginTransition();
     return revision;
+  }
+
+  private observeVideoEvents(video: HTMLVideoElement): void {
+    this.videoEvents.on(video, 'loadedmetadata', this.mediaActivityHandler);
+    this.videoEvents.on(video, 'playing', this.mediaActivityHandler);
+    this.videoEvents.on(video, 'resize', this.mediaActivityHandler);
+    this.videoEvents.on(video, 'timeupdate', this.videoFrameHandler);
   }
 
   private isTransitionCurrent(revision: number): boolean {
@@ -327,7 +332,7 @@ export class VideoEnhancer {
     const canvas = this.overlay.getCanvas();
     canvas.width = rendererTargetDimensions.width;
     canvas.height = rendererTargetDimensions.height;
-    const effects = getEffectsForPreset(settings.mode, settings.quality);
+    const effects = getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight);
     this.currentModeId = MODE_TO_ID[settings.mode];
 
     let createdRenderer: Renderer | null = null;
@@ -489,7 +494,11 @@ export class VideoEnhancer {
   }
 
   private async handleEncryptedPlayback(): Promise<void> {
-    if (this.destroyed || (!this.renderer && !this.backend.isNativeActive)) return;
+    if (this.destroyed) return;
+    // EME fires once: don't drop it while a WebGPU start is still in flight.
+    // Beginning a new transition invalidates the pending start so the native
+    // path below wins instead of leaving protected content on WebGPU.
+    if (!this.renderer && !this.backend.isNativeActive && !this.backend.isStarting) return;
     if (this.backend.isNativeActive) return;
     const revision = this.beginTransition();
     const settings = this.currentSettings ?? await getSettings();
@@ -538,7 +547,7 @@ export class VideoEnhancer {
     if (canvas.width === targetDimensions.width && canvas.height === targetDimensions.height) return;
     try {
       await renderer.updateConfiguration({
-        effects: getEffectsForPreset(settings.mode, settings.quality),
+        effects: getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight),
         targetDimensions,
         frameGenerationEnabled: settings.frameGenerationEnabled,
       });
@@ -674,7 +683,7 @@ export class VideoEnhancer {
     const renderer = this.renderer;
     try {
       await renderer.updateConfiguration({
-        effects: getEffectsForPreset(newSettings.mode, newSettings.quality),
+        effects: getEffectsForPreset(newSettings.mode, newSettings.quality, newSettings.realesrganCapHeight),
         targetDimensions,
         frameGenerationEnabled: newSettings.frameGenerationEnabled,
       });
@@ -705,6 +714,16 @@ export class VideoEnhancer {
 
   public detach(): void {
     this.overlay.detach();
+    this.targetResizeObserver.disconnect();
+    this.video.removeEventListener('encrypted', this.encryptedHandler);
+    if (this.targetUpdateTimer) {
+      window.clearTimeout(this.targetUpdateTimer);
+      this.targetUpdateTimer = undefined;
+    }
+    if (this.fullscreenDebounceTimer) {
+      window.clearTimeout(this.fullscreenDebounceTimer);
+      this.fullscreenDebounceTimer = undefined;
+    }
     this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
     this.video.removeAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR);
   }
@@ -712,7 +731,10 @@ export class VideoEnhancer {
   public async reattach(newVideo: HTMLVideoElement): Promise<void> {
     if (this.destroyed) return;
     this.video.removeEventListener('encrypted', this.encryptedHandler);
+    this.videoEvents.dispose();
+    this.videoEvents = new EventScope();
     this.video = newVideo;
+    this.observeVideoEvents(this.video);
     this.fullscreenLayout.updateVideo(newVideo);
     this.video.dataset.anime4kVideoId = this.videoId;
     this.video.addEventListener('encrypted', this.encryptedHandler);

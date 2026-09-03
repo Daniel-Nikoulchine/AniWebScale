@@ -23,15 +23,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
   );
-  const { mode, quality, backend } = controls;
+  const { mode, quality, backend, realesrganCap } = controls;
   const extensionEnabled = renderToggle(
     document.getElementById('extension-toggle') as HTMLDivElement,
     {
       id: 'extension-enabled',
       titleKey: 'extensionEnabled',
       titleFallback: 'Extension enabled',
-      descriptionKey: 'processVideos',
-      descriptionFallback: 'Process videos in this browser',
       compact: true,
     },
   );
@@ -138,6 +136,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.warn('[AniWebScale] Could not inspect site access:', error);
     siteAccessCard.dataset.state = 'unavailable';
     siteAccessSummary.textContent = message('siteAccessCheckFailed', 'Site access could not be checked.');
+    siteAccessButton.textContent = message('siteAccessUnavailableAction', 'Unavailable');
     siteAccessButton.disabled = true;
   });
 
@@ -147,6 +146,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   mode.value = settings.mode;
   quality.value = settings.quality;
   backend.value = settings.backend;
+  if (realesrganCap) realesrganCap.value = String(settings.realesrganCapHeight);
   statistics.checked = settings.statsEnabled;
   frameGeneration.checked = settings.frameGenerationEnabled;
 
@@ -176,6 +176,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     mode,
     quality,
     backend,
+    realesrganCap,
     frameGeneration,
     description: modeDescription,
     nativeWarning,
@@ -195,7 +196,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusTimer = setTimeout(() => { status.textContent = ''; }, 3000);
   };
   createSettingsController({
-    controls: { mode, quality, backend, statistics, frameGeneration },
+    controls: { mode, quality, backend, realesrganCap, statistics, frameGeneration },
     showStatus,
     messages: {
       saving: message('saving', 'Saving...'),

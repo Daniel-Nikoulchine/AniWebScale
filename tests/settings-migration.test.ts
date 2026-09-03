@@ -20,6 +20,7 @@ describe('settings migration', () => {
       statsEnabled: false,
       autoFullscreenEnabled: false,
       frameGenerationEnabled: false,
+      realesrganCapHeight: 480,
       hasCompletedOnboarding: true,
     });
   });
@@ -39,7 +40,17 @@ describe('settings migration', () => {
       statsEnabled: false,
       autoFullscreenEnabled: true,
       frameGenerationEnabled: false,
+      realesrganCapHeight: 480,
       hasCompletedOnboarding: false,
+    });
+  });
+
+  it('preserves a previously capped RealESRGAN height', () => {
+    expect(normalizeLegacySettings({}, { realesrganCapHeight: 432 })).toMatchObject({
+      realesrganCapHeight: 432,
+    });
+    expect(normalizeLegacySettings({}, { realesrganCapHeight: 999 })).toMatchObject({
+      realesrganCapHeight: 480,
     });
   });
 

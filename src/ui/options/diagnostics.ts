@@ -13,15 +13,24 @@ export function setBadge(el: HTMLElement, text: string, ok: boolean | null): voi
 
 function probeNativeHost(): Promise<boolean> {
   return new Promise(resolve => {
+    let settled = false;
+    const settle = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     try {
       const port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
-      port.onDisconnect.addListener(() => resolve(!chrome.runtime.lastError));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         try { port.disconnect(); } catch { /* already disconnected */ }
-        resolve(true);
+        settle(true);
       }, 300);
+      port.onDisconnect.addListener(() => {
+        clearTimeout(timer);
+        settle(!chrome.runtime.lastError);
+      });
     } catch {
-      resolve(false);
+      settle(false);
     }
   });
 }

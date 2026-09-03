@@ -33,7 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
   );
-  const { mode, quality, backend } = controls;
+  const { mode, quality, backend, realesrganCap } = controls;
   const toggles = renderEnhancementToggles(
     document.getElementById('enhancement-toggles') as HTMLDivElement,
     { includeStatistics: true },
@@ -73,6 +73,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   mode.value = settings.mode;
   quality.value = settings.quality;
   backend.value = settings.backend;
+  if (realesrganCap) realesrganCap.value = String(settings.realesrganCapHeight);
   statistics.checked = settings.statsEnabled;
   frameGeneration.checked = settings.frameGenerationEnabled;
   theme.value = initialTheme;
@@ -132,11 +133,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     mode,
     quality,
     backend,
+    realesrganCap,
     frameGeneration,
     compatibilityHint,
   });
   settingsController = createSettingsController({
-    controls: { mode, quality, backend, statistics, frameGeneration },
+    controls: { mode, quality, backend, realesrganCap, statistics, frameGeneration },
     additionalControls: [verboseLogging],
     getLocalSettings: () => ({ verboseLogging: verboseLogging.checked }),
     onChange: updateModeUi,
@@ -167,7 +169,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (syncRenderSettings(changes, { mode, quality, backend, statistics, frameGeneration }, { verboseLogging })) updateModeUi();
+    if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, statistics, frameGeneration }, { verboseLogging })) updateModeUi();
     if (typeof changes.theme?.newValue === 'string'
       && ['light', 'dark', 'auto'].includes(changes.theme.newValue)
       && theme.value !== changes.theme.newValue) {
@@ -199,11 +201,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       backend: DEFAULT_SETTINGS.backend as RenderBackend,
       statsEnabled: DEFAULT_SETTINGS.statsEnabled,
       frameGenerationEnabled: DEFAULT_SETTINGS.frameGenerationEnabled,
+      realesrganCapHeight: DEFAULT_SETTINGS.realesrganCapHeight,
     };
     await applySettings(update, { local: { verboseLogging: false } });
     mode.value = DEFAULT_SETTINGS.mode;
     quality.value = DEFAULT_SETTINGS.quality;
     backend.value = DEFAULT_SETTINGS.backend;
+    if (realesrganCap) realesrganCap.value = String(DEFAULT_SETTINGS.realesrganCapHeight);
     statistics.checked = DEFAULT_SETTINGS.statsEnabled;
     frameGeneration.checked = DEFAULT_SETTINGS.frameGenerationEnabled;
     verboseLogging.checked = false;

@@ -1,4 +1,4 @@
-import type { EnhancementMode, QualityTier, RenderBackend } from '../types';
+import type { EnhancementMode, QualityTier, RealEsrganCapHeight, RenderBackend } from '../types';
 import type { LocalSettings } from '../types';
 import { applySettings, type SettingsApplyResult, type SettingsUpdate } from '../utils/apply-settings';
 
@@ -6,12 +6,18 @@ export interface RenderControlElements {
   mode: HTMLSelectElement;
   quality: HTMLSelectElement;
   backend: HTMLSelectElement;
+  realesrganCap?: HTMLSelectElement;
   statistics: HTMLInputElement;
   frameGeneration: HTMLInputElement;
 }
 
+function parseRealEsrganCap(value: string): RealEsrganCapHeight | null {
+  const parsed = Number(value);
+  return parsed === 480 || parsed === 432 || parsed === 405 ? parsed : null;
+}
+
 export function collectRenderSettings(controls: RenderControlElements): SettingsUpdate {
-  return {
+  const update: SettingsUpdate = {
     mode: controls.mode.value as EnhancementMode,
     quality: controls.quality.value as QualityTier,
     output: 'auto',
@@ -19,6 +25,9 @@ export function collectRenderSettings(controls: RenderControlElements): Settings
     statsEnabled: controls.statistics.checked,
     frameGenerationEnabled: controls.frameGeneration.checked,
   };
+  const cap = controls.realesrganCap ? parseRealEsrganCap(controls.realesrganCap.value) : null;
+  if (cap !== null) update.realesrganCapHeight = cap;
+  return update;
 }
 
 /** Apply storage changes to matching form controls and report whether the UI changed. */
@@ -33,6 +42,7 @@ export function syncRenderSettings(
     quality: controls.quality,
     backend: controls.backend,
   };
+  if (controls.realesrganCap) selectBindings.realesrganCapHeight = controls.realesrganCap;
   const booleanBindings: Record<string, HTMLInputElement> = {
     statsEnabled: controls.statistics,
     frameGenerationEnabled: controls.frameGeneration,
@@ -41,9 +51,16 @@ export function syncRenderSettings(
 
   for (const [key, select] of Object.entries(selectBindings)) {
     const value = changes[key]?.newValue;
-    if (typeof value === 'string' && select.value !== value) {
-      select.value = value;
-      changed = true;
+    // String() because the cap travels as a number (480) while option
+    // values are strings ("480").
+    if ((typeof value === 'string' || typeof value === 'number') && select.value !== String(value)) {
+      const next = String(value);
+      // A corrupt stored value matches no option; assigning it would leave
+      // the select blank. Keep the current display instead.
+      if (Array.from(select.options).some(option => option.value === next)) {
+        select.value = next;
+        changed = true;
+      }
     }
   }
   for (const [key, input] of Object.entries(booleanBindings)) {
@@ -115,6 +132,7 @@ export function createSettingsController(options: SettingsControllerOptions): Se
     options.controls.backend,
     options.controls.statistics,
     options.controls.frameGeneration,
+    ...(options.controls.realesrganCap ? [options.controls.realesrganCap] : []),
     ...(options.additionalControls ?? []),
   ];
   for (const control of controls) {

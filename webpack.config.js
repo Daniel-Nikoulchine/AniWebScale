@@ -189,7 +189,16 @@ module.exports = (env, argv) => {
             from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs',
             to: 'ort/ort-wasm-simd-threaded.asyncify.mjs',
           },
-          { from: 'models', to: 'models' },
+          // The RealESRGAN inference worker is loaded at runtime as an
+          // unbundled plain-JS module (fetched, wrapped in a Blob URL, started
+          // as a module worker), so it must ship verbatim. Missing this copy
+          // made the client's fetch 404 and silently disabled the whole
+          // worker path (every frame fell back to the main-thread session).
+          { from: 'src/worker/*.js', to: 'chunks/[name][ext]' },
+          { from: 'models', to: 'models', globOptions: { ignore: ['**/*.fp16.onnx'] } },
+          // Optional FP16 models are copied only when present in the source
+          // tree; the runtime probes the asset and falls back to FP32.
+          { from: 'models/realesrgan/*.fp16.onnx', to: 'models/realesrgan/[name][ext]', noErrorOnMissing: true },
         ],
       }),
       new HtmlWebpackPlugin({

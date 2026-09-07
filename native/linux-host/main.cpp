@@ -8,6 +8,13 @@
  *
  * Framing: 4-byte little-endian length prefix + UTF-8 JSON (Chrome/Firefox spec).
  * Logging goes to stderr, stdout is strictly framed.
+ *
+ * Structure: main() only parses args, builds the aniwebscale::UpscaleCore
+ * (upscale-core.h — Vulkan device, ncnn models, pipelines, allocators, per-frame
+ * upscale) and wires the two transports (framed stdin/stdout JSON below, loopback
+ * HTTP in http-transport.h) to it. Everything else lives in file-local helpers:
+ * base64, framed I/O, CPU affinity/nice, governor diagnostics, pipeline-cache
+ * path handling, the --traffic-test probe and shm file I/O.
  */
 
 #include <algorithm>
@@ -42,10 +49,11 @@
 #include "net.h"
 #include "gpu.h"
 #include "http-transport.h"
+#include "upscale-core.h"
+#include "srvgg-vulkan.h"
 
 #if NCNN_VULKAN
-#include "realesrgan_spike_postproc.comp.hex.h"
-#include "realesrgan_spike_preproc.comp.hex.h"
+#include "srvgg_traffic.comp.hex.h"
 #endif
 
 // ---------- base64 ----------
@@ -242,17 +250,117 @@ static double get_number(const Object& o, const char* key, double def = 0) {
     return n ? *n : def;
 }
 
-// ---------- vulkan helpers ----------
-static void report_device(const ncnn::VulkanDevice* dev) {
-    const auto& info = dev->info;
-    fprintf(stderr, "[host] device=%s api=%u.%u.%u driver=%s fp16_packed=%d fp16_storage=%d fp16_arith=%d rebar=%d\n",
-        info.device_name(),
-        info.api_version() >> 22, (info.api_version() >> 12) & 0x3ff, info.api_version() & 0xfff,
-        info.driver_name(),
-        info.support_fp16_packed(), info.support_fp16_storage(), info.support_fp16_arithmetic(),
-        info.resizable_bar_enabled());
+// ---------- framed error JSON ----------
+// All error objects share the same shape; only the invalid_json error (no
+// requestId field yet) stays hand-built in the main loop. Code strings and
+// messages are wire protocol — do not change.
+static std::string error_json(const std::string& requestId, const char* code, const std::string& message) {
+    Object err;
+    err["type"] = Value("error");
+    err["protocolVersion"] = Value(3.0);
+    err["requestId"] = Value(requestId);
+    err["code"] = Value(code);
+    err["message"] = Value(message);
+    err["recoverable"] = Value(true);
+    return anime4k::json::stringify(Value(err));
 }
 
+// ---------- shm file I/O ----------
+// Read w*h*4 bytes of RGBA8 from a shm file path. On failure fills err_code /
+// err_msg with the wire-level error identity.
+static bool read_shm_rgba(const std::string& path, size_t need,
+                          std::vector<unsigned char>& rgba,
+                          const char*& err_code, std::string& err_msg) {
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        err_code = "shm_open_failed";
+        err_msg = std::string("failed to open shmIn: ") + strerror(errno);
+        return false;
+    }
+    rgba.resize(need);
+    size_t off = 0;
+    while (off < need) {
+        ssize_t r = ::read(fd, rgba.data()+off, need-off);
+        if (r <= 0) {
+            if (r < 0 && errno == EINTR) continue;
+            break;
+        }
+        off += r;
+    }
+    ::close(fd);
+    if (off != need) {
+        err_code = "shm_read_failed";
+        err_msg = "shmIn size mismatch";
+        return false;
+    }
+    return true;
+}
+
+// Write a result frame to a shm file path. On failure fills err_code / err_msg.
+static bool write_shm_rgba(const std::string& path, const std::vector<unsigned char>& rgba,
+                           const char*& err_code, std::string& err_msg) {
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        err_code = "shm_write_failed";
+        err_msg = std::string("failed to open shmOut: ") + strerror(errno);
+        return false;
+    }
+    size_t off = 0;
+    size_t need = rgba.size();
+    while (off < need) {
+        ssize_t w = ::write(fd, rgba.data()+off, need-off);
+        if (w <= 0) {
+            if (w < 0 && errno == EINTR) continue;
+            break;
+        }
+        off += w;
+    }
+    ::close(fd);
+    if (off != need) {
+        err_code = "shm_write_incomplete";
+        err_msg = "shmOut write incomplete";
+        return false;
+    }
+    return true;
+}
+
+// ---------- process hygiene ----------
+// p6: host hygiene — keep the main thread off core 0 (IRQ-heavy) and give it
+// scheduling priority. Cheap, no downside, shaves scheduling jitter.
+static void apply_cpu_affinity_and_nice() {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    int ncpus = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    // Pin to cores 2..(ncpus-1): dodges kernel housekeeping on core 0/1
+    for (int c = 2; c < ncpus; ++c) CPU_SET(c, &set);
+    if (sched_setaffinity(0, sizeof(set), &set) == 0) {
+        fprintf(stderr, "[host] affinity set to cores 2-%d\n", ncpus - 1);
+    }
+    // Best-effort nicer scheduling; without root only positive nice works.
+    setpriority(PRIO_PROCESS, 0, -5);
+    fprintf(stderr, "[host] nice=%d (negative needs root/cap)\n", getpriority(PRIO_PROCESS, 0));
+}
+
+// Takt-Check (Hygiene, 2.9.): ein gedrosselter Governor erklärt die
+// +7 % beim 1080p-Lauf. Reine Diagnose, ändert nichts.
+static void log_gpu_governor_levels() {
+    for (const auto& entry : std::filesystem::directory_iterator("/sys/class/drm")) {
+        if (!entry.is_directory()) continue;
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("card", 0) != 0 || name.find('-') != std::string::npos) continue;
+        const std::string lvl_path = entry.path().string() + "/device/power_dpm_force_performance_level";
+        if (FILE* f = fopen(lvl_path.c_str(), "r")) {
+            char lvl[32] = {};
+            if (fgets(lvl, sizeof(lvl), f)) {
+                lvl[strcspn(lvl, "\n")] = 0;
+                fprintf(stderr, "[host] %s power_dpm_force_performance_level=%s\n", name.c_str(), lvl);
+            }
+            fclose(f);
+        }
+    }
+}
+
+// ---------- model discovery ----------
 static std::string find_model_file(const char* def, const char* env) {
     const char* e = std::getenv(env);
     if (e && std::filesystem::exists(e)) return e;
@@ -277,6 +385,111 @@ static std::string find_model_file(const char* def, const char* env) {
     return def;
 }
 
+// ---------- pipeline cache location ----------
+// Pipeline cache: try to load on-disk cache for faster cold start (RADV also caches, but this covers ncnn's pipeline layer)
+// We keep it simple: load if exists, save on exit. Not critical for steady-state benchmark.
+// ncnn's PipelineCache is per-device; the load/save itself lives in UpscaleCore.
+static std::string pipeline_cache_dir() {
+    const char* cache_home = std::getenv("XDG_CACHE_HOME");
+    return cache_home ? std::string(cache_home) + "/aniwebscale" : std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/.cache/aniwebscale";
+}
+
+#if NCNN_VULKAN
+// Deep-fusion premise probe (E4): times ONE 64ch fp16 layer-boundary
+// roundtrip (read 64*H*W fp16 + write back, ping-pong A<->B exactly like
+// runTiled's actA/actB, same blob-pooled VkMats). Median * 16 body boundaries
+// is the hard ceiling for any deep-fusion win. Fresh VkCompute per submit
+// (spike lifetime rule: reuse across submits SIGSEGVs in RADV). Prints JSON
+// to stdout, returns 0 on success. No weights, no models, no network.
+static int run_traffic_test(ncnn::VulkanDevice* device, ncnn::VkAllocator* blob,
+                            ncnn::VkAllocator* staging, int width, int height, int iters) {
+    ncnn::Pipeline* pipe = new ncnn::Pipeline(device);
+    pipe->set_local_size_xyz(8, 8, 4);
+    {
+        std::vector<ncnn::vk_specialization_type> specs;
+        if (pipe->create(srvgg_traffic_comp_data, sizeof(srvgg_traffic_comp_data), specs) != 0) {
+            fprintf(stderr, "[traffic] pipeline creation failed\n");
+            delete pipe;
+            return 1;
+        }
+    }
+    ncnn::VkMat actA;
+    actA.create(width, height, 64, (size_t)2, 1, blob);
+    ncnn::VkMat actB;
+    actB.create(width, height, 64, (size_t)2, 1, blob);
+    if (!actA.data || !actB.data) {
+        fprintf(stderr, "[traffic] activation alloc failed\n");
+        delete pipe;
+        return 1;
+    }
+    const int stride = static_cast<int>(actA.cstep);
+    ncnn::Option topt;
+    topt.blob_vkallocator = blob;
+    topt.workspace_vkallocator = blob;
+    topt.staging_vkallocator = staging;
+    std::vector<double> samples;
+    samples.reserve((size_t)iters * 2);
+    bool flip = false;
+    double warmupMs = 0.0;
+    for (int it = -1; it < iters; it++) {
+        for (int half = 0; half < 2; half++) {
+            const ncnn::VkMat& inMat = flip ? actB : actA;
+            ncnn::VkMat& outMat = flip ? actA : actB;
+            ncnn::VkCompute cmd(device);
+            std::vector<ncnn::VkMat> binds(2);
+            binds[0] = inMat;
+            binds[1] = outMat;
+            std::vector<ncnn::vk_constant_type> consts(3);
+            consts[0].i = width;
+            consts[1].i = height;
+            consts[2].i = stride;
+            ncnn::VkMat disp;
+            disp.w = width;
+            disp.h = height;
+            disp.c = 64;
+            cmd.record_pipeline(pipe, binds, consts, disp);
+            const auto t0 = std::chrono::steady_clock::now();
+            if (cmd.submit_and_wait() != 0) {
+                fprintf(stderr, "[traffic] submit failed at iter %d\n", it);
+                delete pipe;
+                return 1;
+            }
+            const auto t1 = std::chrono::steady_clock::now();
+            const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            if (it < 0 && half == 0) warmupMs = ms;
+            else if (it >= 0) samples.push_back(ms);
+            flip = !flip;
+        }
+    }
+    // Honesty checksum: download the final buffer, prove the writes landed.
+    ncnn::Mat dst;
+    {
+        ncnn::VkCompute cmd(device);
+        cmd.record_clone(flip ? actB : actA, dst, topt);
+        if (cmd.submit_and_wait() != 0 || !dst.data) {
+            fprintf(stderr, "[traffic] checksum download failed\n");
+            delete pipe;
+            return 1;
+        }
+    }
+    std::sort(samples.begin(), samples.end());
+    const double median = samples[samples.size() / 2];
+    const double p95 = samples[(samples.size() * 95) / 100];
+    const auto* words = static_cast<const uint16_t*>(dst.data);
+    const size_t nwords = dst.total();
+    const double bytesPerBoundary = 2.0 * 64 * width * height * 2;
+    const double gbps = (bytesPerBoundary / 1e9) / (median / 1e3);
+    printf("{\"w\":%d,\"h\":%d,\"channels\":64,\"bytesPerBoundary\":%.0f,"
+           "\"iters\":%d,\"warmupMs\":%.3f,\"medianMs\":%.3f,\"p95Ms\":%.3f,"
+           "\"gbps\":%.1f,\"fusionCeiling16Ms\":%.2f,"
+           "\"check\":[\"0x%04x\",\"0x%04x\"]}\n",
+           width, height, bytesPerBoundary, iters, warmupMs, median, p95,
+           gbps, median * 16, words[0], words[nwords - 1]);
+    delete pipe;
+    return 0;
+}
+#endif
+
 int main(int argc, char** argv) {
     bool use_fp16 = true;
     // Idle reaper (Zombie-Fix, 2.9.): exit after N seconds without any frame
@@ -296,11 +509,31 @@ int main(int argc, char** argv) {
     std::string int8_param, int8_bin;
     if (const char* e = std::getenv("ANIWEBSCALE_NCNN_INT8_PARAM")) int8_param = e;
     if (const char* e = std::getenv("ANIWEBSCALE_NCNN_INT8_BIN")) int8_bin = e;
+    // E4 phase 1: hand-written Vulkan SRVGG instead of the ncnn graph.
+    // Opt-in per process (a per-request protocol param comes with
+    // productization, after the perf gates pass): single-pass frames only,
+    // everything else — and any srvgg failure — falls back to ncnn.
+    bool useSrvggEngine = false;
+    if (const char* e = std::getenv("ANIWEBSCALE_SRVGG_ENGINE")) {
+        const std::string v(e);
+        useSrvggEngine = (v == "srvgg" || v == "1");
+    }
+    // Deep-fusion premise probe: --traffic-test W H [ITERS] times one 64ch
+    // fp16 layer boundary and exits (no models, no network).
+    bool trafficTest = false;
+    int trafficW = 0, trafficH = 0, trafficIters = 10;
     std::string param_path = find_model_file(DEFAULT_PARAM_PATH, "ANIWEBSCALE_NCNN_PARAM");
     std::string bin_path = find_model_file(DEFAULT_BIN_PATH, "ANIWEBSCALE_NCNN_BIN");
     for (int i=1;i<argc;i++) {
         std::string a = argv[i];
-        if (a == "--no-fp16") use_fp16 = false;
+        if (a == "--no-fp16") {
+            // The shared upscale core is fp16-storage GPU-only: with fp16 off
+            // the pre/postproc pipelines are never created and every frame
+            // fails with "gpu postproc pipeline unavailable". Refuse at
+            // startup instead of reporting ready and failing per frame.
+            fprintf(stderr, "[host] --no-fp16 is not supported: the GPU path is fp16-storage-only\n");
+            return 2;
+        }
         else if (a == "--fp16") use_fp16 = true;
         else if (a == "--param" && i+1 < argc) param_path = argv[++i];
         else if (a == "--bin" && i+1 < argc) bin_path = argv[++i];
@@ -308,6 +541,16 @@ int main(int argc, char** argv) {
         else if (a == "--no-int8") use_int8 = false;
         else if (a == "--int8-param" && i+1 < argc) int8_param = argv[++i];
         else if (a == "--int8-bin" && i+1 < argc) int8_bin = argv[++i];
+        else if (a == "--traffic-test" && i+2 < argc) {
+            trafficTest = true;
+            trafficW = std::atoi(argv[++i]);
+            trafficH = std::atoi(argv[++i]);
+            if (i+1 < argc && argv[i+1][0] != '-') trafficIters = std::atoi(argv[++i]);
+            if (trafficW <= 0 || trafficH <= 0 || trafficIters <= 0) {
+                fprintf(stderr, "[host] --traffic-test needs W H [ITERS>0]\n");
+                return 1;
+            }
+        }
         else if (a == "--idle-timeout" && i+1 < argc) {
             char* end = nullptr;
             const long idle_value = std::strtol(argv[++i], &end, 10);
@@ -318,7 +561,7 @@ int main(int argc, char** argv) {
             idle_timeout_s = idle_value;
         }
         else if (a == "--help" || a == "-h") {
-            fprintf(stderr, "Usage: %s [--param file.param] [--bin file.bin] [--fp16|--no-fp16] [--idle-timeout SECS]\n"
+            fprintf(stderr, "Usage: %s [--param file.param] [--bin file.bin] [--fp16] [--idle-timeout SECS]\n"
                             "       [--int8 --int8-param file-int8.param --int8-bin file-int8.bin]\n", argv[0]);
             return 0;
         }
@@ -338,355 +581,53 @@ int main(int argc, char** argv) {
                 int8_param.c_str(), int8_bin.c_str());
     }
 
-    // Pipeline cache: try to load on-disk cache for faster cold start (RADV also caches, but this covers ncnn's pipeline layer)
-    // We keep it simple: load if exists, save on exit. Not critical for steady-state benchmark.
-    const char* cache_home = std::getenv("XDG_CACHE_HOME");
-    std::string cache_dir = cache_home ? std::string(cache_home) + "/aniwebscale" : std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/.cache/aniwebscale";
-    std::string pipeline_cache_path = cache_dir + "/ncnn_pipeline_cache.bin";
-    // ncnn's PipelineCache is per-device; we will load after device creation if file exists (best effort)
-    // p6: host hygiene — keep the main thread off core 0 (IRQ-heavy) and give it
-    // scheduling priority. Cheap, no downside, shaves scheduling jitter.
-    {
-        cpu_set_t set;
-        CPU_ZERO(&set);
-        int ncpus = (int)sysconf(_SC_NPROCESSORS_ONLN);
-        // Pin to cores 2..(ncpus-1): dodges kernel housekeeping on core 0/1
-        for (int c = 2; c < ncpus; ++c) CPU_SET(c, &set);
-        if (sched_setaffinity(0, sizeof(set), &set) == 0) {
-            fprintf(stderr, "[host] affinity set to cores 2-%d\n", ncpus - 1);
-        }
-        // Best-effort nicer scheduling; without root only positive nice works.
-        setpriority(PRIO_PROCESS, 0, -5);
-        fprintf(stderr, "[host] nice=%d (negative needs root/cap)\n", getpriority(PRIO_PROCESS, 0));
-    }
+    std::string pipeline_cache_path = pipeline_cache_dir() + "/ncnn_pipeline_cache.bin";
 
-    ncnn::create_gpu_instance();
-    ncnn::VulkanDevice* device = ncnn::get_gpu_device(0);
-    if (!device) {
-        fprintf(stderr, "[host] no Vulkan device\n");
-        return 1;
-    }
-    report_device(device);
-    // Zombie-Hypothese (2.9.) ist belegter VRAM durch den persistenten
-    // Blob-Pool: Budget jetzt loggen, am Idle-Exit nochmal, dann weiß man es.
-    const uint32_t heap_budget_start_mb = device->get_heap_budget();
+    apply_cpu_affinity_and_nice();
+
+    // Build the upscale core: gpu instance + device, pipeline cache, models,
+    // pipelines, persistent allocators. Any failure here is fatal (rc 1).
+    aniwebscale::UpscaleCore core;
+    if (!core.init_device()) return 1;
     fprintf(stderr, "[host] heap budget=%u MB idle_timeout=%lds\n",
-            heap_budget_start_mb, idle_timeout_s);
-    // Takt-Check (Hygiene, 2.9.): ein gedrosselter Governor erklärt die
-    // +7 % beim 1080p-Lauf. Reine Diagnose, ändert nichts.
-    for (const auto& entry : std::filesystem::directory_iterator("/sys/class/drm")) {
-        if (!entry.is_directory()) continue;
-        const std::string name = entry.path().filename().string();
-        if (name.rfind("card", 0) != 0 || name.find('-') != std::string::npos) continue;
-        const std::string lvl_path = entry.path().string() + "/device/power_dpm_force_performance_level";
-        if (FILE* f = fopen(lvl_path.c_str(), "r")) {
-            char lvl[32] = {};
-            if (fgets(lvl, sizeof(lvl), f)) {
-                lvl[strcspn(lvl, "\n")] = 0;
-                fprintf(stderr, "[host] %s power_dpm_force_performance_level=%s\n", name.c_str(), lvl);
-            }
-            fclose(f);
-        }
-    }
-    // Try to load ncnn pipeline cache (optional, ignore errors)
-    {
-        try {
-            std::filesystem::create_directories(cache_dir);
-            if (std::filesystem::exists(pipeline_cache_path)) {
-                // PipelineCache loading via ncnn API would go here; for now RADV's cache is sufficient
-                // Keeping hook for future explicit ncnn PipelineCache integration
-                fprintf(stderr, "[host] pipeline cache file exists: %s (RADV caches shader, ncnn cache hook ready)\n", pipeline_cache_path.c_str());
-            }
-        } catch (...) {}
-    }
+            core.heap_budget_start_mb(), idle_timeout_s);
+    log_gpu_governor_levels();
+    core.load_pipeline_cache(pipeline_cache_path, pipeline_cache_dir());
 
-    ncnn::Net net;
-    net.opt.use_vulkan_compute = true;
-    net.opt.num_threads = 4;
-    net.opt.use_fp16_packed = use_fp16;
-    net.opt.use_fp16_storage = use_fp16;
-    net.opt.use_fp16_arithmetic = false;
-    net.opt.use_winograd_convolution = true;
-    net.opt.use_bf16_storage = false;
-    // INT8-Pfad (nur mit quantisiertem Modell, sonst stiller Fallback auf
-    // fp32-Layer — deshalb oben fail-fast ohne int8-Dateien).
-    net.opt.use_int8_inference = use_int8;
-    net.opt.use_int8_storage = use_int8;
-    net.opt.use_int8_packed = use_int8;
-    net.opt.use_int8_arithmetic = use_int8;
-
-    const std::string& load_param = use_int8 ? int8_param : param_path;
-    const std::string& load_bin = use_int8 ? int8_bin : bin_path;
-    if (net.load_param(load_param.c_str()) != 0) {
-        fprintf(stderr, "[host] failed to load param %s\n", load_param.c_str());
-        return 1;
-    }
-    if (net.load_model(load_bin.c_str()) != 0) {
-        fprintf(stderr, "[host] failed to load bin %s\n", load_bin.c_str());
-        return 1;
-    }
-    fprintf(stderr, "[host] model loaded\n");
+    aniwebscale::UpscaleCoreConfig core_cfg;
+    core_cfg.use_fp16 = use_fp16;
+    core_cfg.use_int8 = use_int8;
+    core_cfg.use_srvgg_engine = useSrvggEngine;
+    core_cfg.param_path = param_path;
+    core_cfg.bin_path = bin_path;
+    core_cfg.int8_param = int8_param;
+    core_cfg.int8_bin = int8_bin;
+    if (!core.load_models(core_cfg)) return 1;
 
 #if NCNN_VULKAN
-    ncnn::Pipeline* postproc = nullptr;
-    ncnn::Pipeline* preproc = nullptr;
-    if (use_fp16) {
-        postproc = new ncnn::Pipeline(device);
-        postproc->set_optimal_local_size_xyz(32, 32, 1);
-        std::vector<ncnn::vk_specialization_type> specs(1);
-        specs[0].i = 0;
-        if (postproc->create(realesrgan_spike_postproc_comp_data, sizeof(realesrgan_spike_postproc_comp_data), specs) != 0) {
-            fprintf(stderr, "[host] failed to create postproc pipeline\n");
-            delete postproc;
-            postproc = nullptr;
-        } else {
-            fprintf(stderr, "[host] GPU postproc ready\n");
-        }
-        // Preproc: RGBA8 -> planar fp16, avoids CPU loop + CPU cast
-        preproc = new ncnn::Pipeline(device);
-        preproc->set_optimal_local_size_xyz(32, 32, 1);
-        std::vector<ncnn::vk_specialization_type> pre_specs(1);
-        pre_specs[0].i = 0;
-        if (preproc->create(realesrgan_spike_preproc_comp_data, sizeof(realesrgan_spike_preproc_comp_data), pre_specs) != 0) {
-            fprintf(stderr, "[host] failed to create preproc pipeline\n");
-            delete preproc;
-            preproc = nullptr;
-        } else {
-            fprintf(stderr, "[host] GPU preproc ready\n");
-        }
+    if (trafficTest) {
+        const int rc = run_traffic_test(core.device(), core.blob_allocator(), core.staging_allocator(), trafficW, trafficH, trafficIters);
+        // Spike lifetime rule (see normal exit): the Net must release GPU
+        // resources before the instance dies, or the destructor SIGSEGVs.
+        core.shutdown();
+        return rc;
     }
 #endif
 
-    // Persistent Vulkan allocators — acquired once, reused for every frame.
-    // Avoids per-frame vkAllocate churn and mirrors benchmark S2 change.
-    ncnn::VkAllocator* blob = device->acquire_blob_allocator();
-    ncnn::VkAllocator* staging = device->acquire_staging_allocator();
-    if (!blob || !staging) {
-        fprintf(stderr, "[host] failed to acquire Vulkan allocators\n");
-        if (blob) device->reclaim_blob_allocator(blob);
-        if (staging) device->reclaim_staging_allocator(staging);
-#if NCNN_VULKAN
-        delete postproc;
-        delete preproc;
-#endif
-        ncnn::destroy_gpu_instance();
-        return 1;
-    }
-    fprintf(stderr, "[host] persistent allocators ready (blob=%p staging=%p)\n", (void*)blob, (void*)staging);
-
-    // p7: shared upscale core used by the stdin framed-JSON handler and the
-    // loopback HTTP transport. Single-pass for small frames, tiled (512/32)
-    // above 1280x720, GPU pre/post-processing, latest-wins quality identical
-    // between transports. `upscale_mutex` gives exclusive GPU ownership to
-    // exactly one upscale at a time across both transports.
-    // p8: optional tw/th presentation target — when the client knows the
-    // canvas/display size, the postproc shader box-averages the network
-    // output down to that size BEFORE the download, so the transported
-    // payload shrinks from the full 4x frame (up to 59 MB at 720p input)
-    // toward the display size (8–16 MB typically). The adaptive presentation
-    // sampler already area-averages on the GPU; this moves the same math in
-    // front of the transport, which is the expensive part.
-    auto run_upscale = [&](const unsigned char* rgba, int width, int height,
-                           int target_w, int target_h,
-                           std::vector<unsigned char>& out, int& out_w, int& out_h,
-                           std::string& err_msg) -> bool {
-#if NCNN_VULKAN
-        const long long px = (long long)width * height;
-        const bool tiled = px > (long long)1280 * 720;
-        ncnn::Option opt = net.opt;
-        opt.blob_vkallocator = blob;
-        opt.workspace_vkallocator = blob;
-        opt.staging_vkallocator = staging;
-
-        auto run_gpu_frame = [&](const unsigned char* rgba_src, int iw, int ih,
-                                 int fw, int fh, // postproc target for THIS tile/frame
-                                 std::vector<unsigned char>& frame_out, int& ow, int& oh,
-                                 std::string& emsg) -> bool {
-            // Spike lifetime rule: ONE VkCompute per inference, destroyed with
-            // the frame's VkMats before the allocators are touched again.
-            // Reusing a long-lived VkCompute across several submit_and_wait()
-            // cycles (the tiled path) reliably SIGSEGVs inside RADV on the
-            // second tile's submit — the command buffer scratch space is
-            // recycled while the driver still references the previous
-            // submission. The single-pass path used to share the persistent
-            // frame_cmd from p3; per-frame is the only pattern that has ever
-            // been validated with tiles, so use it everywhere.
-            ncnn::VkCompute cmd(device);
-            ncnn::Option topt = opt;
-            ncnn::Mat tile_rgba_cpu(iw, ih, (size_t)4, 1u);
-            memcpy(tile_rgba_cpu.data, rgba_src, (size_t)iw*ih*4);
-            ncnn::VkMat rgba_gpu;
-            rgba_gpu.create(iw, ih, (size_t)4, 1, blob);
-            cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
-            ncnn::VkMat in_gpu_pre;
-            in_gpu_pre.create(iw, ih, 3, (size_t)2, 1, blob);
-            {
-                std::vector<ncnn::VkMat> binds(2);
-                binds[0] = rgba_gpu;
-                binds[1] = in_gpu_pre;
-                std::vector<ncnn::vk_constant_type> consts(3);
-                consts[0].i = iw;
-                consts[1].i = ih;
-                consts[2].i = (int)in_gpu_pre.cstep; // real padded cstep from the blob
-                ncnn::VkMat disp; disp.w = iw; disp.h = ih; disp.c = 1;
-                cmd.record_pipeline(preproc, binds, consts, disp);
-            }
-            ncnn::VkMat out_gpu;
-            {
-                ncnn::Extractor ex = net.create_extractor();
-                ex.set_blob_vkallocator(blob);
-                ex.set_workspace_vkallocator(blob);
-                ex.set_staging_vkallocator(staging);
-                ex.input("data", in_gpu_pre);
-                int ret = ex.extract("output", out_gpu, cmd);
-                if (ret != 0) { emsg = "extractor extract failed"; return false; }
-            }
-            if (!postproc) { emsg = "gpu postproc pipeline unavailable"; return false; }
-            // Clamp the presentation target to the network output; the shader
-            // falls back to identity taps on any axis it does not shrink.
-            const int pw = std::min(fw > 0 ? fw : out_gpu.w, out_gpu.w);
-            const int ph = std::min(fh > 0 ? fh : out_gpu.h, out_gpu.h);
-            ncnn::VkMat out_rgba_gpu;
-            out_rgba_gpu.create(pw, ph, (size_t)4, 1, blob);
-            {
-                std::vector<ncnn::VkMat> binds(2);
-                binds[0] = out_gpu;
-                binds[1] = out_rgba_gpu;
-                std::vector<ncnn::vk_constant_type> consts(5);
-                consts[0].i = out_gpu.w;
-                consts[1].i = out_gpu.h;
-                consts[2].i = out_gpu.cstep;
-                consts[3].i = pw;
-                consts[4].i = ph;
-                ncnn::VkMat disp; disp.w = pw; disp.h = ph; disp.c = 1;
-                cmd.record_pipeline(postproc, binds, consts, disp);
-            }
-            ncnn::Mat dst;
-            cmd.record_clone(out_rgba_gpu, dst, topt);
-            cmd.submit_and_wait();
-            ow = dst.w; oh = dst.h;
-            size_t need = (size_t)ow*oh*4;
-            if (need != (size_t)dst.w*dst.h*4) { emsg = "gpu postproc size mismatch"; return false; }
-            frame_out.resize(need);
-            memcpy(frame_out.data(), dst.data, need);
-            return true;
-        };
-
-        if (!tiled) {
-            return run_gpu_frame(rgba, width, height, target_w, target_h, out, out_w, out_h, err_msg);
-        }
-        // Tile in input pixels. PAD covers model prepadding (10) + conv margin.
-        const int TILE = 512, PAD = 32, scale = 4;
-        // Tiled path: when a presentation target is given, first compose the
-        // full 4x frame (bit-identical to the untargeted path), then do ONE
-        // box-average pass over the composed bytes on the CPU. Composing on
-        // the GPU per tile and stitching the downscaled tiles would save more
-        // bandwidth, but the seam math (each output pixel can straddle tiles)
-        // makes it easy to get wrong; the CPU box pass is exact and the tiled
-        // path is the >720p exception, not the hot path.
-        out_w = width * scale; out_h = height * scale;
-        const bool downscale = target_w > 0 && target_h > 0
-            && (target_w < out_w || target_h < out_h);
-        const int comp_w = out_w, comp_h = out_h; // compose size
-        out.assign((size_t)out_w * out_h * 4, 0);
-        for (int ty = 0; ty < height; ty += TILE) {
-            for (int tx = 0; tx < width; tx += TILE) {
-                int cx0 = tx, cy0 = ty;
-                int cx1 = std::min(tx + TILE, width), cy1 = std::min(ty + TILE, height);
-                int ex0 = std::max(0, cx0 - PAD), ey0 = std::max(0, cy0 - PAD);
-                int ex1 = std::min(width, cx1 + PAD), ey1 = std::min(height, cy1 + PAD);
-                int ew = ex1 - ex0, eh = ey1 - ey0;
-                std::vector<unsigned char> tile((size_t)ew * eh * 4);
-                for (int y = 0; y < eh; ++y) {
-                    memcpy(tile.data() + (size_t)y * ew * 4,
-                           rgba + ((size_t)(ey0 + y) * width + ex0) * 4,
-                           (size_t)ew * 4);
-                }
-                std::vector<unsigned char> tout;
-                int tw = 0, th = 0;
-                std::string terr;
-                if (!run_gpu_frame(tile.data(), ew, eh, 0, 0, tout, tw, th, terr)) {
-                    err_msg = terr.empty() ? "tile failed" : terr;
-                    return false;
-                }
-                // Copy core region: core input (cx0..cx1)x(cy0..cy1) → output*4
-                int owx0 = (cx0 - ex0) * scale, owy0 = (cy0 - ey0) * scale;
-                int core_w = (cx1 - cx0) * scale, core_h = (cy1 - cy0) * scale;
-                int ox = cx0 * scale, oy = cy0 * scale;
-                for (int y = 0; y < core_h; ++y) {
-                    memcpy(out.data() + (((size_t)(oy + y) * out_w) + ox) * 4,
-                           tout.data() + ((size_t)(owy0 + y) * tw + owx0) * 4,
-                           (size_t)core_w * 4);
-                }
-            }
-        }
-        if (downscale) {
-            // Exact box average, same weights as the shader (fractional edges).
-            const int nw = std::min(target_w, comp_w);
-            const int nh = std::min(target_h, comp_h);
-            std::vector<unsigned char> small((size_t)nw * nh * 4);
-            for (int y = 0; y < nh; ++y) {
-                const float y0f = (float)y * comp_h / nh;
-                const float y1f = (float)(y + 1) * comp_h / nh;
-                const int y0 = (int)floorf(y0f), y1 = (int)ceilf(y1f);
-                for (int x = 0; x < nw; ++x) {
-                    const float x0f = (float)x * comp_w / nw;
-                    const float x1f = (float)(x + 1) * comp_w / nw;
-                    const int x0 = (int)floorf(x0f), x1 = (int)ceilf(x1f);
-                    float ar = 0, ag = 0, ab = 0, wsum = 0;
-                    for (int sy = y0; sy < y1; ++sy) {
-                        const float wy = std::min(y1f, (float)sy + 1) - std::max(y0f, (float)sy);
-                        if (wy <= 0) continue;
-                        for (int sx = x0; sx < x1; ++sx) {
-                            const float wx = std::min(x1f, (float)sx + 1) - std::max(x0f, (float)sx);
-                            if (wx <= 0) continue;
-                            const float wgt = wx * wy;
-                            const unsigned char* px4 = out.data() + (((size_t)sy * comp_w) + sx) * 4;
-                            ar += px4[0] * wgt; ag += px4[1] * wgt; ab += px4[2] * wgt;
-                            wsum += wgt;
-                        }
-                    }
-                    const float inv = 1.0f / std::max(wsum, 1e-6f);
-                    unsigned char* d = small.data() + (((size_t)y * nw) + x) * 4;
-                    d[0] = (unsigned char)std::min(255.0f, floorf(ar * inv + 0.5f));
-                    d[1] = (unsigned char)std::min(255.0f, floorf(ag * inv + 0.5f));
-                    d[2] = (unsigned char)std::min(255.0f, floorf(ab * inv + 0.5f));
-                    d[3] = 255;
-                }
-            }
-            out.swap(small);
-            out_w = nw; out_h = nh;
-        }
-        return true;
-#else
-        (void)rgba; (void)width; (void)height; (void)out; (void)out_w; (void)out_h;
-        err_msg = "built without Vulkan support";
-        return false;
-#endif
-    };
-
-    std::mutex upscale_mutex;
     // Idle-Reaper-Uhr: beide Transporte (stdin-framed + HTTP-Loopback) melden
     // Aktivität; der HTTP-Pfad läuft auf einem eigenen Thread, daher atomar.
     // Millisekunden seit einem beliebigen steady_clock-Nullpunkt, nur für
     // Differenzen benutzt.
-    auto now_ms = []() -> uint64_t {
-        return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-    };
-    std::atomic<uint64_t> last_activity_ms{now_ms()};
-    std::atomic<uint64_t> frames_served{0};
-    aniwebscale::HttpTransport http_transport([&](const unsigned char* rgba_in, int in_w, int in_h,
-                                                  int target_w, int target_h,
-                                                  std::vector<unsigned char>& out, int& out_w, int& out_h,
-                                                  std::string& emsg) -> int {
-        std::lock_guard<std::mutex> lock(upscale_mutex);
-        int rc = run_upscale(rgba_in, in_w, in_h, target_w, target_h, out, out_w, out_h, emsg) ? 0 : 1;
-        if (rc == 0) {
-            last_activity_ms.store(now_ms(), std::memory_order_relaxed);
-            frames_served.fetch_add(1, std::memory_order_relaxed);
-        }
-        return rc;
+    core.note_activity();
+    aniwebscale::HttpTransport http_transport([&core](const unsigned char* rgba_in, int in_w, int in_h,
+                                                      int target_w, int target_h,
+                                                      std::vector<unsigned char>& out, int& out_w, int& out_h,
+                                                      std::string& emsg, const std::string& engine) -> int {
+        // Shared upscale core (p7): identical GPU path for stdin and HTTP
+        // transports; the core serializes GPU ownership between them.
+        const bool ok = core.run_upscale(rgba_in, in_w, in_h, target_w, target_h, out, out_w, out_h, emsg, engine);
+        if (ok) core.note_activity();
+        return ok ? 0 : 1;
     });
     {
         std::string http_err;
@@ -703,15 +644,14 @@ int main(int argc, char** argv) {
     std::string payload;
     for (;;) {
         if (idle_timeout_s > 0) {
-            const uint64_t now = now_ms();
-            const uint64_t idle_ms = now - last_activity_ms.load(std::memory_order_relaxed);
+            const uint64_t idle_ms = core.idle_ms();
             const uint64_t budget_ms = (uint64_t)idle_timeout_s * 1000;
             if (idle_ms >= budget_ms) {
                 fprintf(stderr, "[host] idle timeout after %llu ms (%llu frames served): exiting, browser re-spawns on next frame\n",
                         (unsigned long long)idle_ms,
-                        (unsigned long long)frames_served.load(std::memory_order_relaxed));
+                        (unsigned long long)core.frames_served());
                 fprintf(stderr, "[host] heap budget at idle exit=%u MB (start=%u MB)\n",
-                        device->get_heap_budget(), heap_budget_start_mb);
+                        core.device()->get_heap_budget(), core.heap_budget_start_mb());
                 break;
             }
             struct pollfd pfd{STDIN_FILENO, POLLIN, 0};
@@ -727,11 +667,11 @@ int main(int argc, char** argv) {
             if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) break; // Browser weg
         }
         if (!read_framed(payload)) break; // EOF: Browser hat den Port getrennt
-        last_activity_ms.store(now_ms(), std::memory_order_relaxed);
+        core.note_activity();
         auto parsed = anime4k::json::parse(payload);
         if (!parsed.value || !parsed.value->is_object()) {
             fprintf(stderr, "[host] invalid json: %s\n", parsed.error.c_str());
-            // send error
+            // send error (no requestId yet — the one error object without the field)
             Object err;
             err["type"] = Value("error");
             err["protocolVersion"] = Value(3.0);
@@ -794,14 +734,8 @@ int main(int argc, char** argv) {
                 // p5 stub: DMA-BUF import (VK_EXT_external_memory_dma_buf) needs a
                 // browser-side capture path that exports frames as DMA-BUF fds.
                 // No WebExtension API exposes this today; see artifacts report.
-                Object err;
-                err["type"] = Value("error");
-                err["protocolVersion"] = Value(3.0);
-                err["requestId"] = Value(requestId);
-                err["code"] = Value("dma_buf_unsupported");
-                err["message"] = Value("DMA-BUF import not available: browser capture cannot export DMA-BUF fds (no WebExtension API). Use shmIn/shmOut instead.");
-                err["recoverable"] = Value(true);
-                write_framed(anime4k::json::stringify(Value(err)));
+                write_framed(error_json(requestId, "dma_buf_unsupported",
+                    "DMA-BUF import not available: browser capture cannot export DMA-BUF fds (no WebExtension API). Use shmIn/shmOut instead."));
                 continue;
             }
             std::string shmOut = get_string(req, "shmOut");
@@ -817,63 +751,20 @@ int main(int argc, char** argv) {
             }
             // width/height sanity
             if (width <= 0 || height <= 0 || width > 4096 || height > 4096 || (b64.empty() && !useShmIn)) {
-                Object err;
-                err["type"] = Value("error");
-                err["protocolVersion"] = Value(3.0);
-                err["requestId"] = Value(requestId);
-                err["code"] = Value("invalid_request");
-                err["message"] = Value("missing width/height/data");
-                err["recoverable"] = Value(true);
-                write_framed(anime4k::json::stringify(Value(err)));
+                write_framed(error_json(requestId, "invalid_request", "missing width/height/data"));
                 continue;
             }
             std::vector<unsigned char> rgba;
             if (useShmIn) {
-                int fd = ::open(shmIn.c_str(), O_RDONLY);
-                if (fd < 0) {
-                    Object err;
-                    err["type"] = Value("error");
-                    err["protocolVersion"] = Value(3.0);
-                    err["requestId"] = Value(requestId);
-                    err["code"] = Value("shm_open_failed");
-                    err["message"] = Value(std::string("failed to open shmIn: ") + strerror(errno));
-                    err["recoverable"] = Value(true);
-                    write_framed(anime4k::json::stringify(Value(err)));
-                    continue;
-                }
-                size_t need = (size_t)width*height*4;
-                rgba.resize(need);
-                size_t off = 0;
-                while (off < need) {
-                    ssize_t r = ::read(fd, rgba.data()+off, need-off);
-                    if (r <= 0) {
-                        if (r < 0 && errno == EINTR) continue;
-                        break;
-                    }
-                    off += r;
-                }
-                ::close(fd);
-                if (off != need) {
-                    Object err;
-                    err["type"] = Value("error");
-                    err["protocolVersion"] = Value(3.0);
-                    err["requestId"] = Value(requestId);
-                    err["code"] = Value("shm_read_failed");
-                    err["message"] = Value("shmIn size mismatch");
-                    err["recoverable"] = Value(true);
-                    write_framed(anime4k::json::stringify(Value(err)));
+                const char* err_code = nullptr;
+                std::string err_msg;
+                if (!read_shm_rgba(shmIn, (size_t)width*height*4, rgba, err_code, err_msg)) {
+                    write_framed(error_json(requestId, err_code, err_msg));
                     continue;
                 }
             } else {
                 if (!base64_decode(b64, rgba) || rgba.size() != (size_t)width*height*4) {
-                    Object err;
-                    err["type"] = Value("error");
-                    err["protocolVersion"] = Value(3.0);
-                    err["requestId"] = Value(requestId);
-                    err["code"] = Value("invalid_data");
-                    err["message"] = Value("base64 decode failed or size mismatch");
-                    err["recoverable"] = Value(true);
-                    write_framed(anime4k::json::stringify(Value(err)));
+                    write_framed(error_json(requestId, "invalid_data", "base64 decode failed or size mismatch"));
                     continue;
                 }
             }
@@ -883,60 +774,21 @@ int main(int argc, char** argv) {
             int out_w = 0, out_h = 0;
             std::string err_msg;
             // Shared upscale core (p7): identical GPU path for stdin and HTTP
-            // transports; the mutex serializes GPU ownership between them.
-            bool ok;
-            {
-                std::lock_guard<std::mutex> lock(upscale_mutex);
-                ok = run_upscale(rgba.data(), width, height, target_w, target_h, out_rgba, out_w, out_h, err_msg);
-            }
-            if (ok) frames_served.fetch_add(1, std::memory_order_relaxed);
+            // transports; the core serializes GPU ownership between them and
+            // counts served frames.
+            bool ok = core.run_upscale(rgba.data(), width, height, target_w, target_h, out_rgba, out_w, out_h, err_msg);
             if (!ok) {
-                Object err;
-                err["type"] = Value("error");
-                err["protocolVersion"] = Value(3.0);
-                err["requestId"] = Value(requestId);
-                err["code"] = Value("inference_failed");
-                err["message"] = Value(err_msg.empty() ? "unknown" : err_msg);
-                err["recoverable"] = Value(true);
-                write_framed(anime4k::json::stringify(Value(err)));
+                write_framed(error_json(requestId, "inference_failed", err_msg.empty() ? "unknown" : err_msg));
                 continue;
             }
             auto t1 = std::chrono::steady_clock::now();
             double ms = std::chrono::duration<double,std::milli>(t1 - t0).count();
             fprintf(stderr, "[host] upscale %dx%d -> %dx%d %.1f ms\n", width, height, out_w, out_h, ms);
             if (useShmOut) {
-                int fd = ::open(shmOut.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-                if (fd < 0) {
-                    Object err;
-                    err["type"] = Value("error");
-                    err["protocolVersion"] = Value(3.0);
-                    err["requestId"] = Value(requestId);
-                    err["code"] = Value("shm_write_failed");
-                    err["message"] = Value(std::string("failed to open shmOut: ") + strerror(errno));
-                    err["recoverable"] = Value(true);
-                    write_framed(anime4k::json::stringify(Value(err)));
-                    continue;
-                }
-                size_t off = 0;
-                size_t need = out_rgba.size();
-                while (off < need) {
-                    ssize_t w = ::write(fd, out_rgba.data()+off, need-off);
-                    if (w <= 0) {
-                        if (w < 0 && errno == EINTR) continue;
-                        break;
-                    }
-                    off += w;
-                }
-                ::close(fd);
-                if (off != need) {
-                    Object err;
-                    err["type"] = Value("error");
-                    err["protocolVersion"] = Value(3.0);
-                    err["requestId"] = Value(requestId);
-                    err["code"] = Value("shm_write_incomplete");
-                    err["message"] = Value("shmOut write incomplete");
-                    err["recoverable"] = Value(true);
-                    write_framed(anime4k::json::stringify(Value(err)));
+                const char* err_code = nullptr;
+                std::string shm_err;
+                if (!write_shm_rgba(shmOut, out_rgba, err_code, shm_err)) {
+                    write_framed(error_json(requestId, err_code, shm_err));
                     continue;
                 }
                 Object resp;
@@ -963,31 +815,15 @@ int main(int argc, char** argv) {
             continue;
         }
         // unknown type
-        Object err;
-        err["type"] = Value("error");
-        err["protocolVersion"] = Value(3.0);
-        err["requestId"] = Value(requestId);
-        err["code"] = Value("unknown_type");
-        err["message"] = Value("unknown request type: " + type);
-        err["recoverable"] = Value(true);
-        write_framed(anime4k::json::stringify(Value(err)));
+        write_framed(error_json(requestId, "unknown_type", "unknown request type: " + type));
     }
 
     http_transport.stop();
-    device->reclaim_blob_allocator(blob);
-    device->reclaim_staging_allocator(staging);
-#if NCNN_VULKAN
-    delete postproc;
-    delete preproc;
-#endif
-    // Lifetime rule from the spike: the Net must release its GPU resources
-    // BEFORE the instance dies. `net` is a stack object whose destructor runs
-    // only AFTER `return 0` — i.e. after destroy_gpu_instance() — which
-    // SIGSEGVs in the driver (every clean shutdown exited -11). net.clear()
-    // destroys the layers now, while the instance is still alive; the empty
-    // Net destructor afterwards is a no-op.
-    net.clear();
-    ncnn::destroy_gpu_instance();
+    // E6: persist the device pipeline cache for the next cold start. Runs
+    // after the transport stops (GPU idle, every pipeline compiled) and
+    // before the instance dies (the cache dies with the device).
+    core.save_pipeline_cache(pipeline_cache_path);
+    core.shutdown();
     fprintf(stderr, "[host] shutting down\n");
     return 0;
 }

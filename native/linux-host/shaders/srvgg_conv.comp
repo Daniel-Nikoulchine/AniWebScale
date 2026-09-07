@@ -1,0 +1,70 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+// E4 phase 1a: naive direct 3x3 conv + bias + PReLU (correctness baseline).
+// One thread per (x, y); output channels sequential inside (register-light).
+// Phase 1b parallelizes oc + shared-memory tiling; THIS kernel gates THAT
+// one (same device, same buffers, no ORT needed).
+// All arithmetic fp32; matches the srvgg CPU oracle indexing exactly:
+//   acc += in[ic][sy][sx] * w[(oc*inCh+ic)*9 + ky*3 + kx], zero-pad OOB.
+// conv0 reads the preproc fp16 planar output (/255 lives in preproc, as in
+// the ORT path); body layers read fp32 activations. The idle input binding
+// gets a dummy buffer (uniform branch, never touched).
+layout (binding = 0) readonly buffer Input { float in_data[]; };
+layout (binding = 1) readonly buffer Weights { float w_data[]; };
+layout (binding = 2) writeonly buffer Output { float out_data[]; };
+layout (binding = 3) readonly buffer Input16 { float16_t in_data16[]; };
+
+layout (push_constant) uniform parameter
+{
+    int w;
+    int h;
+    int inCh;
+    int outCh;
+    int wBase;
+    int bBase;
+    int sBase;
+    int inStride;
+    int outStride;
+    int hasPrelu;
+    int isFirst;
+} p;
+
+void main()
+{
+    int x = int(gl_GlobalInvocationID.x);
+    int y = int(gl_GlobalInvocationID.y);
+    if (x >= p.w || y >= p.h)
+        return;
+    for (int oc = 0; oc < p.outCh; ++oc)
+    {
+        float acc = 0.0;
+        for (int ic = 0; ic < p.inCh; ++ic)
+        {
+            int wPlane = (oc * p.inCh + ic) * 9;
+            for (int ky = 0; ky < 3; ++ky)
+            {
+                int sy = y + ky - 1;
+                if (sy < 0 || sy >= p.h)
+                    continue;
+                int wrow = p.wBase + wPlane + ky * 3;
+                for (int kx = 0; kx < 3; ++kx)
+                {
+                    int sx = x + kx - 1;
+                    if (sx < 0 || sx >= p.w)
+                        continue;
+                    float xv;
+                    if (p.isFirst == 1)
+                        xv = float(in_data16[ic * p.inStride + sy * p.w + sx]);
+                    else
+                        xv = in_data[ic * p.inStride + sy * p.w + sx];
+                    acc += xv * w_data[wrow + kx];
+                }
+            }
+        }
+        acc += w_data[p.bBase + oc];
+        // Exact ONNX PReLU: x >= 0 ? x : slope * x (conv17: hasPrelu = 0).
+        if (p.hasPrelu == 1 && acc < 0.0)
+            acc *= w_data[p.sBase + oc];
+        out_data[oc * p.outStride + y * p.w + x] = acc;
+    }
+}

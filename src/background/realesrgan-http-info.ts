@@ -21,6 +21,7 @@
  */
 
 import { NATIVE_HOST_NAME, NATIVE_PROTOCOL_VERSION } from '../native/protocol';
+import { formatRealEsrganError, REALESRGAN_ERROR_CODES } from '../shared/realesrgan-error-codes';
 
 export interface RealEsrganHttpEndpointInfo {
   ok: true;
@@ -146,7 +147,8 @@ export class RealEsrganHttpInfoBroker {
     return new Promise<RealEsrganHttpEndpoint>(resolve => {
       const timer = setTimeout(() => {
         cleanup();
-        resolve({ ok: false, message: 'native host handshake timed out' });
+        resolve({ ok: false, message: formatRealEsrganError(REALESRGAN_ERROR_CODES.NATIVE_HANDSHAKE_TIMEOUT,
+          'native host handshake timed out') });
       }, this.handshakeTimeoutMs);
 
       const onMessage = (message: unknown) => {

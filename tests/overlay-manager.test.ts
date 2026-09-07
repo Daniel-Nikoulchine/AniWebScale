@@ -92,6 +92,7 @@ describe('overlay lifecycle', () => {
     };
     overlay.canvasVisible = true;
     overlay.restoreVideoOpacity = vi.fn();
+    overlay.unobserveVideo = vi.fn();
     overlay.observeVideo = vi.fn();
     overlay.updatePosition = vi.fn();
     const replacement = {
@@ -125,5 +126,81 @@ describe('overlay lifecycle', () => {
     callbacks[0](16);
     expect(overlay.updatePosition).toHaveBeenCalledOnce();
     expect(overlay.positionUpdateFrame).toBeNull();
+  });
+
+  it('clears stale stats on detach so a reattached video starts blank', () => {
+    const overlay = bareOverlay();
+    overlay.resizeObserver = { disconnect: vi.fn() };
+    overlay.mutationObserver = { disconnect: vi.fn() };
+    overlay.videoEvents = { dispose: vi.fn() };
+    overlay.host = { style: {}, remove: vi.fn() };
+
+    overlay.detach();
+
+    expect(overlay.setStats).toHaveBeenCalledWith(null);
+  });
+
+  it('drops the old video observations before watching the replacement', () => {
+    const overlay = bareOverlay();
+    overlay.video = { style: opacityStyle('1') };
+    overlay.host = { getAttribute: vi.fn(() => 'video-1') };
+    overlay.canvasVisible = false;
+    overlay.unobserveVideo = vi.fn();
+    overlay.observeVideo = vi.fn();
+    overlay.updatePosition = vi.fn();
+    const replacement = { dataset: {}, parentNode: null };
+    vi.stubGlobal('document', { body: { appendChild: vi.fn() } });
+
+    overlay.reattach(replacement);
+
+    expect(overlay.unobserveVideo).toHaveBeenCalledOnce();
+    expect(overlay.observeVideo).toHaveBeenCalledOnce();
+    expect(overlay.video).toBe(replacement);
+  });
+
+  it('re-homes a visible canvas that detach() removed from the DOM', () => {
+    const overlay = bareOverlay();
+    overlay.video = { style: opacityStyle('1') };
+    overlay.host = { getAttribute: vi.fn(() => 'video-1') };
+    // detach() calls canvas.remove() but keeps the reference and the flag.
+    overlay.canvas = { parentNode: null, style: { visibility: 'visible' } };
+    overlay.canvasVisible = true;
+    overlay.restoreVideoOpacity = vi.fn();
+    overlay.unobserveVideo = vi.fn();
+    overlay.observeVideo = vi.fn();
+    overlay.updatePosition = vi.fn();
+    const insertBefore = vi.fn();
+    const replacement = { dataset: {}, parentNode: { insertBefore } };
+    vi.stubGlobal('document', { body: { appendChild: vi.fn() } });
+
+    overlay.reattach(replacement);
+
+    expect(insertBefore).toHaveBeenCalledWith(overlay.canvas, replacement);
+  });
+
+  it('ignores reattach after destroy instead of resurrecting the manager', () => {
+    const overlay = bareOverlay();
+    overlay.destroyed = true;
+    overlay.unobserveVideo = vi.fn();
+    overlay.observeVideo = vi.fn();
+    const replacement = { dataset: {} };
+
+    overlay.reattach(replacement);
+
+    expect(overlay.unobserveVideo).not.toHaveBeenCalled();
+    expect(overlay.observeVideo).not.toHaveBeenCalled();
+  });
+});
+
+describe('runnerLabelForStats', () => {
+  it('tells native-gpu apart from the ORT worker', async () => {
+    const { runnerLabelForStats } = await import('../src/core/overlay-manager');
+    // Native serves through the worker slot (runnerPct includes native),
+    // so nativePct decides first.
+    expect(runnerLabelForStats({ nativePct: 100, runnerPct: 100 })).toBe('native-gpu');
+    expect(runnerLabelForStats({ nativePct: 60, runnerPct: 100 })).toBe('native-gpu');
+    expect(runnerLabelForStats({ nativePct: 49, runnerPct: 100 })).toBe('runner');
+    expect(runnerLabelForStats({ nativePct: 0, runnerPct: 100 })).toBe('runner');
+    expect(runnerLabelForStats({ nativePct: 0, runnerPct: 0 })).toBe('main');
   });
 });

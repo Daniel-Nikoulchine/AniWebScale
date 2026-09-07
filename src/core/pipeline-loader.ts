@@ -4,11 +4,12 @@ import { createExternalGlslPipelineClass } from './external-glsl-pipeline';
 import { REALESRGAN_CLASS_TO_MODEL_FILE } from '../shared/realesrgan-models';
 import { createRealEsrganPipelineClass } from './realesrgan-pipeline';
 import { setupRealEsrganBrowserRuntime } from './realesrgan-browser-setup';
-import { createRealEsrganSession } from './realesrgan-session';
-import { RealEsrganWorkerClient, type RealEsrganInferenceRunner } from './realesrgan-worker-client';
-import { RealEsrganNativeVulkanClient } from './realesrgan-native-vulkan-client';
-import type { RealEsrganWorkerBinding } from './realesrgan-pipeline';
+import { createProductionBroker } from './realesrgan-runner-broker';
+import { loadRealEsrganModelAssets, type RealEsrganModelAssets } from './realesrgan-model-assets';
+import type { RealEsrganRunnerBinding } from './realesrgan-pipeline';
 import type { GeneratedKernelSet, PipelineConstructor } from './pipeline-types';
+import type { InferenceSession } from 'onnxruntime-web';
+import type { RealEsrganPrecision } from '../types';
 
 type ModuleLoader = () => Promise<Record<string, unknown>>;
 type ConstructorLoader = () => Promise<PipelineConstructor>;
@@ -66,79 +67,64 @@ const localLoaders: Record<string, ConstructorLoader> = {
   )),
 };
 
-// One worker serves every RealESRGAN variant: the worker caches ORT sessions
-// per model URL, so spawning a second client per class would only add a
-// redundant worker. The promise is shared; a failed spawn resolves to null
-// and the pipeline falls back to the main-thread session.
-let realEsrganWorkerClientPromise: Promise<RealEsrganInferenceRunner | null> | null = null;
-// Native Vulkan host is tried first on Linux (REBAR+RADV 14ms vs WASM 70ms).
-// Also a shared singleton; a missing host or Vulkan init failure resolves to
-// null and the pipeline falls through to the worker path.
-let realEsrganNativeClientPromise: Promise<RealEsrganInferenceRunner | null> | null = null;
+// One broker serves every RealESRGAN variant: runners are cached inside,
+// so a second pipeline build reuses the healthy runner instead of spawning
+// redundant workers or re-handshaking the host. The broker also owns runner
+// health: a Runner-Guard "dead" verdict escalates through markRunnerDead.
+const runnerBroker = createProductionBroker();
 
-function getRealEsrganNativeRunner(): Promise<RealEsrganInferenceRunner | null> {
-  if (!realEsrganNativeClientPromise) {
-    realEsrganNativeClientPromise = RealEsrganNativeVulkanClient.create();
-  }
-  return realEsrganNativeClientPromise;
-}
-
-function getRealEsrganWorkerRunner(): Promise<RealEsrganInferenceRunner | null> {
-  if (!realEsrganWorkerClientPromise) {
-    realEsrganWorkerClientPromise = RealEsrganWorkerClient.create();
-  }
-  return realEsrganWorkerClientPromise;
-}
+/**
+ * Modell-Auswahl is loaded once per class (the static-shape HEAD-verify is
+ * network I/O), while the runner is re-resolved per pipeline CONSTRUCTION —
+ * a Runner-Guard death verdict drops the broker cache, and the next video
+ * build must re-run the preference order instead of re-binding the buried
+ * runner from a frozen closure.
+ */
+const modelAssetsCache = new Map<string, Promise<RealEsrganModelAssets>>();
 
 function realEsrganLoader(className: string): ConstructorLoader {
   return async () => {
-    await setupRealEsrganBrowserRuntime();
+    // The Session-Fallback factory carries the config, cache and cascade
+    // level; one instance serves every class and shape for this lifetime.
+    const sessionFactory = await setupRealEsrganBrowserRuntime();
+    let modelAssets = modelAssetsCache.get(className);
+    if (!modelAssets) {
+      modelAssets = loadRealEsrganModelAssets(className, {
+        resolveUrl: path => chrome.runtime.getURL(path),
+        readStorageKey: async (key: string) => {
+          const stored = await chrome.storage.local.get(key) as Record<string, unknown>;
+          return stored[key];
+        },
+      });
+      // A failed load must not poison the cache (mirrors the session cache
+      // behaviour): evict it so the next construction re-attempts.
+      void modelAssets.catch(() => modelAssetsCache.delete(className));
+      modelAssetsCache.set(className, modelAssets);
+    }
+    const assets = await modelAssets;
     // Try native Vulkan first (Linux), then worker, then main-thread.
     // The native host is persistent and ~10x faster than WASM on NAVI22,
-    // so paying its 4s handshake once is worth it.
-    let runner: RealEsrganInferenceRunner | null = await getRealEsrganNativeRunner();
-    if (!runner) {
-      runner = await getRealEsrganWorkerRunner();
-    }
-    // No eager main-thread session here: sessions are shape-pinned (one per
-    // inference size) and the inference size is only known once the pipeline
-    // is constructed for a source. The pipeline warms its size via getSession
-    // in its constructor, and the drain path awaits the same cached promise.
-    // E2E override: the clip runner can point the pipeline at a
-    // static-shape model variant via storage. Guarded by the E2E flag so
-    // production builds never consult storage for model URLs.
-    let modelFileOverride: string | null = null;
-    if (__ANIME4K_E2E__) {
-      try {
-        const stored = await chrome.storage.local.get('e2eModelFile');
-        if (typeof stored.e2eModelFile === 'string') modelFileOverride = stored.e2eModelFile;
-      } catch { /* storage unavailable */ }
-    }
-    // Both model URLs are resolved here because the worker has no chrome.*
-    // APIs. The worker prefers the FP16 asset and falls back to the FP32
-    // file when the session cascade fails or the asset is missing. FP16 is
-    // currently dead on RDNA2 (ORT 1.29 WebGPU EP emits invalid f16 WGSL for
-    // the Clip kernel), so getSession()'s fp16 attempt fails and the fp32
-    // attempt below is what actually serves frames.
-    const worker: RealEsrganWorkerBinding | null = runner
+    // so paying its 4s handshake once is worth it. resolveRunner() is cheap
+    // here: the broker caches its adapters and re-resolves only after a
+    // markRunnerDead escalation or the native retry cooldown.
+    const runner = await runnerBroker.resolveRunner();
+    const binding: RealEsrganRunnerBinding | null = runner
       ? {
         runner,
-        modelUrl: chrome.runtime.getURL(`models/realesrgan/${modelFileOverride ?? REALESRGAN_CLASS_TO_MODEL_FILE[className]}`),
-        // FP16 disabled: ORT-web 1.29's WebGPU EP compiles an invalid WGSL
-        // Clip kernel for the fp16 graph on RDNA2 ("ShaderModule with 'Clip'
-        // label is invalid"), so handing the worker the fp16 URL only burns
-        // a session attempt + a timed-out frame before the fp32 attempt.
-        // Pass null to skip the fp16 probe until the EP ships valid kernels.
-        modelUrlFp16: null,
+        modelAssets: assets,
+        onRunnerDead: dead => runnerBroker.markRunnerDead(dead),
       }
       : null;
     // Worker-death recovery: if the worker dies MID-STREAM, the pipeline's
     // runner is nulled and it needs a main-thread session that did not exist
-    // at load time. createRealEsrganSession() caches per class AND shape, so
-    // the first frame at a new size pays the session cost and every later
-    // frame at that size reuses it.
-    const getSession = (width: number, height: number) => createRealEsrganSession(className, width, height);
-    return createRealEsrganPipelineClass(null, undefined, worker, getSession);
+    // at load time. The session factory caches per class, shape AND
+    // precision, so the first frame at a new size pays the session cost and
+    // every later frame at that size reuses it. Precision arrives per call
+    // from the pipeline's own effect params (the factory default covers
+    // callers without one).
+    const getSession = (width: number, height: number, precision?: RealEsrganPrecision): Promise<InferenceSession> =>
+      sessionFactory.createSession(className, width, height, precision);
+    return createRealEsrganPipelineClass(binding, getSession);
   };
 }
 
@@ -149,11 +135,18 @@ const realEsrganLoaders: Record<string, ConstructorLoader> = Object.fromEntries(
 const constructorCache = new Map<string, PipelineConstructor>();
 
 export async function loadPipelineConstructor(className: string): Promise<PipelineConstructor | null> {
+  // RealESRGAN classes are NOT cached as constructed classes: the binding
+  // must re-resolve its runner per construction so a Runner-Guard death
+  // verdict (escalated via markRunnerDead) takes effect for every following
+  // build. Modell-Auswahl and the broker's adapter promises carry the real
+  // cost and are cached on their own.
+  const realEsrganLoader = realEsrganLoaders[className];
+  if (realEsrganLoader) return realEsrganLoader();
+
   const cached = constructorCache.get(className);
   if (cached) return cached;
 
-  const localLoader = localLoaders[className]
-    ?? realEsrganLoaders[className];
+  const localLoader = localLoaders[className];
   const Constructor = localLoader
     ? await localLoader()
     : await loadVendorConstructor(className);

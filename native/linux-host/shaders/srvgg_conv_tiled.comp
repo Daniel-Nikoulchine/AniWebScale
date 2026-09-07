@@ -1,0 +1,134 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+// E4 phase 1b: shared-memory tiled conv3x3 + bias + PReLU (the fast path).
+// Ports the proven WGSL Direct-v4 design to GLSL: each 16x16 workgroup
+// computes one 16x16 output tile x 16 output channels (ocBase selects the
+// oc-block via gl_WorkGroupID.z); the input halo (18x18) streams through
+// shared memory in 8-channel chunks.
+//
+// Precision: fp16 STORAGE everywhere (activations halved: the dominant
+// traffic), fp32 compute, fp32 weights/bias/slopes (L2-resident, exact).
+// conv0 reads the preproc fp16 planar output like every other layer — no
+// special input path. Matches the naive kernel up to float association
+// (ic-chunked summation + fp16 rounding); the naive kernel gates this one
+// on-device, both gate against ncnn at >= 50 dB.
+layout (binding = 0) readonly buffer Input { float16_t in_data[]; };
+layout (binding = 1) readonly buffer Weights { float w_data[]; };
+layout (binding = 2) writeonly buffer Output { float16_t out_data[]; };
+
+layout (push_constant) uniform parameter
+{
+    int w;
+    int h;
+    int inCh;
+    int outCh;
+    int wBase;
+    int bBase;
+    int sBase;
+    int inStride;
+    int outStride;
+    int hasPrelu;
+} p;
+
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+const uint IC_CHUNK = 16u;
+const uint TAPS = 9u;
+const uint TILE = 16u;
+const uint HALO = 18u;
+
+shared float inTile[16 * 18 * 18];
+
+void main()
+{
+    uint lx = gl_LocalInvocationID.x;
+    uint ly = gl_LocalInvocationID.y;
+    uint lid = ly * 16u + lx;
+    int x = int(gl_WorkGroupID.x * TILE + lx);
+    int y = int(gl_WorkGroupID.y * TILE + ly);
+    int ocb = int(gl_WorkGroupID.z) * 16;
+    bool inBounds = x < p.w && y < p.h && ocb < p.outCh;
+    int hw = p.w * p.h;
+    int originX = int(gl_WorkGroupID.x * TILE);
+    int originY = int(gl_WorkGroupID.y * TILE);
+    float acc0 = 0.0; float acc1 = 0.0; float acc2 = 0.0; float acc3 = 0.0;
+    float acc4 = 0.0; float acc5 = 0.0; float acc6 = 0.0; float acc7 = 0.0;
+    float acc8 = 0.0; float acc9 = 0.0; float acc10 = 0.0; float acc11 = 0.0;
+    float acc12 = 0.0; float acc13 = 0.0; float acc14 = 0.0; float acc15 = 0.0;
+    for (int icBase = 0; icBase < p.inCh; icBase += 16)
+    {
+        // Cooperative halo load (16ch x 18x18), zero-padded past borders.
+        for (uint s = lid; s < 16u * 18u * 18u; s += 256u)
+        {
+            uint c = s / (18u * 18u);
+            uint rem = s % (18u * 18u);
+            uint hy = rem / 18u;
+            uint hx = rem % 18u;
+            int ic = icBase + int(c);
+            float xv = 0.0;
+            int gx = originX + int(hx) - 1;
+            int gy = originY + int(hy) - 1;
+            if (ic < p.inCh && gx >= 0 && gy >= 0 && gx < p.w && gy < p.h)
+                xv = float(in_data[ic * p.inStride + gy * p.w + gx]);
+            inTile[s] = xv;
+        }
+        barrier();
+        if (inBounds)
+        {
+            for (uint c = 0u; c < IC_CHUNK; ++c)
+            {
+                uint plane = c * 18u * 18u;
+                uint ic = uint(icBase) + c;
+                for (uint k = 0u; k < TAPS; ++k)
+                {
+                    uint ky = k / 3u;
+                    uint kx = k - ky * 3u;
+                    uint l = plane + (ly + ky) * 18u + (lx + kx);
+                    float xv = inTile[l];
+                    // Bin layout is oc-major [oc][ic][tap] (same buffer as
+                    // the naive kernel: no transpose step). The 16 lanes
+                    // stride by inCh*9; the 2.5 MB working set is
+                    // L2-resident after first touch (measured: a transposed
+                    // oc-contiguous twin showed no win — reverted).
+                    uint wRow = uint(p.wBase) + (uint(ocb) * uint(p.inCh) + ic) * 9u + k;
+                    uint wStep = uint(p.inCh) * 9u;
+                    acc0 += xv * w_data[wRow];
+                    acc1 += xv * w_data[wRow + wStep];
+                    acc2 += xv * w_data[wRow + 2u * wStep];
+                    acc3 += xv * w_data[wRow + 3u * wStep];
+                    acc4 += xv * w_data[wRow + 4u * wStep];
+                    acc5 += xv * w_data[wRow + 5u * wStep];
+                    acc6 += xv * w_data[wRow + 6u * wStep];
+                    acc7 += xv * w_data[wRow + 7u * wStep];
+                    acc8 += xv * w_data[wRow + 8u * wStep];
+                    acc9 += xv * w_data[wRow + 9u * wStep];
+                    acc10 += xv * w_data[wRow + 10u * wStep];
+                    acc11 += xv * w_data[wRow + 11u * wStep];
+                    acc12 += xv * w_data[wRow + 12u * wStep];
+                    acc13 += xv * w_data[wRow + 13u * wStep];
+                    acc14 += xv * w_data[wRow + 14u * wStep];
+                    acc15 += xv * w_data[wRow + 15u * wStep];
+                }
+            }
+        }
+        barrier();
+    }
+    if (!inBounds)
+        return;
+    int oBase = y * p.w + x;
+    float accs[16];
+    accs[0] = acc0; accs[1] = acc1; accs[2] = acc2; accs[3] = acc3;
+    accs[4] = acc4; accs[5] = acc5; accs[6] = acc6; accs[7] = acc7;
+    accs[8] = acc8; accs[9] = acc9; accs[10] = acc10; accs[11] = acc11;
+    accs[12] = acc12; accs[13] = acc13; accs[14] = acc14; accs[15] = acc15;
+    for (int i = 0; i < 16; ++i)
+    {
+        int oc = ocb + i;
+        if (oc >= p.outCh)
+            break;
+        float acc = accs[i] + w_data[p.bBase + oc];
+        if (p.hasPrelu == 1 && acc < 0.0)
+            acc *= w_data[p.sBase + oc];
+        out_data[oc * p.outStride + oBase] = float16_t(acc);
+    }
+}

@@ -1,6 +1,6 @@
 import './setup-worker-stub';
 import { bench, describe } from 'vitest';
-import { adaptiveRealEsrganTiling, planRealEsrganTiles } from '../src/shared/realesrgan-tiling';
+import { adaptiveRealEsrganTiling, planRealEsrganTiles } from '../src/shared/realesrgan-tile-geometry.js';
 import { planUniformTiles } from '../src/worker/realesrgan-inference-worker.js';
 
 // Cases mirror real anime frames: 360p low, 540p qHD, 720p HD, 1080p FHD, 1440p, 4K

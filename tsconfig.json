@@ -10,6 +10,6 @@
     "resolveJsonModule": true,
     "lib": ["es2022", "dom"]
   },
-  "include": ["**/*.ts"],
+  "include": ["**/*.ts", "**/*.mts"],
   "exclude": ["node_modules"]
 }

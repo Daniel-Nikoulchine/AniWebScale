@@ -10,7 +10,7 @@ Verifies three things against the running aniwebscale-ncnn-host:
      in float64 as the reference. The shader computes the average in fp16
      source / fp32 accumulate; allow a small per-channel tolerance (<= 1/255)
      to absorb fp16 storage rounding of the source values.
-  3. Tiled path: same checks on a 1920x1080 input (tiled 512/32 + CPU box
+  3. Tiled path: same checks on a 1920x1080 input (tiled 640/32 + CPU box
      pass) against a 2560x1440 target. Tolerance <= 1/255 as well.
 
 Usage: python3 tests/host-target-downscale.py [path-to-host]

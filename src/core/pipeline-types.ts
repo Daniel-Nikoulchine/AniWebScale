@@ -1,8 +1,16 @@
 import type { Dimensions, RealEsrganPhaseStats } from '../types';
 
 export interface Anime4KPipeline {
-  updateParam(param?: string, value?: unknown): void;
   pass(encoder: GPUCommandEncoder): void;
+  /**
+   * Called by the renderer exactly once AFTER the encoder that carried this
+   * frame's pass() work has been submitted to the queue. Pipelines that
+   * defer per-frame work until the GPU copy is guaranteed executed register
+   * their completion tracking here — the ordering is part of the interface,
+   * not a timing accident. Optional; pipelines without post-submit work
+   * omit it.
+   */
+  afterSubmit?(): void;
   getOutputTexture(): GPUTexture;
   /**
    * Actual output dimensions of this pipeline's texture. Optional; the

@@ -9,6 +9,8 @@ import { OverloadTracker } from '../src/core/render-stats';
 import { EnhancerLifecycle } from '../src/core/enhancer-lifecycle';
 import { EventScope } from '../src/shared/event-scope';
 import { DEFAULT_SETTINGS } from '../src/utils/settings';
+import { fullscreenContext } from '../src/core/fullscreen-context';
+import { createRenderStatsTap } from '../src/core/render-stats-tap';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -79,6 +81,7 @@ function createBareEnhancer() {
     oversharpenWarning: false,
     nativeOverloadTracker: new OverloadTracker(),
     lastNativeDroppedFrames: 0,
+    autoCap: null,
     destroyed: false,
     switchingFromNative: false,
     targetResizeObserver,
@@ -96,6 +99,10 @@ function createBareEnhancer() {
     fullscreenChangeHandler: () => undefined,
     windowScrollHandler: () => undefined,
   });
+  // White-box harness: run the production stats wiring instead of
+  // duplicating it, so new consumers cannot desync this harness.
+  enhancer.statsTap = createRenderStatsTap();
+  enhancer.wireStatsConsumers();
   return { enhancer, video, overlay, fullscreenLayout, targetResizeObserver };
 }
 
@@ -344,5 +351,116 @@ describe('VideoEnhancer lifecycle transitions', () => {
 
     expect(renderer.updateConfiguration).toHaveBeenCalledTimes(2);
     expect(enhancer.currentSettings.mode).toBe('C');
+  });
+
+  it('disposes video listeners on destroy so detached nodes cannot retain the enhancer', () => {
+    const { enhancer } = createBareEnhancer();
+    const dispose = vi.spyOn(enhancer.videoEvents, 'dispose');
+
+    enhancer.destroy();
+
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('cancels a pending fullscreen reconcile on explicit stop', async () => {
+    const { enhancer } = createBareEnhancer();
+    const clearTimeout = window.clearTimeout as unknown as ReturnType<typeof vi.fn>;
+
+    enhancer.scheduleFullscreenReconcile(90);
+    expect(enhancer.fullscreenDebounceTimer).toBe(72);
+    const revisionBeforeStop = enhancer.fullscreenRevision;
+
+    await enhancer.stopEnhancement();
+
+    expect(clearTimeout).toHaveBeenCalledWith(72);
+    expect(enhancer.fullscreenDebounceTimer).toBeUndefined();
+    expect(enhancer.fullscreenRevision).toBeGreaterThan(revisionBeforeStop);
+  });
+
+  it('exits the fullscreen layout when an automatic start commits no backend', async () => {
+    const { enhancer, fullscreenLayout } = createBareEnhancer();
+    enhancer.currentSettings = { ...DEFAULT_SETTINGS };
+    enhancer.isPreferredFullscreenVideo = vi.fn(() => true);
+    enhancer.startEnhancement = vi.fn(async () => undefined);
+    const hasContext = vi.spyOn(fullscreenContext, 'hasContext').mockReturnValue(true);
+    try {
+      await enhancer.reconcileFullscreen(enhancer.fullscreenRevision);
+    } finally {
+      hasContext.mockRestore();
+    }
+
+    expect(fullscreenLayout.enter).toHaveBeenCalledOnce();
+    expect(fullscreenLayout.exit).toHaveBeenCalled();
+    expect(enhancer.automaticSession).toBe(false);
+  });
+
+  function createRealesrganEnhancer(capHeight: 480 | 432 | 405 = 480) {
+    const { enhancer, video, overlay } = createBareEnhancer();
+    const updateConfiguration = vi.fn(
+      async (_config: { effects: Array<{ params?: unknown }> }) => undefined,
+    );
+    const renderer = {
+      updateConfiguration,
+      destroy: vi.fn(),
+      isDestroyed: () => false,
+    };
+    enhancer.renderer = renderer;
+    enhancer.backend.markWebGPUActive();
+    enhancer.currentSettings = { ...DEFAULT_SETTINGS, mode: 'REALESRGAN', realesrganCapHeight: capHeight };
+    return { enhancer, video, overlay, updateConfiguration };
+  }
+
+  function overloadStats() {
+    return {
+      fps: 24,
+      renderMs: 60,
+      droppedFrames: 0,
+      warning: true,
+      realesrgan: {
+        readbackMs: 5, inferMs: 50, composeMs: 2, runnerPct: 100, gpuComposePct: 0, nativePct: 0,
+        count: 12, enhancedFps: 10,
+      },
+      frameBudgetMs: 1000 / 24,
+    };
+  }
+
+  it('steps the live cap 480 -> 432 on sustained overload without touching stored settings', async () => {
+    const { enhancer, updateConfiguration } = createRealesrganEnhancer(480);
+    enhancer.handleStats(overloadStats());
+    await vi.waitFor(() => expect(updateConfiguration).toHaveBeenCalledOnce());
+    const effects = updateConfiguration.mock.calls[0]![0].effects;
+    expect(effects[0]!.params).toMatchObject({ maxInferenceHeight: 432 });
+    expect(enhancer.autoCap?.effectiveCap).toBe(432);
+    // Stored settings keep the user cap: the override is ephemeral.
+    expect(enhancer.currentSettings.realesrganCapHeight).toBe(480);
+  });
+
+  it('does not step twice inside the cooldown and ignores non-REALESRGAN modes', async () => {
+    const { enhancer, updateConfiguration } = createRealesrganEnhancer(480);
+    enhancer.handleStats(overloadStats());
+    await vi.waitFor(() => expect(updateConfiguration).toHaveBeenCalledOnce());
+    enhancer.handleStats(overloadStats());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(updateConfiguration).toHaveBeenCalledOnce();
+
+    enhancer.currentSettings = { ...DEFAULT_SETTINGS, mode: 'CNNX2' };
+    enhancer.handleStats(overloadStats());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(updateConfiguration).toHaveBeenCalledOnce();
+  });
+
+  it('e2eInjectOverloadStats feeds one synthetic sample and reports the cap', async () => {
+    const { enhancer, updateConfiguration } = createRealesrganEnhancer(480);
+    expect(enhancer.e2eInjectOverloadStats()).toBe(432);
+    await vi.waitFor(() => expect(updateConfiguration).toHaveBeenCalledOnce());
+    expect(enhancer.autoCap?.effectiveCap).toBe(432);
+  });
+
+  it('drops a queued step after the renderer is released', async () => {
+    const { enhancer, updateConfiguration } = createRealesrganEnhancer(480);
+    enhancer.handleStats(overloadStats());
+    await enhancer.stopEnhancement();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(updateConfiguration).not.toHaveBeenCalled();
   });
 });

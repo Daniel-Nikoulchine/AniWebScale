@@ -23,4 +23,9 @@ export default defineConfig({
     passWithNoTests: false,
     restoreMocks: true,
   },
+  // E2E-gated branches (typeof __ANIME4K_E2E__ guards) stay testable in unit
+  // tests; production builds keep the real flag from webpack DefinePlugin.
+  define: {
+    __ANIME4K_E2E__: JSON.stringify(true),
+  },
 });

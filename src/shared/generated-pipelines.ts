@@ -20,9 +20,6 @@ interface PipelineDescriptor {
 abstract class GeneratedPipeline implements Anime4KPipeline {
   protected pipelines: Anime4KPipeline[] = [];
 
-  public updateParam(): void {
-    // Generated Anime4K kernels have no runtime parameters.
-  }
 
   public pass(encoder: GPUCommandEncoder): void {
     this.pipelines.forEach(pipeline => pipeline.pass(encoder));

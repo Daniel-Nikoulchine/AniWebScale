@@ -21,15 +21,13 @@
  *      `data` is a transferred Float32Array holding planar NCHW RGB in [0,1]
  *      with shape [1, 3, height, width] for the FULL frame. The worker plans
  *      tiles, runs them through the model and composes the 4x result:
- *        - Fast path: one batched session.run with `preferredOutputLocation:
- *          'gpu-buffer'`, output never touches CPU as floats. A compute shader
- *          composes + packs the tiles straight into an RGBA8 texture; the only
- *          CPU transfer is 4 bytes per output pixel.
- *        - Fallback (same GPU, no gpu-buffer): when the fp16/fp32 gpu-buffer
- *          alias bug hits (Shape mismatch {1,480,640,3}!={1,1920,2560,3}) the
- *          worker rebuilds a WebGPU session WITHOUT gpu-buffer, downloads
- *          floats and composes on CPU (same math as the content script's
- *          CPU composer) — still GPU inference.
+ *        - Fast path: one batched session.run on the CPU-readback lane
+ *          (gpu-buffer outputs off), floats downloaded and composed on CPU
+ *          or WASM-SIMD.
+ *        - Fallback: the proven per-tile sequential loop, same arithmetic,
+ *          when a batched run fails (sticky for this worker's life).
+ *        - fp16 fallback: a shader-compile failure on the fp16 model
+ *          disables it worker-wide and redoes the frame on fp32.
  *      Replies { type: 'infer', id, ok: true, width, height, data } with
  *      `data` = tightly packed RGBA8 bytes of the composed 4x frame
  *      (Uint8Array, transferred), or { ok: false, error }.
@@ -75,41 +73,79 @@ export function installF16RewriteHook() {
 
 installF16RewriteHook();
 
-// --- Tile planning (mirrors src/shared/realesrgan-tiling.ts) ----------------
+// <generated-tile-geometry>
+// GENERATED from src/shared/realesrgan-tile-geometry.js — do not edit.
+// Run `node scripts/generate-worker-tiling.mjs` after changing the source.
+/**
+ * Positions along one axis: maxTile-wide entries stepping by
+ * (maxTile - overlap), last position clamped to size - maxTile.
+ */
+export function tileAxis(size, maxTile, overlap) {
+  if (size <= maxTile) return [0];
+  const stride = maxTile - overlap;
+  const positions = [];
+  let position = 0;
+  while (position + maxTile < size) {
+    positions.push(position);
+    position += stride;
+  }
+  positions.push(size - maxTile);
+  return positions;
+}
 
 /**
- * Tile plan for one frame. Every produced tile has EXACTLY the same shape:
- * tiled axes emit maxTileSize-wide entries stepping by (maxTileSize -
- * overlap) with the last position clamped to size - maxTileSize, and an axis
- * smaller than maxTileSize contributes its full size to every tile. Uniform
- * tiles are what makes one batched session.run legal for the whole frame.
- * The overlap gives the compositor room to feather tile borders away, exactly
- * like the content-script planner.
+ * Default single-tile gate for a frame (Hebel 1.2): frames that fit a
+ * bounded transient (<= 1024x576 pixels, +35% over the 480p cap the browser
+ * already runs single-tile) run as one inference instead of two
+ * ~fully-overlapping tiles at ~2x cost. Wider frames keep the tile-size
+ * gate so large inputs cannot blow the transient budget.
+ */
+export function defaultSingleTileMaxHeight(width, height, maxTileSize) {
+  if (maxTileSize >= 512 && width * height <= 1024 * 576) return 576;
+  return Math.min(576, maxTileSize);
+}
+
+/**
+ * Worker-facing alias: the generated worker copy historically exports this
+ * name (bench, tests and the infer path import it). Same rule, one body.
+ */
+export const singleTileMaxHeightForFrame = defaultSingleTileMaxHeight;
+
+/** Default overlap for a tile size: 24px for both real geometries. */
+export function defaultOverlapFor(maxTileSize) {
+  return Math.min(24, Math.floor(maxTileSize / 16));
+}
+
+/** Feather window the compositor needs for an overlap (output pixels). */
+export function featherWindowForOverlap(overlap) {
+  return Math.max(1, overlap * 2);
+}
+
+/**
+ * Tile plan for one frame. Every produced tile has the same stepping rule;
+ * uniform tiles are what makes one batched session.run legal for the whole
+ * frame. Sources at or below singleTileMaxHeight run whole.
  */
 export function planUniformTiles(width, height, maxTileSize, overlap, singleTileMaxHeight) {
-  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
-    throw new Error(`Invalid tile-plan dimensions: ${width}x${height}.`);
+  if (!Number.isInteger(width) || width <= 0) {
+    throw new Error(`Invalid source width: ${width}`);
   }
-  if (!Number.isInteger(maxTileSize) || maxTileSize <= 0
-    || !Number.isInteger(overlap) || overlap < 0 || overlap >= maxTileSize
-    || !Number.isInteger(singleTileMaxHeight) || singleTileMaxHeight <= 0) {
-    throw new Error('Invalid tile-plan options.');
+  if (!Number.isInteger(height) || height <= 0) {
+    throw new Error(`Invalid source height: ${height}`);
+  }
+  if (!Number.isInteger(maxTileSize) || maxTileSize <= 0) {
+    throw new Error(`Invalid maxTileSize: ${maxTileSize}`);
+  }
+  if (!Number.isInteger(overlap) || overlap < 0 || overlap >= maxTileSize) {
+    throw new Error(`Invalid overlap: ${overlap} for maxTileSize ${maxTileSize}`);
+  }
+  if (!Number.isInteger(singleTileMaxHeight) || singleTileMaxHeight <= 0) {
+    throw new Error(`Invalid singleTileMaxHeight: ${singleTileMaxHeight}`);
   }
   if (height <= singleTileMaxHeight) {
     return [{ x: 0, y: 0, width, height }];
   }
-  const positions = (size) => {
-    if (size <= maxTileSize) return [0];
-    const stride = maxTileSize - overlap;
-    const out = [];
-    let p = 0;
-    while (p + maxTileSize < size) {
-      out.push(p);
-      p += stride;
-    }
-    out.push(size - maxTileSize);
-    return out;
-  };
+  const positions = (size) => tileAxis(size, maxTileSize, overlap);
   const tiles = [];
   for (const y of positions(height)) {
     for (const x of positions(width)) {
@@ -123,6 +159,45 @@ export function planUniformTiles(width, height, maxTileSize, overlap, singleTile
   }
   return tiles;
 }
+
+/**
+ * Complete worker frame geometry: tile size bound, overlap, single-tile
+ * gate, tile list and feather window. One call replaces the scattered
+ * 384/512 + 24 + gate + 48 literals at the worker call site.
+ */
+export function planWorkerFrame(width, height) {
+  const maxTileSize = width * height >= 1920 * 1080 ? 384 : 512;
+  const overlap = defaultOverlapFor(maxTileSize);
+  const singleTileMaxHeight = defaultSingleTileMaxHeight(width, height, maxTileSize);
+  return {
+    maxTileSize,
+    overlap,
+    singleTileMaxHeight,
+    tiles: planUniformTiles(width, height, maxTileSize, overlap, singleTileMaxHeight),
+    featherWindow: featherWindowForOverlap(overlap),
+  };
+}
+// </generated-tile-geometry>
+
+// <generated-ort-shape-pinning>
+// GENERATED from src/shared/realesrgan-ort-shape-pinning.js — do not edit.
+// Run `node scripts/generate-worker-tiling.mjs` after changing the source.
+
+/**
+ * Free-dimension overrides pinning ONE exact I/O shape. `outHeight` /
+ * `outWidth` are the model's output dims for that input (4x for RealESRGAN).
+ */
+export function buildFreeDimensionOverrides(options) {
+  return {
+    batch_size: options.batchSize,
+    height: options.height,
+    width: options.width,
+    out_batch_size: options.batchSize,
+    out_height: options.outHeight,
+    out_width: options.outWidth,
+  };
+}
+// </generated-ort-shape-pinning>
 
 function extractTilePlanar(inputRgb, sourceWidth, sourceHeight, x, y, tileWidth, tileHeight) {
   const sourcePixels = sourceWidth * sourceHeight;
@@ -225,6 +300,28 @@ export function splitBatchedOutput(batched, tiles) {
 }
 
 /**
+ * Single-tile fast lane (Hebel E5b): no overlap exists, so the weighted
+ * average is algebraically the input itself — convert + pack directly, no
+ * accumulator, no weights, no divisions. Bit-identical across engines (no
+ * fused multiply-add can form: scale + round only). The full lane stays for
+ * multi-tile frames and as the fallback.
+ */
+export function composeSingleTileToRgba8(rgb, width, height) {
+  const pixels = width * height;
+  if (!(rgb instanceof Float32Array) || rgb.length !== 3 * pixels) {
+    throw new Error(`Invalid single-tile planar input: expected ${3 * pixels} floats.`);
+  }
+  const rgba = new Uint8Array(4 * pixels);
+  for (let i = 0; i < pixels; i += 1) {
+    rgba[i * 4] = Math.round(Math.min(1, Math.max(0, rgb[i])) * 255);
+    rgba[i * 4 + 1] = Math.round(Math.min(1, Math.max(0, rgb[i + pixels])) * 255);
+    rgba[i * 4 + 2] = Math.round(Math.min(1, Math.max(0, rgb[i + 2 * pixels])) * 255);
+    rgba[i * 4 + 3] = 255;
+  }
+  return rgba;
+}
+
+/**
  * Exact area-average box downscale of packed RGBA8. Each destination pixel
  * averages the source pixels overlapped by its box, with fractional edge
  * coverage weighted in. Uniform regions stay exactly uniform; identity
@@ -267,196 +364,6 @@ export function downscaleRgba8Box(rgba, srcWidth, srcHeight, dstWidth, dstHeight
   return out;
 }
 
-// --- GPU compose (runs on the ORT WebGPU device) ----------------------------
-
-const composeWGSL = `
-struct TileDesc {
-  baseX: u32,
-  baseY: u32,
-  upW: u32,
-  upH: u32,
-  dataOffset: u32,
-  featherWindow: u32,
-  pad0: u32,
-  pad1: u32,
-}
-
-struct ComposeParams {
-  outWidth: u32,
-  outHeight: u32,
-  tileCount: u32,
-  pad: u32,
-}
-
-@group(0) @binding(0) var<uniform> params: ComposeParams;
-@group(0) @binding(1) var<storage, read> tiles: array<TileDesc>;
-@group(0) @binding(2) var<storage, read> tileData: array<f32>;
-@group(0) @binding(3) var outputTexture: texture_storage_2d<rgba8unorm, write>;
-
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let px = gid.x;
-  let py = gid.y;
-  if (px >= params.outWidth || py >= params.outHeight) {
-    return;
-  }
-  var r = 0.0;
-  var g = 0.0;
-  var b = 0.0;
-  var weightSum = 0.0;
-  for (var t = 0u; t < params.tileCount; t = t + 1u) {
-    let tile = tiles[t];
-    let lx = i32(px) - i32(tile.baseX);
-    let ly = i32(py) - i32(tile.baseY);
-    if (lx < 0 || ly < 0 || lx >= i32(tile.upW) || ly >= i32(tile.upH)) {
-      continue;
-    }
-    let window = i32(tile.featherWindow);
-    let fx = min(min(lx, i32(tile.upW) - 1 - lx) + 1, window);
-    let fy = min(min(ly, i32(tile.upH) - 1 - ly) + 1, window);
-    let weight = f32(min(fx, fy));
-    let tilePixels = tile.upW * tile.upH;
-    let pixel = tile.dataOffset + u32(ly) * tile.upW + u32(lx);
-    r = r + tileData[pixel] * weight;
-    g = g + tileData[pixel + tilePixels] * weight;
-    b = b + tileData[pixel + 2u * tilePixels] * weight;
-    weightSum = weightSum + weight;
-  }
-  let divisor = max(weightSum, 1.0);
-  let rr = floor(clamp(r / divisor, 0.0, 1.0) * 255.0 + 0.5) / 255.0;
-  let gg = floor(clamp(g / divisor, 0.0, 1.0) * 255.0 + 0.5) / 255.0;
-  let bb = floor(clamp(b / divisor, 0.0, 1.0) * 255.0 + 0.5) / 255.0;
-  textureStore(outputTexture, vec2i(i32(px), i32(py)), vec4f(rr, gg, bb, 1.0));
-}
-`;
-
-const DESC_U32_PER_TILE = 8;
-const COPY_BYTES_PER_ROW_ALIGNMENT = 256;
-
-/**
- * Compose GPU-resident ORT output into one RGBA8 buffer.
- *
- * `source` is either a single batched gpu-buffer tensor (dims [B,3,4h,4w]) or
- * per-tile gpu-buffer tensors; both become one storage buffer via GPU->GPU
- * copies, then a compute pass composes + packs into an RGBA8 texture, then a
- * single texture->buffer copy brings 4 bytes per output pixel to the CPU.
- * No planar float ever crosses back.
- *
- * Returns null when anything in the chain is unavailable; the caller falls
- * back to CPU composition from downloaded floats.
- */
-async function composeGpuOutputsOnDevice(device, tileDescriptors, outWidth, outHeight, featherWindow) {
-  const maxStorage = device.limits?.maxStorageBufferBindingSize ?? 0;
-  if (!maxStorage || tileDescriptors.length === 0) return null;
-
-  const totalFloats = tileDescriptors.reduce((sum, t) => sum + 3 * t.upW * t.upH, 0);
-  if (totalFloats * 4 > maxStorage) return null;
-
-  // Descriptor dataOffsets are batch-slot relative (b * 3 * upW * upH) for the
-  // batched source and slot-absolute for per-tile sources; callers set them.
-  const descs = new Uint32Array(tileDescriptors.length * DESC_U32_PER_TILE);
-  tileDescriptors.forEach((tile, index) => {
-    const base = index * DESC_U32_PER_TILE;
-    descs[base] = tile.baseX;
-    descs[base + 1] = tile.baseY;
-    descs[base + 2] = tile.upW;
-    descs[base + 3] = tile.upH;
-    descs[base + 4] = tile.dataOffset;
-    descs[base + 5] = featherWindow;
-  });
-
-  const descBuffer = device.createBuffer({
-    size: Math.max(descs.byteLength, 16),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  });
-  device.queue.writeBuffer(descBuffer, 0, descs);
-
-  const dataBuffer = device.createBuffer({
-    size: totalFloats * 4,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  });
-  const copyEncoder = device.createCommandEncoder({ label: 'RealESRGAN tile gather' });
-  for (const tile of tileDescriptors) {
-    // ORT gpu-buffers are dense fp32 buffers matching the tensor's byte size.
-    copyEncoder.copyBufferToBuffer(tile.gpuBuffer, tile.sourceOffset * 4, dataBuffer, tile.dataOffset * 4, 3 * tile.upW * tile.upH * 4);
-  }
-  device.queue.submit([copyEncoder.finish()]);
-
-  const paramsBuffer = device.createBuffer({
-    size: 16,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  });
-  device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([outWidth, outHeight, tileDescriptors.length, 0]));
-
-  const outputTexture = device.createTexture({
-    size: [outWidth, outHeight, 1],
-    format: 'rgba8unorm',
-    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC,
-  });
-
-  let result;
-  try {
-    const module = device.createShaderModule({ label: 'RealESRGAN worker compose', code: composeWGSL });
-    const bindGroupLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 3, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba8unorm' } },
-      ],
-    });
-    const pipeline = device.createComputePipeline({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
-      compute: { module, entryPoint: 'main' },
-    });
-    const bindGroup = device.createBindGroup({
-      layout: bindGroupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: paramsBuffer } },
-        { binding: 1, resource: { buffer: descBuffer } },
-        { binding: 2, resource: { buffer: dataBuffer } },
-        { binding: 3, resource: outputTexture.createView() },
-      ],
-    });
-    const encoder = device.createCommandEncoder({ label: 'RealESRGAN worker compose' });
-    const pass = encoder.beginComputePass({ label: 'RealESRGAN worker compose' });
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(Math.ceil(outWidth / 8), Math.ceil(outHeight / 8));
-    pass.end();
-
-    const tightRowBytes = outWidth * 4;
-    const bytesPerRow = Math.ceil(tightRowBytes / COPY_BYTES_PER_ROW_ALIGNMENT) * COPY_BYTES_PER_ROW_ALIGNMENT;
-    const readbackBuffer = device.createBuffer({
-      size: bytesPerRow * outHeight,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
-    encoder.copyTextureToBuffer(
-      { texture: outputTexture },
-      { buffer: readbackBuffer, bytesPerRow, rowsPerImage: outHeight },
-      [outWidth, outHeight, 1],
-    );
-    device.queue.submit([encoder.finish()]);
-    await device.queue.onSubmittedWorkDone();
-    await readbackBuffer.mapAsync(GPUMapMode.READ);
-    const padded = new Uint8Array(readbackBuffer.getMappedRange());
-    const rgba = new Uint8Array(tightRowBytes * outHeight);
-    for (let row = 0; row < outHeight; row += 1) {
-      rgba.set(padded.subarray(row * bytesPerRow, row * bytesPerRow + tightRowBytes), row * tightRowBytes);
-    }
-    readbackBuffer.unmap();
-    readbackBuffer.destroy();
-    result = rgba;
-  } finally {
-    outputTexture.destroy();
-    paramsBuffer.destroy();
-    dataBuffer.destroy();
-    descBuffer.destroy();
-  }
-  return result;
-}
-void composeGpuOutputsOnDevice;
-
 /** Fetch a tensor's floats regardless of its location (gpu-buffer or cpu). */
 async function tensorFloats(tensor) {
   if (typeof tensor.download === 'function') {
@@ -471,12 +378,47 @@ let ort = null;
 // cacheKey -> { session, ep, preferGpuOutputs, url }
 const sessions = new Map();
 
+/**
+ * Drop every cached session whose cache key pins this base model URL. The
+ * cache key is the joined session spec (modelUrl | modelUrlFp16 | shapes |
+ * gpu-buffer flag), so a prefix match covers all shape/gpu-buffer variants
+ * created from that model. This is the ONLY sanctioned way to invalidate the
+ * session cache; nothing type-checks the key format, so keep purges here.
+ */
+function purgeModelSessions(modelUrl) {
+  for (const key of [...sessions.keys()]) {
+    if (key.startsWith(modelUrl)) sessions.delete(key);
+  }
+}
+
+/** Drop every cached session that resolved to exactly this model URL. */
+function purgeSessionsResolvedTo(url) {
+  for (const [key, entry] of sessions) {
+    if (entry.url === url) sessions.delete(key);
+  }
+}
+
 // Sticky fp16 skip: a shader-compile failure (Clip kernel on Tint) proves the
 // fp16 model cannot run on this device; stop attempting it for this life.
 let fp16Disabled = false;
 // Bound for InferenceSession.create: a hung create (seen after a device-side
 // shader failure) must not wedge the worker forever.
 let sessionCreateTimeoutMs = 30000;
+
+// Worker reply error codes for { ok: false } replies. Canonical table lives
+// in realesrgan-worker-protocol.js; this file cannot import it (Blob-URL,
+// import-free), so the literals are pinned by tests/realesrgan-worker-frame
+// and the client classifies per code instead of parsing prose.
+const WORKER_REPLY_TIMEOUT = 'worker-timeout';
+const WORKER_REPLY_FAILED = 'worker-failed';
+
+/** Error carrying its reply code so handleInfer can tag the response. */
+function workerError(code, message) {
+  const error = new Error(message);
+  error.replyCode = code;
+  return error;
+}
+
 export function __setSessionCreateTimeoutForTests(ms) {
   sessionCreateTimeoutMs = ms;
 }
@@ -506,11 +448,9 @@ function importOrt(url) {
  */
 export async function getSession(modelUrl, modelUrlFp16, inputBatch, inputHeight, inputWidth, outputHeight, outputWidth, wantGpuBuffer = true) {
   // WebGPU-only: WASM removed on user request. Every session is WebGPU.
-  // The symbolic-dim model fails without overrides ("Shape mismatch
-  // {1,480,640,3} != {1,1920,2560,3}" on first run), so the cache key pins
-  // the exact I/O shape plus the gpu-buffer flag. With overrides the
-  // single-shape case is verified OK on RDNA-2, gpu-buffer outputs included.
-  // Batched gpu-buffer stays disabled until E2E'd (see handleInfer).
+  // The cache key pins the exact I/O shape plus the gpu-buffer flag (shape
+  // rationale in the generated shape-pinning block above). Batched
+  // gpu-buffer stays disabled until E2E'd (see handleInfer).
   const cacheKey = [
     modelUrl,
     modelUrlFp16 ?? '',
@@ -543,24 +483,15 @@ export async function getSession(modelUrl, modelUrlFp16, inputBatch, inputHeight
       const pendingCreate = ort.InferenceSession.create(attempt.url, {
         executionProviders: ['webgpu'],
         ...(attempt.useGpuBuffer ? { preferredOutputLocation: 'gpu-buffer', enableMemPattern: false } : { enableMemPattern: false }),
-        // Pin the symbolic dims to this session's exact input shape. ORT 1.29
-        // WebGPU EP throws "Shape mismatch attempting to re-use buffer
-        // {1,480,640,3} != {1,1920,2560,3}" on the FIRST run of a model whose
-        // graph carries symbolic dims (batch_size/height/width) - the output
-        // buffer-reuse validator compares the NHWC input shape against the
-        // output shape regardless of dim_param naming. Concrete dims at
-        // session-creation time avoid the symbolic-dim path entirely; the
-        // session is already shape-pinned by cacheKey, so the override costs
-        // nothing. The static-shape model has no free dims: overrides for
-        // unknown symbols are ignored (verified against python ORT 1.29).
-        freeDimensionOverrides: {
-          batch_size: inputBatch,
+        // Shape pinning rationale lives in the generated shape-pinning
+        // block above; one builder serves the worker and the main thread.
+        freeDimensionOverrides: buildFreeDimensionOverrides({
+          batchSize: inputBatch,
           height: inputHeight,
           width: inputWidth,
-          out_batch_size: inputBatch,
-          out_height: outputHeight,
-          out_width: outputWidth,
-        },
+          outHeight: outputHeight,
+          outWidth: outputWidth,
+        }),
       });
       // A late success after the timeout below dies uncached instead of
       // surfacing as an unhandled rejection.
@@ -568,7 +499,7 @@ export async function getSession(modelUrl, modelUrlFp16, inputBatch, inputHeight
       const session = await Promise.race([
         pendingCreate,
         new Promise((_, reject) => setTimeout(
-          () => reject(new Error(`RealESRGAN session creation timed out after ${sessionCreateTimeoutMs}ms (${attempt.url})`)),
+          () => reject(workerError(WORKER_REPLY_TIMEOUT, `RealESRGAN session creation timed out after ${sessionCreateTimeoutMs}ms (${attempt.url})`)),
           sessionCreateTimeoutMs,
         )),
       ]);
@@ -595,6 +526,12 @@ export async function handleInit(message) {
     // workers spawned from a blob worker need separate verification.
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.proxy = false;
+    // Hebel E5: pixel-kernel module URL (optional). Loading stays lazy at
+    // first compose so a missing/blocked file cannot delay init; absence
+    // only costs the SIMD speedup, never a frame.
+    if (typeof message.pixelsUrl === 'string' && message.pixelsUrl) {
+      pixelsWasmUrl = message.pixelsUrl;
+    }
     self.postMessage({ type: 'init', ok: true });
   } catch (error) {
     self.postMessage({ type: 'init', ok: false, error: String(error) });
@@ -602,52 +539,15 @@ export async function handleInit(message) {
 }
 
 /**
- * The WebGPU device ORT's backend runs on; null when the WebGPU backend has
- * not created one (WASM sessions) or the env surface is missing. The compose
- * shaders must run on the SAME device that owns the output gpu-buffers.
+ * ORT-boundary classifier (the ONLY prose match on this path): the runtime
+ * tags nothing, so the shape-pinned output-buffer hit and the run-timeout we
+ * armed ourselves with are recognized by message here, once, and converted
+ * into control flow. Everything downstream of this helper decides per
+ * replyCode, never per prose.
  */
-async function getOrtWebGpuDevice() {
-  try {
-    const device = await ort.env.webgpu?.device;
-    return device ?? null;
-  } catch {
-    return null;
-  }
+function isShapePinnedBufferError(error) {
+  return /Shape mismatch attempting to re-use buffer|timed out after 8s/i.test(String(error));
 }
-void getOrtWebGpuDevice;
-
-/**
- * A fully black RGBA8 result means the GPU compose produced garbage or an
- * empty texture (the alpha channel is always 255, so true black is the
- * signature of an unwritten/failed compose). 1% of dark pixels tolerates
- * genuinely dark scenes; a dead compose is 100% black.
- */
-export function isBlackFrame(rgba) {
-  if (!rgba || rgba.length < 4) return true;
-  const pixelCount = rgba.length / 4;
-  const samples = Math.min(1024, pixelCount);
-  const stride = Math.max(1, Math.floor(pixelCount / samples));
-  let dark = 0;
-  let sampled = 0;
-  for (let p = 0; p < pixelCount; p += stride) {
-    const o = p * 4;
-    if (rgba[o] < 4 && rgba[o + 1] < 4 && rgba[o + 2] < 4) dark += 1;
-    sampled += 1;
-    // Early exit: impossible to reach 95% dark from remaining samples.
-    // e.g. if sampled=500, dark=10, even if all remaining 524 are dark, max ratio = (10+524)/1024 =0.52 <0.95 -> never black.
-    // So we can break early only for the negative case, not positive. Keep simple: check at end.
-  }
-  // Guard against tiny sampled counts (small textures): require at least 4 samples
-  if (sampled === 0) return false;
-  return dark / sampled > 0.95;
-}
-
-// Sticky downgrade: once the GPU compose produced a black frame, stop using
-// it for the rest of this worker's life (or until the session cache is
-// reset). Retrying the same broken path every frame would keep the video
-// black; the CPU path is proven and correct.
-let gpuComposeDisabled = false;
-void gpuComposeDisabled;
 
 /**
  * Run one inference with automatic recovery from ORT's shape-pinned output
@@ -664,12 +564,12 @@ async function runShapePinned(session, inputName, tensor, outputName, rebuildSes
   const RUN_TIMEOUT_MS = 8000;
   const runWithTimeout = (sess) => Promise.race([
     sess.run({ [inputName]: tensor }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('RealESRGAN session.run timed out after 8s')), RUN_TIMEOUT_MS)),
+    new Promise((_, reject) => setTimeout(() => reject(workerError(WORKER_REPLY_TIMEOUT, 'RealESRGAN session.run timed out after 8s')), RUN_TIMEOUT_MS)),
   ]);
   try {
     return await runWithTimeout(session);
   } catch (error) {
-    if (!/Shape mismatch attempting to re-use buffer|timed out after 8s/i.test(String(error))) throw error;
+    if (!isShapePinnedBufferError(error)) throw error;
     console.warn('[RealESRGAN worker] shape-pinned output buffer hit; rebuilding session');
     const fresh = await rebuildSession();
     return await runWithTimeout(fresh.session);
@@ -681,6 +581,210 @@ export { runShapePinned };
 /** Shader-compile failures are deterministic per model+driver: retrying the same model cannot help. */
 function isShaderCompileError(error) {
   return /Invalid ShaderModule|failed to create.*compute pipeline/i.test(String(error));
+}
+
+// Sticky batch downgrade (Hebel 2.2): one failed batched run (OOM/shape on
+// an untested device) must not cost a failed attempt on every frame; the
+// sequential loop below is proven and takes over for this worker's life.
+let batchedTilesDisabled = false;
+let batchedDowngradeLogged = false;
+
+// --- WASM-SIMD compose (Hebel E5) --------------------------------------------
+// pixels.wasm (built from native/wasm-pixels) accelerates the feathered
+// compose; the JS functions above stay as the proven fallback. Loading is
+// lazy and non-fatal (missing file, CSP, no SIMD128 -> JS serves every
+// frame); a trapping module disables itself sticky for this worker's life.
+
+let pixelsWasmUrl = null;
+let pixelsModule = null;
+let pixelsLoadAttempted = false;
+let pixelsDowngradeLogged = false;
+let pixelsLoader = null;
+
+/** Injectable so tests can supply a fake module without WebAssembly. */
+export function __setPixelsLoaderForTests(loader) {
+  pixelsLoader = loader;
+}
+
+/** Injectable so tests can arm a fake module directly (bypasses fetch). */
+export function __setPixelsModuleForTests(mod) {
+  pixelsModule = mod;
+  pixelsLoadAttempted = mod === null ? pixelsLoadAttempted : true;
+}
+
+const PIXELS_EXPORTS = ['memory', 'stage_ptr', 'compose_exec', 'compose_single_exec', 'compose_output_ptr', 'compose_output_len'];
+
+async function defaultPixelsLoader(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`pixels.wasm fetch failed: ${response.status}`);
+  const bytes = await response.arrayBuffer();
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  return instance.exports;
+}
+
+async function ensurePixelsModule() {
+  if (pixelsModule || pixelsLoadAttempted) return pixelsModule;
+  pixelsLoadAttempted = true;
+  try {
+    if (!pixelsWasmUrl) return null;
+    const load = pixelsLoader ?? defaultPixelsLoader;
+    const mod = await load(pixelsWasmUrl);
+    for (const name of PIXELS_EXPORTS) {
+      if (!mod || typeof mod[name] === 'undefined') throw new Error(`pixels.wasm missing export ${name}`);
+    }
+    pixelsModule = mod;
+  } catch (error) {
+    console.warn('[RealESRGAN worker] pixels.wasm unavailable; JS compose fallback', error);
+    pixelsModule = null;
+  }
+  return pixelsModule;
+}
+
+function disablePixelsModule(error) {
+  if (pixelsModule !== null) {
+    if (!pixelsDowngradeLogged) {
+      pixelsDowngradeLogged = true;
+      console.warn('[RealESRGAN worker] pixels.wasm failed; JS compose fallback for this worker life', error);
+    }
+    pixelsModule = null;
+  }
+}
+
+/** Fresh views per call: exec may grow memory and detach earlier views. */
+function pixelsViews(mod) {
+  return {
+    u8: () => new Uint8Array(mod.memory.buffer),
+    f32: () => new Float32Array(mod.memory.buffer),
+    u32: () => new Uint32Array(mod.memory.buffer),
+  };
+}
+
+function composeSingleWasm(mod, rgb, width, height) {
+  const views = pixelsViews(mod);
+  const staged = mod.stage_ptr(0, rgb.byteLength);
+  views.u8().set(new Uint8Array(rgb.buffer, rgb.byteOffset, rgb.byteLength), staged);
+  mod.compose_single_exec(width * height);
+  const ptr = mod.compose_output_ptr();
+  const len = mod.compose_output_len();
+  if (len !== width * height * 4) throw new Error(`pixels.wasm single output ${len}, expected ${width * height * 4}.`);
+  return pixelsViews(mod).u8().slice(ptr, ptr + len);
+}
+
+function composeMultiWasm(mod, batched, planTiles, tileOutW, tileOutH, outWidth, outHeight, featherWindow) {
+  const views = pixelsViews(mod);
+  const batchOff = mod.stage_ptr(0, batched.byteLength);
+  views.u8().set(new Uint8Array(batched.buffer, batched.byteOffset, batched.byteLength), batchOff);
+  const descs = new Uint32Array(planTiles.length * 2);
+  planTiles.forEach((tile, index) => {
+    descs[index * 2] = tile.x * 4;
+    descs[index * 2 + 1] = tile.y * 4;
+  });
+  const descOff = mod.stage_ptr(1, descs.byteLength);
+  views.u32().set(descs, descOff / 4);
+  mod.compose_exec(outWidth, outHeight, featherWindow, planTiles.length, tileOutW, tileOutH);
+  const ptr = mod.compose_output_ptr();
+  const len = mod.compose_output_len();
+  if (len !== outWidth * outHeight * 4) {
+    throw new Error(`pixels.wasm multi output ${len}, expected ${outWidth * outHeight * 4}.`);
+  }
+  return pixelsViews(mod).u8().slice(ptr, ptr + len);
+}
+
+/**
+ * Compose one frame's tile results to RGBA8, fastest available implementation
+ * first: WASM-SIMD single/multi lane, then the proven JS lanes. Returns the
+ * bytes plus the path label for the onFramePath log. `inferred` is
+ * { tiles, batched } from runBatchedTiles (batched null on the sequential
+ * downgrade path, which always serves JS).
+ */
+async function composeFrameOutput(inferred, planTiles, tileW, tileH, outWidth, outHeight, featherWindow) {
+  const mod = await ensurePixelsModule();
+  // Single tile: fast lane (no overlap, no divisions).
+  if (planTiles.length === 1 && inferred.tiles.length === 1) {
+    const rgb = inferred.tiles[0].rgb;
+    if (mod !== null) {
+      try {
+        return { rgba: composeSingleWasm(mod, rgb, outWidth, outHeight), path: 'cpu-single-wasm' };
+      } catch (error) {
+        disablePixelsModule(error);
+      }
+    }
+    return { rgba: composeSingleTileToRgba8(rgb, outWidth, outHeight), path: 'cpu-single-gpu' };
+  }
+  // Multi tile: full feathered compose.
+  if (mod !== null && inferred.batched) {
+    try {
+      return {
+        rgba: composeMultiWasm(mod, inferred.batched, planTiles, tileW * 4, tileH * 4, outWidth, outHeight, featherWindow),
+        path: 'cpu-tiles-wasm',
+      };
+    } catch (error) {
+      disablePixelsModule(error);
+    }
+  }
+  return {
+    rgba: composeTilesToRgba8(inferred.tiles, outWidth, outHeight, featherWindow),
+    path: planTiles.length > 1 ? 'cpu-tiles-batched-gpu' : 'cpu-tiles-gpu',
+  };
+}
+
+/**
+ * Hebel 2.2: ONE session.run for the whole frame. All (uniform) tiles are
+ * stacked into a [B,3,h,w] batch: same weights, same per-tile arithmetic as
+ * the sequential loop, but one launch, one validation, one output-buffer
+ * dance instead of N. `probe` receives the serving session's URL so the
+ * caller can attribute shader failures to the fp16/fp32 attempt.
+ */
+async function runBatchedTiles(message, tiles, tileW, tileH, probe) {
+  const batchCount = tiles.length;
+  const sessInfo = await getSession(
+    message.modelUrl, message.modelUrlFp16, batchCount, tileH, tileW, tileH * 4, tileW * 4, false,
+  );
+  probe.url = sessInfo.url;
+  const session = sessInfo.session;
+  const inputName = session.inputNames[0] ?? 'input';
+  const outputName = session.outputNames[0] ?? 'output';
+  const batch = stackTilesToBatch(message.data, message.width, message.height, tiles);
+  const tensor = new ort.Tensor('float32', batch, [batchCount, 3, tileH, tileW]);
+  const result = await runShapePinned(session, inputName, tensor, outputName, async () => {
+    purgeModelSessions(message.modelUrl);
+    return await getSession(
+      message.modelUrl, message.modelUrlFp16, batchCount, tileH, tileW, tileH * 4, tileW * 4, false,
+    );
+  });
+  const output = result[outputName];
+  if (!output) throw new Error('RealESRGAN inference returned no output tensor.');
+  const batched = await tensorFloats(output);
+  return { tiles: splitBatchedOutput(batched, tiles), batched };
+}
+
+/**
+ * Proven per-tile loop: one session.run per tile. Slow path and fallback
+ * when batching is unavailable; bit-identical arithmetic to runBatchedTiles.
+ */
+async function runSequentialTiles(message, tiles, tileW, tileH, probe) {
+  const sessInfo = await getSession(
+    message.modelUrl, message.modelUrlFp16, 1, tileH, tileW, tileH * 4, tileW * 4, false,
+  );
+  probe.url = sessInfo.url;
+  const session = sessInfo.session;
+  const inputName = session.inputNames[0] ?? 'input';
+  const outputName = session.outputNames[0] ?? 'output';
+  const composed = [];
+  for (const tile of tiles) {
+    const tileRgb = extractTilePlanar(message.data, message.width, message.height, tile.x, tile.y, tile.width, tile.height);
+    const tensor = new ort.Tensor('float32', tileRgb, [1, 3, tile.height, tile.width]);
+    const result = await runShapePinned(session, inputName, tensor, outputName, async () => {
+      purgeModelSessions(message.modelUrl);
+      return await getSession(
+        message.modelUrl, message.modelUrlFp16, 1, tileH, tileW, tileH * 4, tileW * 4, false,
+      );
+    });
+    const output = result[outputName];
+    if (!output) throw new Error('RealESRGAN inference returned no output tensor.');
+    composed.push({ ...tile, rgb: await tensorFloats(output) });
+  }
+  return composed;
 }
 
 export async function handleInfer(message) {
@@ -697,15 +801,9 @@ export async function handleInfer(message) {
   }
   const outWidth = width * 4;
   const outHeight = height * 4;
-    // Conservative tile geometry mirrors adaptiveRealEsrganTiling(): the
-    // dynamic model accepts any shape, so tiles only bound memory, not the
-    // session. singleTileMaxHeight 576 keeps the default 480p cap single-tile.
-    const maxTileSize = width * height >= 1920 * 1080 ? 384 : 512;
-    // Overlap 24 mirrors adaptiveRealEsrganTiling() for both the 384 and the
-    // 512 geometry (min(24, maxTileSize/16) == 24), so the feather window
-    // (overlap * 2) is always 48.
-    const tiles = planUniformTiles(width, height, maxTileSize, 24, Math.min(576, maxTileSize));
-    const featherWindow = 48;
+    // Conservative tile geometry from the canonical module: the dynamic
+    // model accepts any shape, so tiles only bound memory, not the session.
+    const { tiles, featherWindow } = planWorkerFrame(width, height);
     const tileH = tiles[0].height;
     const tileW = tiles[0].width;
 
@@ -713,47 +811,67 @@ export async function handleInfer(message) {
     // gpu-buffer is verified on RX 6750 XT (single-shape incl. gpu-buffer
     // outputs OK on RDNA-2); batched mixing plus compose-from-gpu-buffer
     // is untested, so downloads floats and CPU-composes. Revisit only
-    // with hardware E2E, never behind a silent flag.
+    // with hardware E2E, never behind a silent flag. (Hebel 2.2 batches on
+    // the CPU-readback lane instead: no gpu-buffer involved.)
     let lastFramePath = 'cpu-tiles-gpu';
     let rgba = null;
+    // Served-precision report for the pipeline's overlay label (set inside
+    // the loop where probe is in scope; read at the reply below).
+    let servedFp16 = false;
     // fp16 fallback: a shader-compile failure proves the fp16 model unrunnable
     // here. Disable it worker-wide, drop its cached sessions, and redo the
     // frame on fp32 instead of failing it.
     for (let fp16Fallback = 0; ; fp16Fallback += 1) {
-      const cpuSessionInfo = await getSession(
-        message.modelUrl, message.modelUrlFp16, 1, tileH, tileW, tileH * 4, tileW * 4, false,
-      );
+      const probe = { url: null };
       try {
-        const cpuSession = cpuSessionInfo.session;
-        const cpuInputName = cpuSession.inputNames[0] ?? 'input';
-        const cpuOutputName = cpuSession.outputNames[0] ?? 'output';
-        const composed = [];
-        for (const tile of tiles) {
-          const tileRgb = extractTilePlanar(message.data, width, height, tile.x, tile.y, tile.width, tile.height);
-          const tensor = new ort.Tensor('float32', tileRgb, [1, 3, tile.height, tile.width]);
-          const result = await runShapePinned(cpuSession, cpuInputName, tensor, cpuOutputName, async () => {
-            for (const key of [...sessions.keys()]) {
-              if (key.startsWith(message.modelUrl)) sessions.delete(key);
+        let inferred;
+        if (!batchedTilesDisabled) {
+          try {
+            inferred = await runBatchedTiles(message, tiles, tileW, tileH, probe);
+          } catch (batchError) {
+            // Shader failures belong to the fp16 cascade below, not to
+            // batching: rethrow so the attempt is retried on fp32 with
+            // batching still enabled.
+            if (isShaderCompileError(batchError)) throw batchError;
+            // Sticky sequential downgrade for anything else (OOM/shape):
+            // the same frame is served sequentially right away, later frames
+            // skip the doomed batch attempt entirely.
+            if (!batchedDowngradeLogged) {
+              batchedDowngradeLogged = true;
+              console.warn('[RealESRGAN worker] batched tiles failed; sequential fallback for this worker life', batchError);
             }
-            return await getSession(
-              message.modelUrl, message.modelUrlFp16, 1, tileH, tileW, tileH * 4, tileW * 4, false,
-            );
-          });
-          const output = result[cpuOutputName];
-          if (!output) throw new Error('RealESRGAN inference returned no output tensor.');
-          composed.push({ ...tile, rgb: await tensorFloats(output) });
+            batchedTilesDisabled = true;
+            inferred = {
+              tiles: await runSequentialTiles(message, tiles, tileW, tileH, probe),
+              batched: null,
+            };
+          }
+        } else {
+          inferred = {
+            tiles: await runSequentialTiles(message, tiles, tileW, tileH, probe),
+            batched: null,
+          };
         }
-        rgba = composeTilesToRgba8(composed, outWidth, outHeight, featherWindow);
+        const composedResult = await composeFrameOutput(
+          inferred, tiles, tileW, tileH, outWidth, outHeight, featherWindow,
+        );
+        rgba = composedResult.rgba;
+        lastFramePath = composedResult.path;
+        // probe.url holds the session URL that served the frame (set per
+        // attempt in runBatchedTiles/runSequentialTiles, final attempt wins
+        // after an fp16 retry), so the pipeline labels the stats window
+        // truthfully instead of assuming fp32 whenever a runner served.
+        servedFp16 = message.modelUrlFp16 != null
+          && message.modelUrlFp16 !== message.modelUrl
+          && probe.url === message.modelUrlFp16;
         break;
       } catch (error) {
         const ranFp16 = message.modelUrlFp16 != null
           && message.modelUrlFp16 !== message.modelUrl
-          && cpuSessionInfo.url === message.modelUrlFp16;
+          && probe.url === message.modelUrlFp16;
         if (fp16Fallback === 0 && ranFp16 && isShaderCompileError(error)) {
           fp16Disabled = true;
-          for (const [key, entry] of sessions) {
-            if (entry.url === message.modelUrlFp16) sessions.delete(key);
-          }
+          purgeSessionsResolvedTo(message.modelUrlFp16);
           continue;
         }
         throw error;
@@ -777,37 +895,6 @@ export async function handleInfer(message) {
       lastFramePath = 'cpu-tiles-gpu-downscaled';
     }
 
-    // Black-frame guard kept for safety — gpu-compose is now disabled, so
-    // this never fires, but leave it in case batched is re-enabled later.
-    if (lastFramePath === 'gpu-compose' && isBlackFrame(rgba)) {
-      gpuComposeDisabled = true;
-      console.warn('[RealESRGAN worker] gpu compose produced a black frame; downgrading to CPU compose');
-      const cpuSessionInfo = await getSession(
-        message.modelUrl, message.modelUrlFp16, 1, tileH, tileW, tileH * 4, tileW * 4, false,
-      );
-      const cpuSession = cpuSessionInfo.session;
-      const cpuInputName = cpuSession.inputNames[0] ?? 'input';
-      const cpuOutputName = cpuSession.outputNames[0] ?? 'output';
-      const composed = [];
-      for (const tile of tiles) {
-        const tileRgb = extractTilePlanar(message.data, width, height, tile.x, tile.y, tile.width, tile.height);
-        const tensor = new ort.Tensor('float32', tileRgb, [1, 3, tile.height, tile.width]);
-        const result = await runShapePinned(cpuSession, cpuInputName, tensor, cpuOutputName, async () => {
-          for (const key of [...sessions.keys()]) {
-            if (key.startsWith(message.modelUrl)) sessions.delete(key);
-          }
-          return await getSession(
-            message.modelUrl, message.modelUrlFp16, 1, tileH, tileW, tileH * 4, tileW * 4, false,
-          );
-        });
-        const output = result[cpuOutputName];
-        if (!output) throw new Error('RealESRGAN inference returned no output tensor.');
-        composed.push({ ...tile, rgb: await tensorFloats(output) });
-      }
-      rgba = composeTilesToRgba8(composed, outWidth, outHeight, featherWindow);
-      lastFramePath = 'cpu-tiles (black-frame downgrade)';
-    }
-
     self.postMessage(
       {
         type: 'infer',
@@ -817,19 +904,29 @@ export async function handleInfer(message) {
         height: finalHeight,
         data: rgba,
         path: lastFramePath,
+        fp16: servedFp16,
       },
       [rgba.buffer],
     );
   } catch (error) {
-    self.postMessage({ type: 'infer', id: message.id, ok: false, error: String(error) });
+    // Reply errors carry their taxonomy code (see WORKER_REPLY_* above):
+    // the client classifies per code instead of parsing prose, so a reworded
+    // message can never flip transient timeouts into permanent runner death.
+    const code = error && error.replyCode ? error.replyCode : WORKER_REPLY_FAILED;
+    self.postMessage({ type: 'infer', id: message.id, ok: false, code, error: String(error) });
   }
 }
 
 export function resetWorkerStateForTests() {
   ort = null;
   sessions.clear();
-  gpuComposeDisabled = false;
   fp16Disabled = false;
+  batchedTilesDisabled = false;
+  batchedDowngradeLogged = false;
+  pixelsWasmUrl = null;
+  pixelsModule = null;
+  pixelsLoadAttempted = false;
+  pixelsDowngradeLogged = false;
   sessionCreateTimeoutMs = 30000;
 }
 

@@ -7,7 +7,7 @@
  * tiles back into a single full-size result, feathering tile borders so seams
  * are invisible.
  */
-import { adaptiveRealEsrganTiling, planRealEsrganTiles } from './realesrgan-tiling';
+import { adaptiveRealEsrganTiling, featherWindowForOverlap, planRealEsrganTiles } from './realesrgan-tile-geometry.js';
 
 export interface PlanarRgb {
   /** Channel-major floats in [0,1], length 3 * width * height. */
@@ -75,7 +75,13 @@ export function rgbPlanarToPaddedRgba(
   const pixels = width * height;
   const tightRowBytes = width * 4;
   if (bytesPerRow === tightRowBytes) {
-    if (out && out.length === 4 * pixels) {
+    // Same out-buffer contract as the padded branch below: a caller-owned
+    // buffer of the wrong size is an error, never a silent fresh allocation
+    // (the caller would keep releasing/reading its stale buffer).
+    if (out && out.length !== 4 * pixels) {
+      throw new Error(`rgbPlanarToPaddedRgba: out buffer must hold ${4 * pixels} bytes, got ${out.length}.`);
+    }
+    if (out) {
       const r = planar.subarray(0, pixels);
       const g = planar.subarray(pixels, 2 * pixels);
       const b = planar.subarray(2 * pixels, 3 * pixels);
@@ -212,17 +218,23 @@ export async function inferTiledResults(options: ComposeOptions): Promise<TiledI
     singleTileMaxHeight: options.singleTileMaxHeight,
   });
   const plan = planRealEsrganTiles(width, height, geometry);
-  const featherWindow = Math.max(1, geometry.overlap * 2);
+  // Canonical feather window: one formula for every compose engine (the
+  // worker and pixels.wasm already derive theirs through the geometry module).
+  const featherWindow = featherWindowForOverlap(geometry.overlap);
   const tiles: InferredTile[] = [];
-  // Tile inference is intentionally concurrent. The worker client applies its
-  // own back-pressure; runners that support parallel execution can overlap
-  // requests, while the serialized runner remains behaviorally identical.
-  const pending = plan.tiles.map(async tile => {
+  // Tile inference is intentionally SEQUENTIAL. Overlapping `run()` calls on
+  // one shared session are unsafe: onnxruntime-web's WebGPU EP keeps a global
+  // shape-pinned output buffer ("Shape mismatch attempting to re-use buffer"
+  // fires across sessions on the same device), and concurrent runs on the
+  // same session object corrupt its internal state. The worker path batches
+  // (ONE run for the whole frame) or loops sequentially for the same reason;
+  // the main-thread fallback serves few frames, so one run per tile in order
+  // is correct and fast enough.
+  for (const tile of plan.tiles) {
     const tileRgb = extractTileRgb(inputRgb, width, height, tile.x, tile.y, tile.width, tile.height);
     const rgb = await infer(tileRgb, tile.width, tile.height);
-    return { x: tile.x, y: tile.y, width: tile.width, height: tile.height, rgb };
-  });
-  tiles.push(...await Promise.all(pending));
+    tiles.push({ x: tile.x, y: tile.y, width: tile.width, height: tile.height, rgb });
+  }
   return { tiles, featherWindow, outWidth: width * 4, outHeight: height * 4 };
 }
 

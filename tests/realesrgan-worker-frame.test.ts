@@ -15,6 +15,11 @@ vi.hoisted(() => {
   };
 });
 import * as workerNamespace from '../src/worker/realesrgan-inference-worker.js';
+import type {
+  WorkerInferMessage,
+  WorkerInitMessage,
+} from '../src/shared/realesrgan-worker-protocol.js';
+import { buildWorkerInferMessage } from '../src/shared/realesrgan-worker-protocol.js';
 
 interface PlannedTile {
   x: number;
@@ -25,6 +30,7 @@ interface PlannedTile {
 
 interface WorkerExports {
   planUniformTiles: (width: number, height: number, maxTileSize: number, overlap: number, singleTileMaxHeight: number) => PlannedTile[];
+  singleTileMaxHeightForFrame: (width: number, height: number, maxTileSize: number) => number;
   stackTilesToBatch: (inputRgb: Float32Array, sourceWidth: number, sourceHeight: number, tiles: PlannedTile[]) => Float32Array;
   splitBatchedOutput: (batched: Float32Array, tiles: PlannedTile[]) => Array<PlannedTile & { rgb: Float32Array }>;
   composeTilesToRgba8: (
@@ -33,6 +39,7 @@ interface WorkerExports {
     outHeight: number,
     featherWindow: number,
   ) => Uint8Array;
+  composeSingleTileToRgba8: (rgb: Float32Array, width: number, height: number) => Uint8Array;
   downscaleRgba8Box: (
     rgba: Uint8Array,
     srcWidth: number,
@@ -41,21 +48,12 @@ interface WorkerExports {
     dstHeight: number,
   ) => Uint8Array;
   rewriteF16Bitcast: (code: string) => string;
-  isBlackFrame: (rgba: Uint8Array) => boolean;
-  handleInit: (message: { type: 'init'; ortUrl: string; wasmDir: string }) => Promise<void>;
-  handleInfer: (message: {
-    type: 'infer';
-    id: number;
-    modelUrl: string;
-    modelUrlFp16: string | null;
-    width: number;
-    height: number;
-    data: Float32Array;
-    targetWidth?: number;
-    targetHeight?: number;
-  }) => Promise<void>;
+  handleInit: (message: WorkerInitMessage) => Promise<void>;
+  handleInfer: (message: WorkerInferMessage) => Promise<void>;
   resetWorkerStateForTests: () => void;
   __setOrtLoaderForTests: (loader: ((url: string) => Promise<unknown>) | null) => void;
+  __setPixelsLoaderForTests: (loader: ((url: string) => Promise<unknown>) | null) => void;
+  __setPixelsModuleForTests: (mod: unknown) => void;
   __setSessionCreateTimeoutForTests: (ms: number) => void;
 }
 
@@ -74,6 +72,7 @@ type Reply = {
   width?: number;
   height?: number;
   data?: Uint8Array;
+  path?: string;
   error?: string;
 };
 
@@ -92,12 +91,14 @@ interface OrtStub {
   };
   __createCalls: () => number;
   __created: Array<{ url: string; options: Record<string, unknown> }>;
+  __runCalls: () => number;
+  __runDims: () => number[][];
 }
 
 interface SessionStub {
   inputNames: string[];
   outputNames: string[];
-  run: (feeds: Record<string, { data: Float32Array }>) => Promise<Record<string, {
+  run: (feeds: Record<string, { data: Float32Array; dims: number[] }>) => Promise<Record<string, {
     type: string;
     dims: number[];
     size: number;
@@ -110,24 +111,30 @@ function getReplies(): Reply[] {
 }
 
 /**
- * A 2x2-input fake ORT: batch dims come from the tensor length; the output
- * is [B,3,8,8] with values = 2 * input. Session creation fails the first
- * `createFailures` times.
+ * A fake ORT with dims-driven I/O: batch and tile dims come from the input
+ * tensor, the output is 4x with values = 2 * input. Session creation fails
+ * the first `createFailures` times; `run` throws for batched inputs when
+ * `failBatch` is set (downgrade test). Every run's dims are recorded.
  */
-function makeFakeOrt(overrides: { createFailures?: number } = {}): OrtStub {
+function makeFakeOrt(overrides: { createFailures?: number; failBatch?: boolean } = {}): OrtStub {
   let createCalls = 0;
   const created: Array<{ url: string; options: Record<string, unknown> }> = [];
+  const runDims: number[][] = [];
+  let runCalls = 0;
   const session: SessionStub = {
     inputNames: ['input'],
     outputNames: ['output'],
     async run(feeds) {
       const input = feeds.input;
-      const b = input.data.length / (3 * 2 * 2);
-      const out = new Float32Array(b * 3 * 8 * 8);
+      runCalls += 1;
+      runDims.push([...input.dims]);
+      const [b, , h, w] = input.dims;
+      if (overrides.failBatch && b > 1) throw new Error('simulated batch failure');
+      const out = new Float32Array(b * 3 * (4 * h) * (4 * w));
       for (let i = 0; i < out.length; i += 1) {
         out[i] = Math.min(1, input.data[i % input.data.length] * 2);
       }
-      return { output: { type: 'float32', dims: [b, 3, 8, 8], size: out.length, data: out } };
+      return { output: { type: 'float32', dims: [b, 3, 4 * h, 4 * w], size: out.length, data: out } };
     },
   };
   const ort: OrtStub = {
@@ -154,6 +161,8 @@ function makeFakeOrt(overrides: { createFailures?: number } = {}): OrtStub {
     },
     __createCalls: () => createCalls,
     __created: created,
+    __runCalls: () => runCalls,
+    __runDims: () => runDims.map(d => [...d]),
   };
   return ort;
 }
@@ -202,6 +211,18 @@ describe('planUniformTiles', () => {
     const tiles = worker.planUniformTiles(1920, 1080, 384, 24, 576);
     const ys = [...new Set(tiles.map(t => t.y))].sort((a, b) => a - b);
     expect(ys[1] - ys[0]).toBe(384 - 24);
+  });
+
+  it('Hebel 1.2: bounded 576 gate promotes 540p-class frames to single-tile', () => {
+    expect(worker.singleTileMaxHeightForFrame(960, 540, 512)).toBe(576);
+    expect(worker.singleTileMaxHeightForFrame(853, 480, 512)).toBe(576);
+    expect(worker.singleTileMaxHeightForFrame(1920, 540, 512)).toBe(512);
+    expect(worker.singleTileMaxHeightForFrame(1920, 1080, 384)).toBe(384);
+    // End to end through the planner: one tile, not two overlapping ones.
+    const gate = worker.singleTileMaxHeightForFrame(960, 540, 512);
+    expect(worker.planUniformTiles(960, 540, 512, 24, gate)).toEqual([
+      { x: 0, y: 0, width: 960, height: 540 },
+    ]);
   });
 });
 
@@ -333,10 +354,12 @@ describe('worker protocol', () => {
     await initWorker(ort);
 
     const frame = new Float32Array(3 * 2 * 2).fill(0.5);
-    await worker.handleInfer({
-      type: 'infer', id: 1, modelUrl: 'fp32.onnx', modelUrlFp16: 'fp16.onnx',
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 1,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: 'fp16.onnx',
       width: 2, height: 2, data: frame,
-    });
+    }));
     expect(replies[1].ok).toBe(true);
     expect(replies[1].width).toBe(8);
     expect(replies[1].height).toBe(8);
@@ -354,10 +377,12 @@ describe('worker protocol', () => {
     await initWorker(ort);
 
     const frame = new Float32Array(3 * 2 * 2).fill(0.5);
-    await worker.handleInfer({
-      type: 'infer', id: 2, modelUrl: 'fp32.onnx', modelUrlFp16: null,
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 2,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
       width: 2, height: 2, data: frame,
-    });
+    }));
     expect(replies[1].ok).toBe(true);
     const rgba = replies[1].data!;
     expect(rgba.length).toBe(8 * 8 * 4);
@@ -372,10 +397,12 @@ describe('worker protocol', () => {
     await initWorker(ort);
 
     const frame = new Float32Array(3 * 2 * 2).fill(0.5);
-    await worker.handleInfer({
-      type: 'infer', id: 4, modelUrl: 'fp32.onnx', modelUrlFp16: null,
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 4,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
       width: 2, height: 2, data: frame, targetWidth: 4, targetHeight: 4,
-    });
+    }));
     expect(replies[1].ok).toBe(true);
     expect(replies[1].width).toBe(4);
     expect(replies[1].height).toBe(4);
@@ -394,17 +421,21 @@ describe('worker protocol', () => {
     await initWorker(ort);
 
     const frame = new Float32Array(3 * 2 * 2).fill(0.5);
-    await worker.handleInfer({
-      type: 'infer', id: 5, modelUrl: 'fp32.onnx', modelUrlFp16: null,
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 5,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
       width: 2, height: 2, data: frame, targetWidth: 8, targetHeight: 8,
-    });
+    }));
     expect(replies[1].width).toBe(8);
     expect(replies[1].data!.length).toBe(8 * 8 * 4);
 
-    await worker.handleInfer({
-      type: 'infer', id: 6, modelUrl: 'fp32.onnx', modelUrlFp16: null,
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 6,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
       width: 2, height: 2, data: frame, targetWidth: 16, targetHeight: 16,
-    });
+    }));
     expect(replies[2].width).toBe(8);
     expect(replies[2].data!.length).toBe(8 * 8 * 4);
   });
@@ -422,7 +453,7 @@ describe('worker protocol', () => {
           const isFp16 = url.includes('fp16');
           return {
             ...session,
-            async run(feeds: Record<string, { data: Float32Array }>) {
+            async run(feeds: Record<string, { data: Float32Array; dims: number[] }>) {
               if (isFp16) {
                 throw new Error('Failed to create a WebGPU compute pipeline: [Invalid ShaderModule "Clip"] is invalid');
               }
@@ -435,20 +466,24 @@ describe('worker protocol', () => {
     await initWorker(ort);
 
     const frame = new Float32Array(3 * 2 * 2).fill(0.5);
-    await worker.handleInfer({
-      type: 'infer', id: 20, modelUrl: 'fp32.onnx', modelUrlFp16: 'fp16.onnx',
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 20,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: 'fp16.onnx',
       width: 2, height: 2, data: frame,
-    });
+    }));
     // Same-frame fp32 fallback: reply ok despite the fp16 shader failure.
     expect(replies[1].ok).toBe(true);
     expect(replies[1].width).toBe(8);
     expect(created.filter(u => u.includes('fp16'))).toHaveLength(1);
 
     // Sticky skip: the next frame reuses the cached fp32 session, no fp16 attempt.
-    await worker.handleInfer({
-      type: 'infer', id: 21, modelUrl: 'fp32.onnx', modelUrlFp16: 'fp16.onnx',
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 21,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: 'fp16.onnx',
       width: 2, height: 2, data: frame,
-    });
+    }));
     expect(replies[2].ok).toBe(true);
     expect(created.filter(u => u.includes('fp16'))).toHaveLength(1);
     expect(created.filter(u => u === 'fp32.onnx')).toHaveLength(1);
@@ -467,10 +502,12 @@ describe('worker protocol', () => {
     worker.__setSessionCreateTimeoutForTests(30);
 
     const frame = new Float32Array(3 * 2 * 2).fill(0.5);
-    await worker.handleInfer({
-      type: 'infer', id: 30, modelUrl: 'fp32.onnx', modelUrlFp16: null,
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 30,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
       width: 2, height: 2, data: frame,
-    });
+    }));
     expect(replies[1].ok).toBe(false);
     expect(replies[1].error).toContain('timed out');
   });
@@ -481,10 +518,12 @@ describe('worker protocol', () => {
     await initWorker(ort);
 
     const frame = new Float32Array(3 * 2 * 2);
-    await worker.handleInfer({
-      type: 'infer', id: 3, modelUrl: 'fp32.onnx', modelUrlFp16: 'fp16.onnx',
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 3,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: 'fp16.onnx',
       width: 2, height: 2, data: frame,
-    });
+    }));
     expect(replies[1].ok).toBe(false);
     expect(replies[1].error).toContain('simulated create failure');
   });
@@ -524,10 +563,12 @@ describe('worker protocol', () => {
     };
     await initWorker(ort);
     const frame = new Float32Array(3 * 2 * 2).fill(0.5);
-    await worker.handleInfer({
-      type: 'infer', id: 10, modelUrl: 'fp32.onnx', modelUrlFp16: null,
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 10,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
       width: 2, height: 2, data: frame,
-    });
+    }));
     // Should succeed after one rebuild, not report failure
     expect(replies[1].ok).toBe(true);
     expect(replies[1].data).toBeInstanceOf(Uint8Array);
@@ -536,60 +577,247 @@ describe('worker protocol', () => {
   });
 });
 
-describe('isBlackFrame', () => {
-  it('flags a fully black frame as black', () => {
-    const rgba = new Uint8Array(8 * 8 * 4);
-    // rgba already zeros -> black with alpha 0, but detector checks RGB <4 regardless of alpha
-    expect(worker.isBlackFrame(rgba)).toBe(true);
+describe('batched tile inference (Hebel 2.2)', () => {
+  beforeEach(() => {
+    worker.resetWorkerStateForTests();
+    getReplies().length = 0;
   });
 
-  it('does not flag a normal frame with mixed content and small black border', () => {
-    const rgba = new Uint8Array(32 * 32 * 4).fill(128);
-    for (let i = 0; i < rgba.length; i += 4) rgba[i + 3] = 255;
-    // Add 2% black border (top rows)
-    for (let y = 0; y < 2; y += 1) {
-      for (let x = 0; x < 32; x += 1) {
-        const o = (y * 32 + x) * 4;
-        rgba[o] = 0; rgba[o + 1] = 0; rgba[o + 2] = 0;
-      }
+  // 4x600 forces two uniform 4x512 tiles (gate 576 via
+  // singleTileMaxHeightForFrame, tileAxis spill [0, 88]).
+  const W = 4;
+  const H = 600;
+  const gate = 576;
+
+  function tiledFrame(): Float32Array {
+    const frame = new Float32Array(3 * W * H);
+    for (let i = 0; i < frame.length; i += 1) frame[i] = (i % 251) / 251;
+    return frame;
+  }
+
+  function expectedTiles() {
+    return worker.planUniformTiles(W, H, 512, 24, gate);
+  }
+
+  it('runs multi-tile frames in ONE session.run with [B,3,h,w] dims', async () => {
+    const replies = getReplies();
+    const ort = makeFakeOrt();
+    await initWorker(ort);
+    const tiles = expectedTiles();
+    expect(tiles).toHaveLength(2);
+
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 30,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
+      width: W, height: H, data: tiledFrame(),
+    }));
+    expect(replies[1].ok).toBe(true);
+    expect(replies[1].width).toBe(W * 4);
+    expect(replies[1].height).toBe(H * 4);
+    expect(replies[1].data!.length).toBe(W * 4 * H * 4 * 4);
+    // Exactly one launch for the whole frame (was: one per tile).
+    expect(ort.__runCalls()).toBe(1);
+    expect(ort.__runDims()).toEqual([[2, 3, 512, 4]]);
+    expect(replies[1].path).toBe('cpu-tiles-batched-gpu');
+  });
+
+  it('batched result matches the sequential reference composition', async () => {
+    const replies = getReplies();
+    const ort = makeFakeOrt();
+    await initWorker(ort);
+    const frame = tiledFrame();
+    const tiles = expectedTiles();
+
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 31,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
+      width: W, height: H, data: frame,
+    }));
+    // Independent reference through the exported (unit-tested) helpers with
+    // the same per-tile fake math (out = min(1, 2 * in)): apply the fake's
+    // elementwise rule to the stacked batch, split, and compose — the same
+    // order the worker uses.
+    const batch = worker.stackTilesToBatch(frame, W, H, tiles);
+    const fakeOut = new Float32Array(batch.length * 16);
+    for (let i = 0; i < fakeOut.length; i += 1) {
+      fakeOut[i] = Math.min(1, batch[i % batch.length] * 2);
     }
-    // Only ~6% dark -> should NOT be considered black (threshold 95%)
-    expect(worker.isBlackFrame(rgba)).toBe(false);
+    const split = worker.splitBatchedOutput(fakeOut, tiles);
+    const reference = worker.composeTilesToRgba8(split, W * 4, H * 4, 48);
+    expect(replies[1].data).toEqual(reference);
   });
 
-  it('does not flag a 50% dark frame as black', () => {
-    const rgba = new Uint8Array(16 * 16 * 4);
-    for (let i = 0; i < rgba.length; i += 4) {
-      const pixel = i / 4;
-      const isDark = pixel % 2 === 0;
-      rgba[i] = isDark ? 0 : 200;
-      rgba[i + 1] = isDark ? 0 : 200;
-      rgba[i + 2] = isDark ? 0 : 200;
-      rgba[i + 3] = 255;
+  it('downgrades sticky-sequential when batching fails, still serving frames', async () => {
+    const replies = getReplies();
+    const ort = makeFakeOrt({ failBatch: true });
+    await initWorker(ort);
+    const frame = tiledFrame();
+
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 32,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
+      width: W, height: H, data: frame,
+    }));
+    expect(replies[1].ok).toBe(true);
+    expect(replies[1].data!.length).toBe(W * 4 * H * 4 * 4);
+    // One failed batch attempt + two sequential tile runs.
+    expect(ort.__runCalls()).toBe(3);
+    expect(ort.__runDims()[0]).toEqual([2, 3, 512, 4]);
+    // Second frame skips the doomed batch attempt: two sequential runs only.
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 33,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
+      width: W, height: H, data: frame,
+    }));
+    expect(replies[2].ok).toBe(true);
+    expect(ort.__runCalls()).toBe(5);
+    expect(ort.__runDims().slice(3)).toEqual([[1, 3, 512, 4], [1, 3, 512, 4]]);
+  });
+});
+
+describe('wasm-simd compose (Hebel E5)', () => {
+  beforeEach(() => {
+    worker.resetWorkerStateForTests();
+    getReplies().length = 0;
+    worker.__setPixelsModuleForTests(null);
+  });
+
+  /** Fake pixels module: serves canned bytes from its own memory. */
+  function makeFakePixels() {
+    const memory = new WebAssembly.Memory({ initial: 16 });
+    const calls: string[] = [];
+    let pending = new Uint8Array(0);
+    return {
+      calls,
+      memory,
+      setOutput: (bytes: Uint8Array) => { pending = bytes; },
+      stage_ptr: (kind: number, len: number) => {
+        calls.push(`stage:${kind}:${len}`);
+        return 64;
+      },
+      compose_exec: (...args: number[]) => {
+        calls.push(`exec:${args.join(',')}`);
+        new Uint8Array(memory.buffer, 64, pending.length).set(pending);
+      },
+      compose_single_exec: (pixels: number) => {
+        calls.push(`single:${pixels}`);
+        new Uint8Array(memory.buffer, 64, pending.length).set(pending);
+      },
+      compose_output_ptr: () => 64,
+      compose_output_len: () => pending.length,
+    };
+  }
+
+  it('composeSingleTileToRgba8 converts planar exactly', () => {
+    const rgb = new Float32Array([0, 0.5, 1, 0.25, 0.75, 0, 1, 0.5, 0.25, 0, 1, 0.75]);
+    expect(worker.composeSingleTileToRgba8(rgb, 2, 2)).toEqual(new Uint8Array([
+      0, 191, 64, 255,
+      128, 0, 0, 255,
+      255, 255, 255, 255,
+      64, 128, 191, 255,
+    ]));
+    expect(() => worker.composeSingleTileToRgba8(new Float32Array(7), 2, 2)).toThrow();
+  });
+
+  it('single-lane matches the full lane at high PSNR', () => {
+    let state = 4242;
+    const rand = () => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state / 4294967296;
+    };
+    const rgb = new Float32Array(3 * 32 * 32);
+    for (let i = 0; i < rgb.length; i += 1) rgb[i] = rand();
+    const fast = worker.composeSingleTileToRgba8(rgb, 32, 32);
+    const full = worker.composeTilesToRgba8(
+      [{ x: 0, y: 0, width: 8, height: 8, rgb }], 32, 32, 48,
+    );
+    let mse = 0;
+    for (let i = 0; i < fast.length; i += 1) {
+      const d = (fast[i] ?? 0) - (full[i] ?? 0);
+      mse += d * d;
     }
-    expect(worker.isBlackFrame(rgba)).toBe(false);
+    mse /= fast.length;
+    const db = mse === 0 ? Number.POSITIVE_INFINITY : 10 * Math.log10(255 * 255 / mse);
+    expect(db).toBeGreaterThanOrEqual(100);
   });
 
-  it('flags a 99% black frame as black', () => {
-    const rgba = new Uint8Array(32 * 32 * 4).fill(0);
-    for (let i = 0; i < rgba.length; i += 4) rgba[i + 3] = 255;
-    // Make 1% bright pixels
-    for (let i = 0; i < 10; i += 1) {
-      const o = i * 4;
-      rgba[o] = 200; rgba[o + 1] = 200; rgba[o + 2] = 200;
-    }
-    expect(worker.isBlackFrame(rgba)).toBe(true);
+  it('serves single-tile frames via the wasm single lane', async () => {
+    const replies = getReplies();
+    const ort = makeFakeOrt();
+    await initWorker(ort);
+    const pixels = makeFakePixels();
+    worker.__setPixelsModuleForTests(pixels);
+    const frame = new Float32Array(3 * 2 * 2).fill(0.5);
+    // Fake model output doubled to white; canned reply must pass through.
+    const white = new Uint8Array(8 * 8 * 4).fill(255);
+    pixels.setOutput(white);
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 40,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
+      width: 2, height: 2, data: frame,
+    }));
+    expect(replies[1].ok).toBe(true);
+    expect(replies[1].path).toBe('cpu-single-wasm');
+    expect(replies[1].data).toEqual(white);
+    expect(pixels.calls.some(c => c.startsWith('single:'))).toBe(true);
+    expect(pixels.calls.some(c => c.startsWith('exec:'))).toBe(false);
   });
 
-  it('handles tiny textures without crashing', () => {
-    const rgba = new Uint8Array([0, 0, 0, 255]);
-    expect(worker.isBlackFrame(rgba)).toBe(true);
-    const rgba2 = new Uint8Array([200, 100, 50, 255]);
-    expect(worker.isBlackFrame(rgba2)).toBe(false);
+  it('serves multi-tile frames via the wasm multi lane', async () => {
+    const replies = getReplies();
+    const ort = makeFakeOrt();
+    await initWorker(ort);
+    const pixels = makeFakePixels();
+    worker.__setPixelsModuleForTests(pixels);
+    const W = 4;
+    const H = 600;
+    const frame = new Float32Array(3 * W * H).fill(0.25);
+    const out = new Uint8Array(W * 4 * H * 4 * 4).fill(7);
+    pixels.setOutput(out);
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 41,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
+      width: W, height: H, data: frame,
+    }));
+    expect(replies[1].ok).toBe(true);
+    expect(replies[1].path).toBe('cpu-tiles-wasm');
+    expect(replies[1].data).toEqual(out);
+    expect(pixels.calls).toContain('exec:16,2400,48,2,16,2048');
   });
 
-  it('treats null/empty as black (safe fallback)', () => {
-    expect(worker.isBlackFrame(null as unknown as Uint8Array)).toBe(true);
-    expect(worker.isBlackFrame(new Uint8Array(0))).toBe(true);
+  it('falls back to JS lanes when the wasm module traps (sticky)', async () => {
+    const replies = getReplies();
+    const ort = makeFakeOrt();
+    await initWorker(ort);
+    const pixels = makeFakePixels();
+    pixels.compose_single_exec = () => { throw new Error('simulated wasm trap'); };
+    worker.__setPixelsModuleForTests(pixels);
+    const frame = new Float32Array(3 * 2 * 2).fill(0.5);
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 42,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
+      width: 2, height: 2, data: frame,
+    }));
+    // Fake model doubles 0.5 to white; JS single lane serves it.
+    expect(replies[1].ok).toBe(true);
+    expect(replies[1].path).toBe('cpu-single-gpu');
+    expect(replies[1].data![0]).toBe(255);
+    const callsAfterFirst = pixels.calls.length;
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 43,
+      modelUrl: 'fp32.onnx',
+      modelUrlFp16: null,
+      width: 2, height: 2, data: frame,
+    }));
+    expect(replies[2].path).toBe('cpu-single-gpu');
+    // Sticky disable: no further wasm calls after the trap.
+    expect(pixels.calls.length).toBe(callsAfterFirst);
   });
 });

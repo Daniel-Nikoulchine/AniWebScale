@@ -5,6 +5,7 @@ import {
 } from '../constants';
 import type {
   Anime4KWebExtSettings,
+  RealEsrganCapHeight,
   RenderStats,
 } from '../types';
 import {
@@ -33,8 +34,11 @@ import { isVideoInFullscreenContext } from '../shared/fullscreen-video';
 import { OverlayManager } from './overlay-manager';
 import { FullscreenLayoutManager } from './fullscreen-layout-manager';
 import { BackendState } from './backend-state';
+import { createRenderStatsTap } from './render-stats-tap';
 import { EnhancerLifecycle } from './enhancer-lifecycle';
 import { OverloadTracker } from './render-stats';
+import { RealEsrganAutoCap } from '../shared/realesrgan-auto-cap';
+import { formatRealEsrganError, REALESRGAN_ERROR_CODES } from '../shared/realesrgan-error-codes';
 import { EventScope } from '../shared/event-scope';
 import type { Renderer } from './renderer';
 import { hasPlayerFullscreenSignal, showEnhancementNotification } from './video-enhancer-view';
@@ -56,8 +60,28 @@ export class VideoEnhancer {
   private performanceWarning = false;
   private lastNativeDroppedFrames = 0;
   private readonly nativeOverloadTracker = new OverloadTracker();
+  /**
+   * Hebel C: ephemeral RealESRGAN inference-cap override (480->432->405->360
+   * on sustained overload, back up on headroom). Lives only while a WebGPU
+   * renderer serves REALESRGAN; never persisted, reset on every settings
+   * change and cleared with the renderer.
+   */
+  private autoCap: RealEsrganAutoCap | null = null;
+  /**
+   * Stats fan-out: overlay, auto-cap and future consumers subscribe here
+   * instead of hand-wiring new paths through the producer. Emission keeps
+   * the producer cadence (renderer 500 ms windows, native metrics events).
+   */
+  private readonly statsTap = createRenderStatsTap();
+  /**
+   * Latest stats window (500 ms cadence). Retained so E2E runs can sample
+   * live inference timings without scraping the overlay DOM.
+   */
+  private lastStats: RenderStats | null = null;
   private destroyed = false;
   private switchingFromNativeRevision: number | null = null;
+  private switchingFromNativeSessionId: string | null = null;
+  private lastEncryptedHandlingAt = 0;
   private readonly targetResizeObserver: ResizeObserver;
   private targetUpdateTimer?: number;
   private nativePlaybackTimer?: number;
@@ -106,9 +130,14 @@ export class VideoEnhancer {
     // Events are matched to the live session id, not to the transition
     // phase: a terminal host event can arrive while a configuration update
     // is between phases, and dropping it would leave a zombie session whose
-    // cleanup never runs. Expected-stop paths null the session id first, so
-    // their events no longer match.
-    if (!matchesExpectedNativeEvent(this.nativeSessionId, detail.sessionId)) return;
+    // cleanup never runs.
+    //
+    // Exception: an intentional native->webgpu switch nulls the session id
+    // before asking the host to stop, so its terminal event no longer matches
+    // the (null) live id. That event is still expected and must be swallowed
+    // explicitly via the captured switch session id below.
+    if (!matchesExpectedNativeEvent(this.nativeSessionId, detail.sessionId)
+      && !(this.switchingFromNativeSessionId !== null && detail.sessionId === this.switchingFromNativeSessionId)) return;
     if (blocksNativeRetry(detail)) this.nativeRetryBlocked = true;
     if (detail.type === 'metrics') {
       if (!this.backend.isNativeActive) return;
@@ -128,8 +157,7 @@ export class VideoEnhancer {
         droppedFrames,
         warning: this.performanceWarning,
       };
-      if (this.currentSettings?.statsEnabled) this.overlay.setStats(stats);
-      else this.overlay.setStats(null);
+      this.handleStats(stats);
       return;
     }
     const state = detail.state;
@@ -188,6 +216,9 @@ export class VideoEnhancer {
       this.encryptedDetected = true;
     }
     this.overlay = OverlayManager.create(this.video);
+    // Stats fan-out: overlay forwarding and auto-cap ride the tap, so the
+    // next consumer subscribes instead of touching the producer.
+    this.wireStatsConsumers();
     this.fullscreenLayout = new FullscreenLayoutManager(this.video);
     this.targetResizeObserver = new ResizeObserver(this.targetChangeHandler);
     this.targetResizeObserver.observe(this.video);
@@ -332,7 +363,7 @@ export class VideoEnhancer {
     const canvas = this.overlay.getCanvas();
     canvas.width = rendererTargetDimensions.width;
     canvas.height = rendererTargetDimensions.height;
-    const effects = getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight);
+    const effects = getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight, settings.realesrganPrecision);
     this.currentModeId = MODE_TO_ID[settings.mode];
 
     let createdRenderer: Renderer | null = null;
@@ -464,10 +495,9 @@ export class VideoEnhancer {
       fallbackErrorMessage: string;
       throwOnFailure?: boolean;
     },
+    existingRevision?: number,
   ): Promise<boolean> {
-    const revision = this.beginTransition();
-    this.releaseWebGPUResources();
-    this.overlay.hideCanvas();
+    const revision = existingRevision ?? this.beginTransition();
     if (!allowsNativeFallback(settings.backend)) {
       await this.stopEnhancement({ stopNative: false });
       const blockedMessage = options.blockedMessage
@@ -476,6 +506,8 @@ export class VideoEnhancer {
       if (options.throwOnFailure) throw new Error(blockedMessage);
       return false;
     }
+    this.releaseWebGPUResources();
+    this.overlay.hideCanvas();
     try {
       if (!await this.requestNativeFallback(reason, settings, revision)) return false;
     } catch (error) {
@@ -488,6 +520,12 @@ export class VideoEnhancer {
       return false;
     }
     if (!this.isTransitionCurrent(revision)) return false;
+    // Only one enhancer may own the active slot: a competing video could
+    // have committed while this fallback was in flight (mirrors startEnhancement).
+    if (VideoEnhancer.activeEnhancer && VideoEnhancer.activeEnhancer !== this) {
+      await VideoEnhancer.activeEnhancer.stopEnhancement({ releaseClaim: false });
+      if (!this.isTransitionCurrent(revision)) return false;
+    }
     VideoEnhancer.activeEnhancer = this;
     this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
     return true;
@@ -500,13 +538,19 @@ export class VideoEnhancer {
     // path below wins instead of leaving protected content on WebGPU.
     if (!this.renderer && !this.backend.isNativeActive && !this.backend.isStarting) return;
     if (this.backend.isNativeActive) return;
+    // The encrypted + page-protected signals often arrive as a burst for the
+    // same key session; revision guards would absorb the duplicates anyway,
+    // but skip the redundant settings fetch + transition churn outright.
+    const now = Date.now();
+    if (now - this.lastEncryptedHandlingAt < 500) return;
+    this.lastEncryptedHandlingAt = now;
     const revision = this.beginTransition();
     const settings = this.currentSettings ?? await getSettings();
     if (!this.isTransitionCurrent(revision)) return;
     await this.switchToNative('eme', settings, {
       blockedMessage: 'Protected playback cannot use the forced WebGPU backend. Select Auto or Native instead.',
       fallbackErrorMessage: 'Protected playback cannot be captured.',
-    });
+    }, revision);
   }
 
   private async handleRendererError(error: Error): Promise<void> {
@@ -522,13 +566,79 @@ export class VideoEnhancer {
     await this.switchToNative(reason, settings, {
       blockedMessage: error.message || 'The video frame cannot be processed with WebGPU.',
       fallbackErrorMessage: 'Video frames cannot be processed on this site.',
+    }, revision);
+  }
+
+  /**
+   * Subscribes the built-in stats consumers. Called by the constructor;
+   * white-box tests call it too instead of duplicating the wiring, so new
+   * consumers cannot desync the harness.
+   */
+  private wireStatsConsumers(): void {
+    this.statsTap.subscribe(stats => {
+      if (this.currentSettings?.statsEnabled) this.overlay.setStats(stats);
+      else this.overlay.setStats(null);
     });
+    this.statsTap.subscribe(stats => this.feedAutoCap(stats));
   }
 
   private handleStats(stats: RenderStats): void {
     this.performanceWarning = stats.warning;
-    if (this.currentSettings?.statsEnabled) this.overlay.setStats(stats);
-    else this.overlay.setStats(null);
+    this.lastStats = stats;
+    this.statsTap.emit(stats);
+  }
+
+  /**
+   * Next stats consumer slot: overlay and auto-cap already subscribe, so a
+   * new consumer adds one line here instead of a path through the producer.
+   */
+  public subscribeStats(listener: (stats: RenderStats) => void): () => void {
+    return this.statsTap.subscribe(listener);
+  }
+
+  private feedAutoCap(stats: RenderStats): void {
+    // Hebel C: sustained overload steps the live RealESRGAN cap down the
+    // ladder (and back up on headroom) without touching stored settings.
+    const settings = this.currentSettings;
+    if (settings?.mode !== 'REALESRGAN' || !this.renderer || !this.backend.isWebGPUActive) return;
+    this.autoCap ??= new RealEsrganAutoCap(settings.realesrganCapHeight);
+    const step = this.autoCap.onStats({
+      warning: stats.warning,
+      inferMs: stats.realesrgan?.inferMs ?? null,
+      frameBudgetMs: stats.frameBudgetMs ?? null,
+      now: performance.now(),
+    });
+    if (step !== null) void this.lifecycle.enqueue(() => this.applyAutoCapStep(step));
+  }
+
+  /**
+   * Test-only: feed one synthetic sustained-overload sample so E2E runs can
+   * prove the live Auto-Cap step without waiting for real GPU overload.
+   * No-op in production builds. Returns the effective cap afterwards.
+   */
+  public e2eInjectOverloadStats(): number | null {
+    if (typeof __ANIME4K_E2E__ === 'undefined' || !__ANIME4K_E2E__) return null;
+    this.handleStats({
+      fps: 24,
+      renderMs: 60,
+      droppedFrames: 0,
+      warning: true,
+      realesrgan: {
+        readbackMs: 5, inferMs: 50, composeMs: 2, runnerPct: 100, gpuComposePct: 0, nativePct: 100,
+        count: 12, enhancedFps: 10,
+      },
+      frameBudgetMs: 1000 / 24,
+    });
+    return this.autoCap?.effectiveCap ?? null;
+  }
+
+  /**
+   * Test-only: latest stats window for E2E timing gates. No-op in
+   * production builds. Returns the RealESRGAN slice or null.
+   */
+  public e2eLastStats(): RenderStats['realesrgan'] {
+    if (typeof __ANIME4K_E2E__ === 'undefined' || !__ANIME4K_E2E__) return undefined;
+    return this.lastStats?.realesrgan;
   }
 
 
@@ -536,6 +646,41 @@ export class VideoEnhancer {
     if (!this.renderer || this.destroyed) return;
     if (this.targetUpdateTimer) window.clearTimeout(this.targetUpdateTimer);
     this.targetUpdateTimer = window.setTimeout(() => void this.refreshAutoTarget(), 150);
+  }
+
+  /**
+   * Hebel C: commit one Auto-Cap ladder step on the live renderer. Runs
+   * inside the serialized lifecycle so it can never interleave with a
+   * settings change or backend switch; stale steps (a newer step or a
+   * settings reset landed first) are dropped via the effective-cap check.
+   */
+  private async applyAutoCapStep(cap: RealEsrganCapHeight): Promise<void> {
+    const renderer = this.renderer;
+    const settings = this.currentSettings;
+    if (this.destroyed || !renderer || !settings || settings.mode !== 'REALESRGAN') return;
+    if (!this.autoCap || this.autoCap.effectiveCap !== cap) return;
+    const targetDimensions = calculateAutoTargetDimensions(this.video);
+    const canvas = this.overlay.getCanvas();
+    if (canvas.width !== targetDimensions.width || canvas.height !== targetDimensions.height) {
+      canvas.width = targetDimensions.width;
+      canvas.height = targetDimensions.height;
+    }
+    try {
+      await renderer.updateConfiguration({
+        effects: getEffectsForPreset(settings.mode, settings.quality, cap, settings.realesrganPrecision),
+        targetDimensions,
+        frameGenerationEnabled: settings.frameGenerationEnabled,
+      });
+    } catch (error) {
+      // The policy's override no longer describes the live pipeline: drop
+      // it so the next overload verdict re-steps from the actual cap.
+      this.autoCap?.reset(settings.realesrganCapHeight, performance.now());
+      if (!this.destroyed && this.renderer === renderer) await this.handleRendererError(error as Error);
+      return;
+    }
+    // Coded so the E2E gate counts ladder steps by code, not by prose.
+    console.info(formatRealEsrganError(REALESRGAN_ERROR_CODES.AUTO_CAP_STEP,
+      `RealESRGAN auto-cap -> ${cap}p (sustained ${cap < settings.realesrganCapHeight ? 'overload' : 'headroom'})`));
   }
 
   private async refreshAutoTarget(): Promise<void> {
@@ -547,7 +692,7 @@ export class VideoEnhancer {
     if (canvas.width === targetDimensions.width && canvas.height === targetDimensions.height) return;
     try {
       await renderer.updateConfiguration({
-        effects: getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight),
+        effects: getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight, settings.realesrganPrecision),
         targetDimensions,
         frameGenerationEnabled: settings.frameGenerationEnabled,
       });
@@ -569,6 +714,10 @@ export class VideoEnhancer {
     const previousModeId = this.currentModeId;
     this.currentSettings = newSettings;
     this.currentModeId = processingEnabled ? MODE_TO_ID[newSettings.mode] : null;
+    // Hebel C: a settings change owns the cap again — retarget (or drop)
+    // the ephemeral override so it can never fight the stored setting.
+    if (newSettings.mode === 'REALESRGAN') this.autoCap?.reset(newSettings.realesrganCapHeight, performance.now());
+    else this.autoCap = null;
     this.applyFullscreenMarker(processingEnabled);
 
     if (!processingEnabled) {
@@ -636,6 +785,7 @@ export class VideoEnhancer {
       const revision = this.beginTransition();
       this.switchingFromNativeRevision = revision;
       const nativeSessionId = this.nativeSessionId;
+      this.switchingFromNativeSessionId = nativeSessionId;
       this.nativeSessionId = null;
       this.stopNativePlaybackHeartbeat();
       this.nativeOverloadTracker.reset();
@@ -656,6 +806,10 @@ export class VideoEnhancer {
         if (!claim.ok) throw new Error(claim.message || 'Anime4K could not reclaim the active video.');
         if (!await this.initRenderer(newSettings, revision)) return;
         if (!this.isTransitionCurrent(revision)) return;
+        if (VideoEnhancer.activeEnhancer && VideoEnhancer.activeEnhancer !== this) {
+          await VideoEnhancer.activeEnhancer.stopEnhancement({ releaseClaim: false });
+          if (!this.isTransitionCurrent(revision)) return;
+        }
         VideoEnhancer.activeEnhancer = this;
         this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
         return;
@@ -668,6 +822,7 @@ export class VideoEnhancer {
         throw error;
       } finally {
         if (this.switchingFromNativeRevision === revision) this.switchingFromNativeRevision = null;
+        this.switchingFromNativeSessionId = null;
       }
     }
     if (!this.renderer) return;
@@ -683,7 +838,7 @@ export class VideoEnhancer {
     const renderer = this.renderer;
     try {
       await renderer.updateConfiguration({
-        effects: getEffectsForPreset(newSettings.mode, newSettings.quality, newSettings.realesrganCapHeight),
+        effects: getEffectsForPreset(newSettings.mode, newSettings.quality, newSettings.realesrganCapHeight, newSettings.realesrganPrecision),
         targetDimensions,
         frameGenerationEnabled: newSettings.frameGenerationEnabled,
       });
@@ -730,6 +885,17 @@ export class VideoEnhancer {
 
   public async reattach(newVideo: HTMLVideoElement): Promise<void> {
     if (this.destroyed) return;
+    // Drop pending debounce work tied to the old node: a queued auto-target
+    // refresh or fullscreen reconcile could otherwise fire mid-swap against
+    // half-updated state. Both are rescheduled below as needed.
+    if (this.targetUpdateTimer) {
+      window.clearTimeout(this.targetUpdateTimer);
+      this.targetUpdateTimer = undefined;
+    }
+    if (this.fullscreenDebounceTimer) {
+      window.clearTimeout(this.fullscreenDebounceTimer);
+      this.fullscreenDebounceTimer = undefined;
+    }
     this.video.removeEventListener('encrypted', this.encryptedHandler);
     this.videoEvents.dispose();
     this.videoEvents = new EventScope();
@@ -768,18 +934,25 @@ export class VideoEnhancer {
     if (this.destroyed) return;
     this.destroyed = true;
     this.lifecycle.invalidate();
+    // Stop the backend BEFORE backend.destroy() flips the phase to idle:
+    // stopEnhancement snapshots native ownership from the backend phase, and
+    // a destroyed machine reads as idle — the native host would keep
+    // capturing a dead player's region with no owner left to stop it.
+    void this.stopEnhancement().catch(error => {
+      console.warn('[Anime4K] Failed to finish enhancement cleanup:', error);
+    });
     this.backend.destroy();
     VideoEnhancer.managedEnhancers.delete(this);
     this.video.removeEventListener('encrypted', this.encryptedHandler);
     this.targetResizeObserver.disconnect();
     this.events?.dispose();
+    this.videoEvents.dispose();
     this.unsubscribeFullscreenContext();
     if (this.targetUpdateTimer) window.clearTimeout(this.targetUpdateTimer);
     if (this.fullscreenDebounceTimer) window.clearTimeout(this.fullscreenDebounceTimer);
+    this.targetUpdateTimer = undefined;
+    this.fullscreenDebounceTimer = undefined;
     this.stopNativePlaybackHeartbeat();
-    void this.stopEnhancement().catch(error => {
-      console.warn('[Anime4K] Failed to finish enhancement cleanup:', error);
-    });
     this.overlay.destroy();
     this.fullscreenLayout.exit();
     if (this.video.dataset.anime4kVideoId === this.videoId) delete this.video.dataset.anime4kVideoId;
@@ -788,13 +961,25 @@ export class VideoEnhancer {
 
   public async stopEnhancement(options: { stopNative?: boolean; releaseClaim?: boolean } = {}): Promise<void> {
     const { stopNative = true, releaseClaim = true } = options;
-    this.beginTransition();
+    // Snapshot native ownership BEFORE beginTransition() flips the phase to
+    // 'starting' — reading it afterwards made this guard permanently false,
+    // so an active native session was only ever stopped while a fallback
+    // request was still in flight.
     const wasNativeActive = this.backend.isNativeActive;
     const nativeSessionId = this.nativeSessionId;
+    this.beginTransition();
+    // Invalidate any debounced fullscreen reconcile: without this a pending
+    // timer could restart enhancement right after this explicit stop.
+    this.fullscreenRevision += 1;
+    if (this.fullscreenDebounceTimer) {
+      window.clearTimeout(this.fullscreenDebounceTimer);
+      this.fullscreenDebounceTimer = undefined;
+    }
     this.releaseWebGPUResources();
     this.backend.markIdle();
     this.nativeSessionId = null;
     this.switchingFromNativeRevision = null;
+    this.switchingFromNativeSessionId = null;
     this.stopNativePlaybackHeartbeat();
     this.overlay.hideCanvas();
     this.fullscreenLayout.exit();
@@ -823,6 +1008,7 @@ export class VideoEnhancer {
   private releaseWebGPUResources(): void {
     const renderer = this.renderer;
     this.renderer = null;
+    this.autoCap = null;
     renderer?.destroy();
   }
 
@@ -843,7 +1029,13 @@ export class VideoEnhancer {
 
   private async reconcileFullscreen(revision: number): Promise<void> {
     if (this.destroyed || revision !== this.fullscreenRevision) return;
-    const settings = this.currentSettings ?? await getSettings();
+    let settings: Anime4KWebExtSettings;
+    try {
+      settings = this.currentSettings ?? await getSettings();
+    } catch (error) {
+      console.info('[Anime4K] Could not load settings for fullscreen reconcile:', error instanceof Error ? error.message : String(error));
+      return;
+    }
     if (this.destroyed || revision !== this.fullscreenRevision) return;
     this.currentSettings = settings;
     const processingEnabled = isProcessingEnabled(settings.mode, settings.frameGenerationEnabled);
@@ -858,12 +1050,23 @@ export class VideoEnhancer {
       && !this.nativeRetryBlocked;
 
     if (shouldRun) {
-      if (!this.renderer && !this.backend.isNativeActive && !this.backend.isStarting
-          && !this.native.hasPendingFallback(this.videoId)) {
+      // Refresh the layout on every reconcile so a fullscreen element change
+      // re-targets a running session (enter() is a no-op when unchanged).
+      if (this.renderer || this.backend.isNativeActive) this.fullscreenLayout.enter();
+      // A cancellation-marked fallback is still settling but must not block a
+      // fresh start the way a live request does (see hasActiveFallback).
+      // autoFullscreenEnabled=false keeps manual (popup-started) sessions
+      // working but stops the reconcile from auto-starting new ones.
+      if (settings.autoFullscreenEnabled
+          && !this.renderer && !this.backend.isNativeActive && !this.backend.isStarting
+          && !this.native.hasActiveFallback(this.videoId)) {
         this.fullscreenLayout.enter();
         this.automaticSession = true;
         await this.startEnhancement(settings);
-        if (!this.renderer && !this.backend.isNativeActive) this.automaticSession = false;
+        if (!this.renderer && !this.backend.isNativeActive) {
+          this.automaticSession = false;
+          this.fullscreenLayout.exit();
+        }
       }
       return;
     }
@@ -878,9 +1081,10 @@ export class VideoEnhancer {
   private isPreferredFullscreenVideo(): boolean {
     // The fullscreen context owns the election: every managed, undestroyed
     // enhancer's video competes; larger rendered area wins, ties break by
-    // the lower video id.
+    // the lower video id. Detached (stashed) videos are excluded: their
+    // removed nodes would otherwise keep voting with stale geometry.
     const candidates = [...VideoEnhancer.managedEnhancers]
-      .filter(enhancer => !enhancer.destroyed)
+      .filter(enhancer => !enhancer.destroyed && enhancer.video.isConnected)
       .map(enhancer => ({ video: enhancer.video, videoId: enhancer.videoId }));
     return electFullscreenCandidate(candidates)?.video === this.video;
   }

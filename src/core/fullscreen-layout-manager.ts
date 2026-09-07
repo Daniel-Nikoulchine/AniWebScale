@@ -19,6 +19,8 @@ interface LayoutState {
   root: HTMLElement;
   video: HTMLVideoElement;
   ancestors: HTMLElement[];
+  /** The fullscreen element this layout was installed for. */
+  fullscreen: Element;
   rootStyles?: TemporaryInlineStyles;
   videoStyles?: TemporaryInlineStyles;
 }
@@ -41,7 +43,14 @@ export class FullscreenLayoutManager {
    * fullscreen-context module that already resolved it.
    */
   public enter(fullscreen: Element | null = fullscreenContext.element): void {
-    if (!fullscreen || this.state) return;
+    if (!fullscreen) return;
+    // A fullscreen element change without an intervening stop (player moves
+    // fullscreen between containers) must re-target the layout instead of
+    // keeping styles pinned to the stale root.
+    if (this.state && (this.state.fullscreen !== fullscreen || this.state.video !== this.video)) {
+      this.exit();
+    }
+    if (this.state) return;
     activeManager?.exit();
 
     // Use the browser's fullscreen element itself as the layout root instead
@@ -56,11 +65,13 @@ export class FullscreenLayoutManager {
       ? fullscreen
       : choosePlayerSurface(this.video, fullscreen);
     const ancestors = playerAncestorPath(root, fullscreen);
-    const state: LayoutState = { root, video: this.video, ancestors };
+    const state: LayoutState = { root, video: this.video, ancestors, fullscreen };
     this.state = state;
     activeManager = this;
     this.installStyle();
-    document.documentElement.setAttribute(ANIME4K_FULLSCREEN_DOCUMENT_ATTR, 'true');
+    // documentElement always exists in a rendered page, but content scripts
+    // can run during early parsing; never crash the reconcile on null.
+    document.documentElement?.setAttribute(ANIME4K_FULLSCREEN_DOCUMENT_ATTR, 'true');
     root.setAttribute(ANIME4K_FULLSCREEN_ROOT_ATTR, 'true');
     this.video.setAttribute(ANIME4K_FULLSCREEN_VIDEO_ATTR, 'true');
     ancestors.forEach(element => element.setAttribute(ANIME4K_FULLSCREEN_KEEP_ATTR, 'true'));
@@ -100,13 +111,13 @@ export class FullscreenLayoutManager {
     this.state = null;
     if (activeManager === this) {
       activeManager = null;
-      document.documentElement.removeAttribute(ANIME4K_FULLSCREEN_DOCUMENT_ATTR);
+      document.documentElement?.removeAttribute(ANIME4K_FULLSCREEN_DOCUMENT_ATTR);
       document.getElementById(STYLE_ID)?.remove();
     }
   }
 
   private installStyle(): void {
-    if (document.getElementById(STYLE_ID)) return;
+    if (typeof document === 'undefined' || document.getElementById(STYLE_ID)) return;
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
@@ -163,6 +174,6 @@ export class FullscreenLayoutManager {
         background: #000 !important;
       }
     `;
-    (document.head ?? document.documentElement).appendChild(style);
+    (document.head ?? document.documentElement)?.appendChild(style);
   }
 }

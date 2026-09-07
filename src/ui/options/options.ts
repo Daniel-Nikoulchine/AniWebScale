@@ -8,6 +8,7 @@ import { themeManager, type ThemeMode } from '../theme-manager';
 import { renderEnhancementSelects, renderEnhancementToggles, renderToggle } from '../enhancement-controls';
 import { refreshModeUi } from '../mode-ui';
 import { createSettingsController, syncRenderSettings, type SettingsController } from '../settings-controller';
+import { containsRenderSettingChange } from '../../utils/settings-change';
 
 import { localizeDocument, message, initI18n, setUiLanguage, getUiLanguage, type UiLanguage } from '../i18n';
 import { createPermissionController } from './permissions';
@@ -27,13 +28,13 @@ function showStatus(text: string): void {
 
 // ── Init ──────────────────────────────────────────────────────────────────
 
-document.addEventListener('DOMContentLoaded', async () => {
+async function initOptions(): Promise<void> {
   await initI18n();
   localizeDocument();
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
   );
-  const { mode, quality, backend, realesrganCap } = controls;
+  const { mode, quality, backend, realesrganCap, realesrganPrecision } = controls;
   const toggles = renderEnhancementToggles(
     document.getElementById('enhancement-toggles') as HTMLDivElement,
     { includeStatistics: true },
@@ -74,6 +75,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   quality.value = settings.quality;
   backend.value = settings.backend;
   if (realesrganCap) realesrganCap.value = String(settings.realesrganCapHeight);
+  if (realesrganPrecision) realesrganPrecision.value = settings.realesrganPrecision;
   statistics.checked = settings.statsEnabled;
   frameGeneration.checked = settings.frameGenerationEnabled;
   theme.value = initialTheme;
@@ -134,11 +136,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     quality,
     backend,
     realesrganCap,
+    realesrganPrecision,
     frameGeneration,
     compatibilityHint,
   });
   settingsController = createSettingsController({
-    controls: { mode, quality, backend, realesrganCap, statistics, frameGeneration },
+    controls: { mode, quality, backend, realesrganCap, realesrganPrecision, statistics, frameGeneration },
     additionalControls: [verboseLogging],
     getLocalSettings: () => ({ verboseLogging: verboseLogging.checked }),
     onChange: updateModeUi,
@@ -169,7 +172,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, statistics, frameGeneration }, { verboseLogging })) updateModeUi();
+    // Refresh hints whenever any render key changes, not only when a bound
+    // control moved: keys without a visible control (e.g. autoFullscreen)
+    // still affect the UI state.
+    const renderChanged = containsRenderSettingChange(changes as Record<string, unknown>);
+    if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, realesrganPrecision, statistics, frameGeneration }, { verboseLogging })) updateModeUi();
+    else if (renderChanged) updateModeUi();
     if (typeof changes.theme?.newValue === 'string'
       && ['light', 'dark', 'auto'].includes(changes.theme.newValue)
       && theme.value !== changes.theme.newValue) {
@@ -195,24 +203,65 @@ document.addEventListener('DOMContentLoaded', async () => {
   resetSettings.addEventListener('click', async () => {
     if (!window.confirm(message('resetConfirm', 'Reset all settings to defaults?'))) return;
     const update = {
+      extensionEnabled: DEFAULT_SETTINGS.extensionEnabled,
       mode: DEFAULT_SETTINGS.mode as EnhancementMode,
       quality: DEFAULT_SETTINGS.quality as QualityTier,
       output: 'auto' as const,
       backend: DEFAULT_SETTINGS.backend as RenderBackend,
       statsEnabled: DEFAULT_SETTINGS.statsEnabled,
+      autoFullscreenEnabled: DEFAULT_SETTINGS.autoFullscreenEnabled,
       frameGenerationEnabled: DEFAULT_SETTINGS.frameGenerationEnabled,
       realesrganCapHeight: DEFAULT_SETTINGS.realesrganCapHeight,
+      realesrganPrecision: DEFAULT_SETTINGS.realesrganPrecision,
     };
-    await applySettings(update, { local: { verboseLogging: false } });
+    const result = await applySettings(update, { local: { verboseLogging: false } })
+      .catch(() => 'failed' as const);
+    if (result === 'failed') {
+      // Keep the controls in sync with storage instead of showing defaults
+      // the save never persisted.
+      const current = await getSettings().catch(() => null);
+      if (current) {
+        mode.value = current.mode;
+        quality.value = current.quality;
+        backend.value = current.backend;
+        if (realesrganCap) realesrganCap.value = String(current.realesrganCapHeight);
+        if (realesrganPrecision) realesrganPrecision.value = current.realesrganPrecision;
+        statistics.checked = current.statsEnabled;
+        frameGeneration.checked = current.frameGenerationEnabled;
+      }
+      const stored = await chrome.storage.local.get(['verboseLogging']).catch(() => null);
+      verboseLogging.checked = stored?.verboseLogging === true;
+      const storedTheme = await chrome.storage.local.get(['theme']).catch(() => null);
+      const currentTheme = storedTheme && ['light', 'dark', 'auto'].includes(storedTheme.theme)
+        ? storedTheme.theme as ThemeMode
+        : 'auto';
+      theme.value = currentTheme;
+      themeManager.setTheme(currentTheme);
+      refreshThemeUi();
+      uiLanguage.value = getUiLanguage();
+      updateModeUi();
+      showStatus(message('settingsSaveFailed', 'Could not save settings.'));
+      return;
+    }
     mode.value = DEFAULT_SETTINGS.mode;
     quality.value = DEFAULT_SETTINGS.quality;
     backend.value = DEFAULT_SETTINGS.backend;
     if (realesrganCap) realesrganCap.value = String(DEFAULT_SETTINGS.realesrganCapHeight);
+    if (realesrganPrecision) realesrganPrecision.value = DEFAULT_SETTINGS.realesrganPrecision;
     statistics.checked = DEFAULT_SETTINGS.statsEnabled;
     frameGeneration.checked = DEFAULT_SETTINGS.frameGenerationEnabled;
     verboseLogging.checked = false;
+    // The confirmation promises a full reset: theme and language are
+    // settings too, not just the render keys sent to applySettings.
+    themeManager.setTheme('auto');
+    theme.value = 'auto';
+    refreshThemeUi();
+    await setUiLanguage('auto').catch(() => undefined);
+    uiLanguage.value = 'auto';
     updateModeUi();
-    showStatus(message('settingsReset', 'Settings reset to defaults.'));
+    if (result === 'saved-not-applied') {
+      showStatus(message('optionsSavedNotApplied', 'Settings saved, but could not be applied. Reload the video tab.'));
+    } else showStatus(message('settingsReset', 'Settings reset to defaults.'));
   });
 
   // ── Test render + copy diagnostics ─────────────────────────────────────
@@ -266,4 +315,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const systemStatus = capabilities[2];
   webgpuStatus = systemStatus.webgpu;
   nativeStatus = systemStatus.native;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // An unguarded rejection here (extension context invalidated after an
+  // update while the page is open) would kill the initializer silently and
+  // leave a half-rendered, dead options page.
+  initOptions().catch(error => {
+    console.error('[Anime4K] options init failed:', error);
+    showStatus(`Init failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 });

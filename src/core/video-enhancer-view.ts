@@ -1,14 +1,34 @@
-import { isWithinFullscreenExitGrace, videoFillsOwnViewport } from '../shared/fullscreen-video';
+import { fullscreenContainsVideo, isWithinFullscreenExitGrace, videoFillsOwnViewport } from '../shared/fullscreen-video';
 import { fullscreenContext } from './fullscreen-context';
 
 export function hasPlayerFullscreenSignal(video: HTMLVideoElement): boolean {
   const fullscreen = fullscreenContext.element;
-  if (fullscreen && fullscreen.contains && fullscreen.contains(video)) return true;
+  if (fullscreenContainsVideo(fullscreen, video)) return true;
   if (isWithinFullscreenExitGrace()) return false;
+  // Deliberately the loose embedded-style signal (not the strict
+  // screen-geometry predicate): top-level CSS-fullscreen players (theater
+  // layouts that never call requestFullscreen) rely on it, and the election
+  // additionally requires preferred-candidate status. Delegating to the full
+  // isVideoInFullscreenContext here would pull its DOM/screen requirements
+  // and exit-grace side effects into every reconcile.
   return videoFillsOwnViewport(video);
 }
 
+/** Repeated identical toasts within this window are dropped (see below). */
+const NOTIFY_REPEAT_MS = 10_000;
+let lastNotifyMessage = '';
+let lastNotifyAt = 0;
+
 export function showEnhancementNotification(message: string): void {
+  // Content scripts can run before <body> exists; never crash the caller.
+  if (typeof document === 'undefined' || !document.body) return;
+  // The fullscreen reconcile retries a failed auto-start on every timeupdate
+  // (~4/s while playing). Without this dedupe each retry stacks a fresh
+  // 8-second toast for the same failure.
+  const now = Date.now();
+  if (message === lastNotifyMessage && now - lastNotifyAt < NOTIFY_REPEAT_MS) return;
+  lastNotifyMessage = message;
+  lastNotifyAt = now;
   const notification = document.createElement('div');
   notification.textContent = `Anime4K: ${message}`;
   Object.assign(notification.style, {

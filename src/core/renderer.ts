@@ -196,6 +196,7 @@ fn fragmentMain(@location(0) uv: vec2f) -> @location(0) vec4f {
 /** The slice of navigator.gpu the renderer needs; injectable for tests. */
 export interface RendererGpuProvider {
   requestAdapter(options?: GPURequestAdapterOptions): Promise<GPUAdapter | null>;
+  getPreferredCanvasFormat?(): GPUTextureFormat;
 }
 
 export interface RendererOptions {
@@ -258,9 +259,17 @@ export class Renderer {
   private pendingFrame = false;
   private latestMetadata: VideoFrameCallbackMetadata | null = null;
   private useImageBitmap = false;
+  // Retry the fast direct-video upload every N bitmap frames: the fallback
+  // latches on the first transient copyExternalImageToTexture failure (e.g.
+  // first-frame size race), and without a retry the CPU-heavy
+  // createImageBitmap path stays on forever (~30% renderMs tax per frame).
+  private bitmapFrames = 0;
   private firstFrameRendered = false;
   private rebuilding = false;
-  private recoveryAttempted = false;
+  /** Bump on every (re)created device; lets queued recoveries detect stale events. */
+  private deviceGeneration = 0;
+  /** Newest device generation a recovery already rebuilt; older events are stale. */
+  private lastRecoveredGeneration = -1;
   private stateUpdateChain: Promise<void> = Promise.resolve();
   private cleanupScheduled = false;
   private readonly playbackStoppedHandler = () => this.handlePlaybackStopped();
@@ -331,12 +340,17 @@ export class Renderer {
   }
 
   private async initialize(): Promise<void> {
-    if (!navigator.gpu) throw new RendererInitializationError('WebGPU is not available in this browser.');
+    if (!this.gpu) throw new RendererInitializationError('WebGPU is not available in this browser.');
     if (this.video.readyState < this.video.HAVE_METADATA) {
       await new Promise<void>((resolve, reject) => {
         const loaded = () => { cleanup(); resolve(); };
         const failed = () => { cleanup(); reject(new Error('The video metadata could not be loaded.')); };
+        // The error event may already have fired before listeners attach
+        // (or never fire for stalled preload="none" sources): never hang
+        // Renderer.create() forever. Mirrors VideoEnhancer.initRenderer.
+        const stalled = window.setTimeout(failed, 10_000);
         const cleanup = () => {
+          window.clearTimeout(stalled);
           this.video.removeEventListener('loadedmetadata', loaded);
           this.video.removeEventListener('error', failed);
         };
@@ -349,7 +363,9 @@ export class Renderer {
     await this.createDevice();
     this.context = this.canvas.getContext('webgpu') as unknown as GPUCanvasContext;
     if (!this.context) throw new RendererInitializationError('Could not create a WebGPU canvas context.');
-    this.format = navigator.gpu.getPreferredCanvasFormat();
+    this.format = this.gpu.getPreferredCanvasFormat?.()
+      ?? navigator.gpu?.getPreferredCanvasFormat?.()
+      ?? 'bgra8unorm';
     this.configureContext();
     this.createSourceTexture();
     await this.buildPipelines();
@@ -362,6 +378,7 @@ export class Renderer {
   }
 
   private async createDevice(): Promise<void> {
+    this.deviceGeneration += 1;
     let adapter: GPUAdapter | null;
     try {
       // A default request is the most compatible option on Windows. Explicit
@@ -390,7 +407,39 @@ export class Renderer {
         { cause: error as Error },
       );
     }
+    this.logAdapterInfo(adapter);
     this.finishDeviceSetup();
+  }
+
+  /**
+   * One-line adapter identity (llvmpipe vs real GPU decides whether the
+   * browser-side millisecond budget is real). Best-effort across spec
+   * generations: sync info, then the deprecated async getter, else unknown.
+   */
+  private logAdapterInfo(adapter: GPUAdapter): void {
+    try {
+      const fallback = (adapter as GPUAdapter & { isFallbackAdapter?: boolean }).isFallbackAdapter;
+      const sync = (adapter as GPUAdapter & { info?: GPUAdapterInfo }).info;
+      const describe = (info: GPUAdapterInfo | undefined): string => info
+        ? `${info.vendor} ${info.architecture} ${info.device} ${info.description}`.replace(/\s+/g, ' ').trim()
+        : 'unknown';
+      const suffix = typeof fallback === 'boolean' ? ` fallback=${fallback}` : '';
+      if (sync) {
+        console.info('[Anime4K] WebGPU adapter:', describe(sync) + suffix);
+        return;
+      }
+      const legacy = adapter as GPUAdapter & { requestAdapterInfo?: () => Promise<GPUAdapterInfo> };
+      if (typeof legacy.requestAdapterInfo === 'function') {
+        void legacy.requestAdapterInfo().then(
+          info => console.info('[Anime4K] WebGPU adapter:', describe(info)),
+          () => console.info('[Anime4K] WebGPU adapter: unknown'),
+        );
+        return;
+      }
+      console.info('[Anime4K] WebGPU adapter: unknown');
+    } catch {
+      console.info('[Anime4K] WebGPU adapter: unknown');
+    }
   }
 
   private finishDeviceSetup(): void {
@@ -406,7 +455,8 @@ export class Renderer {
     });
     void this.device.lost.then(info => {
       if (!this.destroyed && info.reason !== 'destroyed') {
-        void this.enqueueStateUpdate(() => this.recoverDevice(info.message));
+        const generation = this.deviceGeneration;
+        void this.enqueueStateUpdate(() => this.recoverDevice(info.message, generation));
       }
     });
   }
@@ -415,12 +465,24 @@ export class Renderer {
     this.context.configure({
       device: this.device,
       format: this.format,
-      alphaMode: 'premultiplied',
+      // Opaque: every presented frame is fully-opaque video (prime clears
+      // alpha=1, all writers pack alpha=255, sources are opaque). The
+      // compositor then skips per-pixel blending on the same GPU that
+      // decodes, presents and infers. If a transparent source ever appears,
+      // it presents black instead of page-bleed — acceptable for a video
+      // canvas, and the overlay runs on its own canvas regardless.
+      alphaMode: 'opaque',
     });
   }
 
   private createSourceTexture(): void {
-    this.videoFrameTexture?.destroy();
+    // A lost device may already have released this allocation; never let a
+    // throwing destroy abort a rebuild (mirrors destroyPipelineTextures).
+    try {
+      this.videoFrameTexture?.destroy();
+    } catch {
+      // The old texture is unusable either way; continue with a fresh one.
+    }
     this.videoFrameTexture = this.device.createTexture({
       label: 'Anime4K video frame',
       size: [Math.max(1, this.video.videoWidth), Math.max(1, this.video.videoHeight), 1],
@@ -460,10 +522,14 @@ export class Renderer {
   private probeSourceTextureFormat(): void {
     if (this.sourceDepthChecked) return;
     this.sourceDepthChecked = true;
+    // Capture the video the probe was started for: a source switch while
+    // detection is in flight must not apply the old video's format to the
+    // new one (stale closure → wrong-format rebuild).
+    const probedVideo = this.video;
     void this.detectSourceTextureFormat().then(format => {
       // The rebuild runs through processFrame's serialized frame path on the
       // next callback, so no texture is ever swapped under an in-flight frame.
-      if (this.destroyed || format === this.videoFrameTexture.format) return;
+      if (this.destroyed || this.video !== probedVideo || format === this.videoFrameTexture.format) return;
       this.sourceTextureFormat = format;
       this.sourceFormatStale = true;
     }, () => undefined);
@@ -504,7 +570,8 @@ export class Renderer {
           // Firefox/RDNA2 can drop the WebGPU context without resolving
           // device.lost; pipelines report it here so recovery actually runs.
           onDeviceContextLost: () => {
-            void this.enqueueStateUpdate(() => this.recoverDevice('RealESRGAN reported a WebGPU context loss'));
+            const generation = this.deviceGeneration;
+            void this.enqueueStateUpdate(() => this.recoverDevice('RealESRGAN reported a WebGPU context loss', generation));
           },
           // Chronic inference failure (dead worker, unusable session): surface
           // as a runtime error so video-enhancer runs its configured fallback
@@ -533,7 +600,14 @@ export class Renderer {
       this.buildingPipelineTextures = null;
     }
 
-    this.pipelines.forEach(pipeline => pipeline.destroy?.());
+    this.pipelines.forEach(pipeline => {
+      try {
+        pipeline.destroy?.();
+      } catch {
+        // A lost device may already have released this allocation; the
+        // texture set below is released independently either way.
+      }
+    });
     this.destroyPipelineTextures(this.pipelineTextures);
     this.pipelineTextures = pipelineTextures;
     this.pipelines = pipelines;
@@ -584,7 +658,13 @@ export class Renderer {
       minFilter: 'linear',
       magFilter: 'linear',
     });
-    this.presentationUniform?.destroy();
+    // The old uniform belongs to the previous (possibly lost) device;
+    // never let its destroy abort the presentation rebuild.
+    try {
+      this.presentationUniform?.destroy();
+    } catch {
+      // The old buffer is unusable either way; continue with a fresh one.
+    }
     this.presentationUniform = this.device.createBuffer({
       label: 'Frame interpolation factor',
       size: 16,
@@ -621,6 +701,19 @@ export class Renderer {
   private async copyCurrentVideoFrame(): Promise<void> {
     const size: GPUExtent3D = [this.video.videoWidth, this.video.videoHeight, 1];
     if (this.useImageBitmap) {
+      this.bitmapFrames += 1;
+      // Every 60 bitmap frames, probe the fast path again: a transient
+      // first-frame failure should not pin the slow path for the session.
+      if (this.bitmapFrames % 60 === 0) {
+        try {
+          this.device.queue.copyExternalImageToTexture({ source: this.video }, { texture: this.videoFrameTexture }, size);
+          this.useImageBitmap = false;
+          return;
+        } catch (error) {
+          if (this.isSecurityError(error)) throw error;
+          // Still broken: stay on the bitmap path.
+        }
+      }
       const bitmap = await createImageBitmap(this.video);
       try {
         this.device.queue.copyExternalImageToTexture({ source: bitmap }, { texture: this.videoFrameTexture }, size);
@@ -675,24 +768,63 @@ export class Renderer {
     const started = performance.now();
     await this.copyCurrentVideoFrame();
     if (this.destroyed) return false;
-    const encoder = this.device.createCommandEncoder({ label: 'Anime4K frame' });
-    this.pipelines.forEach(pipeline => pipeline.pass(encoder));
+    let encoder: GPUCommandEncoder;
+    try {
+      encoder = this.device.createCommandEncoder({ label: 'Anime4K frame' });
+      this.pipelines.forEach(pipeline => pipeline.pass(encoder));
+    } catch (error) {
+      // Pipeline encoding on torn-down resources: drop this frame, keep the
+      // loop alive for the pending recovery instead of killing it via onError.
+      if (this.isSecurityError(error)) throw error;
+      this.droppedFrames += 1;
+      this.runAfterSubmit();
+      return false;
+    }
     const generateIntermediate = this.frameGeneration.prepareFrame(encoder);
-    this.encodePresentation(encoder);
-    this.device.queue.submit([encoder.finish()]);
+    try {
+      this.encodePresentation(encoder);
+    } catch {
+      // Transient presentation failure (lost context, zero-size canvas):
+      // drop exactly this frame instead of stopping the whole frame loop
+      // via drainFrames' onError path.
+      this.droppedFrames += 1;
+      this.runAfterSubmit();
+      return false;
+    }
+    try {
+      this.device.queue.submit([encoder.finish()]);
+    } catch (error) {
+      if (this.isSecurityError(error)) throw error;
+      this.droppedFrames += 1;
+      this.runAfterSubmit();
+      return false;
+    }
+    // Interface contract: pipelines with post-submit work (RealESRGAN's
+    // inference readback) register their completion tracking only now that
+    // the submit is guaranteed to have covered this frame's copies. The
+    // failure paths above run it too: a pipeline that claimed a slot in
+    // pass() must settle it on every frame path, or it wedges into
+    // "no free slot" after two dropped frames.
+    this.runAfterSubmit();
     // Awaiting GPU completion here serialised CPU and GPU work: the next
     // video frame could not be copied or encoded while the queue drained,
     // capping throughput at one frame per GPU round trip. Track completion
     // instead and run frame-bound bookkeeping from it; the rVFC pacing plus
     // the pendingFrame coalescing keep the queue bounded to ~2 frames.
     this.frameCompletion = this.device.queue.onSubmittedWorkDone().then(() => {
-      if (this.destroyed) return;
-      if (generateIntermediate) this.frameGeneration.scheduleIntermediate();
-      this.recordStats(performance.now() - started);
-      if (!this.firstFrameRendered) {
-        this.firstFrameRendered = true;
-        this.onFirstFrameRendered?.(this.video);
-        this.probeSourceTextureFormat();
+      try {
+        if (this.destroyed) return;
+        if (generateIntermediate) this.frameGeneration.scheduleIntermediate();
+        this.recordStats(performance.now() - started);
+        if (!this.firstFrameRendered) {
+          this.firstFrameRendered = true;
+          this.onFirstFrameRendered?.(this.video);
+          this.probeSourceTextureFormat();
+        }
+      } catch (error) {
+        // User callbacks must never produce unhandled rejections from the
+        // tracked frame-completion promise.
+        console.warn('[Anime4K] Frame completion callback failed:', error);
       }
     }, () => undefined);
     return true;
@@ -712,7 +844,7 @@ export class Renderer {
       const skippedTotal = this.collectRealesrganSkipped();
       let warning: boolean;
 
-      if (realesrgan) {
+      if (realesrgan && realesrgan.count > 0) {
         realesrgan.enhancedFps = realesrgan.count * 1000 / elapsed;
         warning = this.overloadTracker.recordSample(
           realesrgan.inferMs > this.frameBudgetMs || realesrgan.enhancedFps < presentationFps * 0.7,
@@ -724,6 +856,7 @@ export class Renderer {
           droppedFrames: this.droppedFrames + skippedTotal,
           warning,
           realesrgan,
+          frameBudgetMs: this.frameBudgetMs,
         });
       } else {
         warning = this.overloadTracker.recordSample(
@@ -735,6 +868,7 @@ export class Renderer {
           renderMs: this.smoothedRenderMs,
           droppedFrames: this.droppedFrames,
           warning,
+          frameBudgetMs: this.frameBudgetMs,
         });
       }
       this.warning = warning;
@@ -745,19 +879,36 @@ export class Renderer {
   }
 
   /**
+   * Second phase of the pipeline contract: afterSubmit() runs on EVERY frame
+   * path once pass() has run — success or dropped frame. Pipelines that
+   * claimed resources in pass() (RealESRGAN's staging slot) settle them
+   * here; skipping it on failure paths would leak claimed slots.
+   */
+  private runAfterSubmit(): void {
+    this.pipelines.forEach(pipeline => pipeline.afterSubmit?.());
+  }
+
+  /**
    * Pull per-phase timings from any active pipeline that implements
    * `getPhaseStats()` (RealESRGAN today; other ONNX pipelines can follow).
-   * The active pipeline is the last one in the schedule -- the same one that
-   * produces the output texture the presentation pass samples.
+   * Merged by CAPABILITY, not position: whichever pipeline reports phase
+   * stats is the presentation-producing one — a future effect scheduled
+   * after RealESRGAN must not silently null the stats.
    */
   private collectRealesrganPhaseStats(): RealEsrganPhaseStats | null {
-    const last = this.pipelines[this.pipelines.length - 1];
-    return last?.getPhaseStats?.() ?? null;
+    for (const pipeline of this.pipelines) {
+      const stats = pipeline.getPhaseStats?.();
+      if (stats) return stats;
+    }
+    return null;
   }
 
   private collectRealesrganSkipped(): number {
-    const last = this.pipelines[this.pipelines.length - 1];
-    return last?.getSkippedFrames?.() ?? 0;
+    let total = 0;
+    for (const pipeline of this.pipelines) {
+      total += pipeline.getSkippedFrames?.() ?? 0;
+    }
+    return total;
   }
 
   private startFrameCallbacks(): void {
@@ -765,7 +916,7 @@ export class Renderer {
     this.frameCallbackId = this.video.requestVideoFrameCallback(this.videoFrameHandler);
   }
 
-  private stopFrameCallbacks(): void {
+    private stopFrameCallbacks(): void {
     if (this.frameCallbackId !== null) {
       this.video.cancelVideoFrameCallback(this.frameCallbackId);
       this.frameCallbackId = null;
@@ -845,8 +996,39 @@ export class Renderer {
   }
 
   private async waitForFrameIdle(): Promise<void> {
+    const start = Date.now();
     while (this.frameProcessing) {
+      // Never hang destroy/recovery forever on a wedged frame: 5s is far
+      // beyond a normal frame, after which cleanup proceeds and the
+      // in-flight frame's guards (destroyed flag) keep it from touching
+      // released resources.
+      if (Date.now() - start > 5_000) return;
       await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  /** Wait until neither a frame nor a rebuild holds GPU resources. */
+  private async waitForIdle(): Promise<void> {
+    const start = Date.now();
+    while (this.frameProcessing || this.rebuilding) {
+      if (Date.now() - start > 5_000) return;
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  /**
+   * Best-effort queue drain: onSubmittedWorkDone() may never settle on a
+   * lost device. Time out so rebuild/recovery/destroy cannot deadlock while
+   * rebuilding=true blocks every frame.
+   */
+  private async waitForQueueIdle(timeoutMs = 5_000): Promise<void> {
+    try {
+      await Promise.race([
+        this.device.queue.onSubmittedWorkDone(),
+        new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
+      ]);
+    } catch {
+      // A lost device rejects here; the rebuild below recreates everything.
     }
   }
 
@@ -860,7 +1042,7 @@ export class Renderer {
     if (this.rebuilding || this.destroyed) return;
     this.rebuilding = true;
     try {
-      await this.device.queue.onSubmittedWorkDone();
+      await this.waitForQueueIdle();
       if (this.destroyed) return;
       // Adaptive stream switches can change the bit depth together with the
       // resolution; pick the new format up while the pipeline is down anyway.
@@ -902,28 +1084,34 @@ export class Renderer {
     );
     if (diff.isUnchanged) return;
 
+    // Claim the rebuild lock BEFORE yielding: an already-queued rVFC callback
+    // could otherwise start drainFrames in the waitForFrameIdle window and
+    // encode on resources this rebuild is about to swap.
+    this.rebuilding = true;
     this.stopFrameCallbacks();
     await this.waitForFrameIdle();
-    if (this.destroyed) return;
+    if (this.destroyed) {
+      this.rebuilding = false;
+      return;
+    }
     const previousEffects = this.effects;
     const previousTargetDimensions = this.targetDimensions;
     const previousFrameGenerationEnabled = this.frameGenerationEnabled;
     let gpuStateChanged = false;
     let configurationCommitted = false;
     let postConfigurationError: RendererRuntimeError | null = null;
-    this.rebuilding = true;
     try {
       this.effects = options.effects;
       this.targetDimensions = options.targetDimensions;
       this.frameGenerationEnabled = options.frameGenerationEnabled;
       if (diff.needsPipelineRebuild) {
-        await this.device.queue.onSubmittedWorkDone();
+        await this.waitForQueueIdle();
         await this.buildPipelines();
         gpuStateChanged = true;
         this.frameGeneration.createResources();
         this.createPresentationBindGroup();
       } else if (diff.frameGenerationChanged) {
-        await this.device.queue.onSubmittedWorkDone();
+        await this.waitForQueueIdle();
         gpuStateChanged = true;
         this.frameGeneration.createResources();
         this.createPresentationBindGroup();
@@ -998,49 +1186,69 @@ export class Renderer {
     // already queued can otherwise re-arm the old video while we wait for an
     // in-flight frame to finish and occupy frameCallbackId indefinitely.
     this.videoSourceRevision += 1;
-    this.stopFrameCallbacks();
-    await this.waitForFrameIdle();
-    if (this.destroyed) return;
-    this.videoEvents?.dispose();
-    this.video = newVideo;
-    this.videoFrameHandler = this.createVideoFrameHandler(this.video, this.videoSourceRevision);
-    this.observePlaybackEvents();
-    this.useImageBitmap = false;
-    this.firstFrameRendered = false;
-    this.sourceDepthChecked = false;
-    this.lastCallbackMediaTime = null;
-    this.frameBudgetMs = 1000 / 24;
-    // A replacement node often lacks metadata; rebuilding against its 0x0
-    // intrinsic size would compile a useless 1x1 pipeline, and an unchanged
-    // resolution needs no rebuild at all. processFrame's size check rebuilds
-    // once the first real frame of the new source arrives.
-    if (this.video.readyState >= this.video.HAVE_METADATA
-        && (this.video.videoWidth !== this.videoFrameTexture.width
-          || this.video.videoHeight !== this.videoFrameTexture.height)) {
-      await this.rebuildForSourceResize();
+    // Hold the rebuild lock across the whole swap so a queued callback cannot
+    // start drainFrames between waitForFrameIdle and the resize rebuild.
+    this.rebuilding = true;
+    try {
+      this.stopFrameCallbacks();
+      await this.waitForFrameIdle();
+      if (this.destroyed) return;
+      this.videoEvents?.dispose();
+      this.video = newVideo;
+      this.videoFrameHandler = this.createVideoFrameHandler(this.video, this.videoSourceRevision);
+      this.observePlaybackEvents();
+      this.useImageBitmap = false;
+      this.firstFrameRendered = false;
+      this.sourceDepthChecked = false;
+      this.lastCallbackMediaTime = null;
+      this.frameBudgetMs = 1000 / 24;
+      // A replacement node often lacks metadata; rebuilding against its 0x0
+      // intrinsic size would compile a useless 1x1 pipeline, and an unchanged
+      // resolution needs no rebuild at all. processFrame's size check rebuilds
+      // once the first real frame of the new source arrives.
+      if (this.video.readyState >= this.video.HAVE_METADATA
+          && (this.video.videoWidth !== this.videoFrameTexture.width
+            || this.video.videoHeight !== this.videoFrameTexture.height)) {
+        // Synchronous handoff to the guarded rebuild (no await in between):
+        // no queued callback can observe the unlocked instant, and the
+        // rebuild re-acquires the lock synchronously on entry.
+        this.rebuilding = false;
+        await this.rebuildForSourceResize();
+      } else {
+        this.rebuilding = false;
+      }
+      await this.processFrame();
+    } finally {
+      this.rebuilding = false;
+      // Optional chaining: unit tests exercise applyVideoSource with a
+      // partial renderer mock lacking the frame-generation subsystem.
+      this.frameGeneration?.flush();
     }
-    await this.processFrame();
     this.startFrameCallbacks();
   }
 
-  private async recoverDevice(message: string): Promise<void> {
+  private async recoverDevice(message: string, generation: number): Promise<void> {
     if (this.destroyed) {
       this.onError?.(new RendererRuntimeError(`WebGPU device lost: ${message}`));
       return;
     }
-    if (this.recoveryAttempted) {
-      // A second distinct loss after a successful recovery should still be
-      // recovered once; the renderer already reported the first via
-      // onDeviceContextLost. Allow one more cycle by resetting the guard after
-      // the first successful rebuild (see success path below).
-      this.onError?.(new RendererRuntimeError(`WebGPU device lost: ${message}`));
-      return;
-    }
-    this.recoveryAttempted = true;
-    this.stopFrameCallbacks();
-    await this.waitForFrameIdle();
-    if (this.destroyed) return;
+    // State updates are serialized: a second loss event for an already
+    // replaced device queues behind the first recovery. Its generation is
+    // older than (or equal to) the rebuilt one, so skip it silently instead
+    // of reporting a spurious error. A genuinely fresh loss on the new
+    // device carries a newer generation (its handler was attached in
+    // createDevice) and still triggers a new recovery; a failed recovery
+    // leaves the generation untouched so a later loss can retry.
+    if (generation <= this.lastRecoveredGeneration) return;
+    // Mirror rebuildForSourceResize: while the device and its pipelines are
+    // being recreated, frame callbacks must coalesce instead of encoding on
+    // torn-down resources.
+    this.rebuilding = true;
     try {
+      this.stopFrameCallbacks();
+      await this.waitForFrameIdle();
+      if (this.destroyed) return;
+      if (generation <= this.lastRecoveredGeneration) return;
       // The lost device's resources are being rebuilt from scratch below.
       // Destroy it explicitly so its GPU allocations do not linger until
       // garbage collection; the lost handler ignores reason "destroyed".
@@ -1052,10 +1260,13 @@ export class Renderer {
       await this.buildPipelines();
       await this.createPresentationPipeline();
       this.createPresentationBindGroup();
-      this.recoveryAttempted = false;
+      this.lastRecoveredGeneration = generation;
       this.startFrameCallbacks();
     } catch (error) {
       this.onError?.(new RendererRuntimeError('WebGPU device recovery failed.', { cause: error as Error }));
+    } finally {
+      this.rebuilding = false;
+      this.frameGeneration.flush();
     }
   }
 
@@ -1067,7 +1278,10 @@ export class Renderer {
     this.frameGeneration.destroy();
     if (this.cleanupScheduled) return;
     this.cleanupScheduled = true;
-    void this.waitForFrameIdle().then(async () => {
+    // Wait for frames AND rebuilds: tearing down textures mid-rebuild is a
+    // use-after-destroy. Both waits time out so a wedged frame can neither
+    // leak the device nor hang cleanup forever.
+    void this.waitForIdle().then(async () => {
       // Frames return before their GPU work completes; keep the resources
       // alive until the queue has drained so destruction cannot race the GPU.
       await this.frameCompletion?.catch(() => undefined);
@@ -1076,17 +1290,27 @@ export class Renderer {
   }
 
   private releaseResources(): void {
-    try {
-      this.frameGeneration.destroyResources();
-      this.pipelines.forEach(pipeline => pipeline.destroy?.());
-      this.destroyPipelineTextures(this.pipelineTextures);
-      if (this.buildingPipelineTextures) this.destroyPipelineTextures(this.buildingPipelineTextures);
-      this.videoFrameTexture?.destroy();
-      this.presentationUniform?.destroy();
-      this.context?.unconfigure();
-      this.device?.destroy();
-    } catch (error) {
-      console.warn('[Anime4K] Renderer cleanup failed:', error);
+    // Each GPU object is released independently: on a lost/destroyed device
+    // any single destroy() can throw, and one throwing release must not
+    // leak every resource listed after it.
+    const releases: Array<() => void> = [
+      () => this.frameGeneration.destroyResources(),
+      ...this.pipelines.map(pipeline => () => pipeline.destroy?.()),
+      () => this.destroyPipelineTextures(this.pipelineTextures),
+      ...(this.buildingPipelineTextures
+        ? [() => this.destroyPipelineTextures(this.buildingPipelineTextures as Set<GPUTexture>)]
+        : []),
+      () => this.videoFrameTexture?.destroy(),
+      () => this.presentationUniform?.destroy(),
+      () => this.context?.unconfigure(),
+      () => this.device?.destroy(),
+    ];
+    for (const release of releases) {
+      try {
+        release();
+      } catch (error) {
+        console.warn('[Anime4K] Renderer cleanup failed:', error);
+      }
     }
     this.pipelines = [];
   }

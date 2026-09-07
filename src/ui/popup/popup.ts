@@ -13,9 +13,9 @@ import { renderEnhancementSelects, renderToggle, renderEnhancementToggles } from
 import { refreshModeUi } from '../mode-ui';
 import { themeManager } from '../theme-manager';
 import { localizeDocument, message, initI18n } from '../i18n';
-import { createSettingsController } from '../settings-controller';
+import { createSettingsController, syncRenderSettings } from '../settings-controller';
 
-document.addEventListener('DOMContentLoaded', async () => {
+async function initPopup(): Promise<void> {
   await initI18n();
   localizeDocument();
   themeManager.getTheme();
@@ -23,7 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
   );
-  const { mode, quality, backend, realesrganCap } = controls;
+  const { mode, quality, backend, realesrganCap, realesrganPrecision } = controls;
   const extensionEnabled = renderToggle(
     document.getElementById('extension-toggle') as HTMLDivElement,
     {
@@ -147,6 +147,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   quality.value = settings.quality;
   backend.value = settings.backend;
   if (realesrganCap) realesrganCap.value = String(settings.realesrganCapHeight);
+  if (realesrganPrecision) realesrganPrecision.value = settings.realesrganPrecision;
   statistics.checked = settings.statsEnabled;
   frameGeneration.checked = settings.frameGenerationEnabled;
 
@@ -177,15 +178,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     quality,
     backend,
     realesrganCap,
+    realesrganPrecision,
     frameGeneration,
     description: modeDescription,
     nativeWarning,
   });
 
   mode.addEventListener('change', updateModeUi);
+  quality.addEventListener('change', updateModeUi);
   frameGeneration.addEventListener('change', updateModeUi);
   backend.addEventListener('change', updateModeUi);
   updateModeUi();
+
+  // Live sync with other surfaces (options page, other popups): without this
+  // a change made elsewhere leaves this popup showing stale controls.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, realesrganPrecision, statistics, frameGeneration })) updateModeUi();
+    if (typeof changes.extensionEnabled?.newValue === 'boolean'
+      && extensionEnabled.checked !== changes.extensionEnabled.newValue) {
+      extensionEnabled.checked = changes.extensionEnabled.newValue;
+    }
+  });
 
   // ── Autosave ─────────────────────────────────────────────────────────────
 
@@ -196,7 +210,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusTimer = setTimeout(() => { status.textContent = ''; }, 3000);
   };
   createSettingsController({
-    controls: { mode, quality, backend, realesrganCap, statistics, frameGeneration },
+    controls: { mode, quality, backend, realesrganCap, realesrganPrecision, statistics, frameGeneration },
     showStatus,
     messages: {
       saving: message('saving', 'Saving...'),
@@ -208,4 +222,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   openOptions.addEventListener('click', () => chrome.runtime.openOptionsPage());
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // An unguarded rejection here (extension context invalidated after an
+  // update while the popup is open) would kill the initializer silently and
+  // leave a blank, dead page.
+  initPopup().catch(error => {
+    console.error('[Anime4K] popup init failed:', error);
+    const status = document.getElementById('status');
+    if (status) status.textContent = `Anime4K: ${error instanceof Error ? error.message : String(error)}`;
+  });
 });

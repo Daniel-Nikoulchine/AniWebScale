@@ -42,6 +42,7 @@
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <errno.h>
@@ -56,7 +57,7 @@ namespace aniwebscale {
 using UpscaleHandler = std::function<int(const unsigned char* rgba_in, int width, int height,
                                           int target_w, int target_h,
                                           std::vector<unsigned char>& out, int& out_w, int& out_h,
-                                          std::string& err)>;
+                                          std::string& err, const std::string& engine)>;
 
 class HttpTransport {
 public:
@@ -124,6 +125,12 @@ public:
             ::close(listen_fd_);
             listen_fd_ = -1;
         }
+        // Wake a handler thread parked in recv() on an accepted keep-alive
+        // connection: closing the listen socket cannot do that, and without
+        // this the idle reaper's join() would wait out the browser's socket
+        // pool eviction (minutes) with all VRAM allocations still pinned.
+        const int conn = conn_fd_.exchange(-1, std::memory_order_relaxed);
+        if (conn >= 0) ::shutdown(conn, SHUT_RDWR);
         if (thread_.joinable()) thread_.join();
     }
 
@@ -137,6 +144,9 @@ private:
     std::string token_;
     std::thread thread_;
     std::atomic<bool> stop_{false};
+    // The connection currently served by the accept thread (-1 when none).
+    // stop() shuts it down to unblock a recv() parked on an idle socket.
+    std::atomic<int> conn_fd_{-1};
 
     void accept_loop() {
         while (!stop_) {
@@ -145,7 +155,9 @@ private:
                 if (errno == EINTR) continue;
                 break; // listener closed
             }
+            conn_fd_.store(conn, std::memory_order_relaxed);
             handle_conn(conn);
+            conn_fd_.store(-1, std::memory_order_relaxed);
             ::close(conn);
         }
     }
@@ -153,11 +165,12 @@ private:
     // Buffered socket reader with line and exact-count primitives.
     struct ConnBuf {
         int fd;
+        const std::atomic<bool>* stop;
         std::vector<char> buf;
         size_t pos = 0;
         size_t len = 0;
 
-        explicit ConnBuf(int f) : fd(f), buf(64 * 1024) {}
+        explicit ConnBuf(int f, const std::atomic<bool>* stop_flag) : fd(f), stop(stop_flag), buf(64 * 1024) {}
 
         bool fill() {
             if (pos > 0 && len > pos) {
@@ -169,10 +182,27 @@ private:
                 len = 0;
             }
             if (len == buf.size()) return false; // line longer than the buffer
-            ssize_t r = ::recv(fd, buf.data() + len, buf.size() - len, 0);
-            if (r <= 0) return false;
-            len += static_cast<size_t>(r);
-            return true;
+            for (;;) {
+                // Poll with a timeout instead of blocking in recv(): stop()
+                // tears down the sockets, but only a poll (or the conn
+                // shutdown in stop()) can wake this thread on an idle
+                // keep-alive connection.
+                if (stop->load(std::memory_order_relaxed)) return false;
+                pollfd pfd{};
+                pfd.fd = fd;
+                pfd.events = POLLIN;
+                const int pr = ::poll(&pfd, 1, 100);
+                if (pr < 0) {
+                    if (errno == EINTR) continue;
+                    return false;
+                }
+                if (pr == 0) continue; // timeout: re-check the stop flag
+                if (!(pfd.revents & POLLIN)) return false; // POLLERR/POLLHUP/POLLNVAL
+                const ssize_t r = ::recv(fd, buf.data() + len, buf.size() - len, 0);
+                if (r <= 0) return false;
+                len += static_cast<size_t>(r);
+                return true;
+            }
         }
 
         // One LF- (or CRLF-) terminated line, terminator stripped.
@@ -205,9 +235,11 @@ private:
         }
     };
 
-    // "w=640&h=360&token=...&tw=..&th=.." -> values by key.
+    // "w=640&h=360&token=...&tw=..&th=..&engine=srvgg" -> values by key.
+    // engine selects the inference backend per request ("" = default ncnn,
+    // "srvgg" = hand-written Vulkan SRVGG); unknown values fall back to "".
     static void parse_query(const std::string& query, std::string& token, int& w, int& h,
-                            int& tw, int& th) {
+                            int& tw, int& th, std::string& engine) {
         size_t start = 0;
         while (start <= query.size()) {
             size_t amp = query.find('&', start);
@@ -221,6 +253,7 @@ private:
                 else if (key == "h") h = atoi(value.c_str());
                 else if (key == "tw") tw = atoi(value.c_str());
                 else if (key == "th") th = atoi(value.c_str());
+                else if (key == "engine") engine = value;
             }
             if (amp == std::string::npos) break;
             start = amp + 1;
@@ -228,7 +261,7 @@ private:
     }
 
     void handle_conn(int fd) {
-        ConnBuf conn(fd);
+        ConnBuf conn(fd, &stop_);
         // Keep-alive: serve sequential requests on this connection.
         for (;;) {
             std::string request_line;
@@ -258,7 +291,8 @@ private:
             }
             std::string query_token;
             int qwidth = 0, qheight = 0, qtw = 0, qth = 0;
-            parse_query(query, query_token, qwidth, qheight, qtw, qth);
+            std::string qengine;
+            parse_query(query, query_token, qwidth, qheight, qtw, qth, qengine);
 
             long long content_length = -1;
             int width = qwidth, height = qheight;
@@ -316,7 +350,7 @@ private:
             std::vector<unsigned char> out;
             int out_w = 0, out_h = 0;
             std::string err;
-            const int rc = handler_(body.data(), width, height, qtw, qth, out, out_w, out_h, err);
+            const int rc = handler_(body.data(), width, height, qtw, qth, out, out_w, out_h, err, qengine);
             if (rc != 0) {
                 write_response(fd, 500, "upscale failed: " + err, nullptr, 0, 0, 0, false);
                 return;

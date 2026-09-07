@@ -63,7 +63,15 @@ class VideoPopulation {
     const stashedEnhancer = findAndUnstashEnhancer(video);
     if (stashedEnhancer) {
       EnhancerMap.associateEnhancer(video, stashedEnhancer);
-      void stashedEnhancer.reattach(video).catch(error => {
+      void stashedEnhancer.reattach(video).then(() => {
+        // The node may have been removed again while the async renderer
+        // source switch was in flight; don't keep an enhancer mapped to a
+        // disconnected video (election, observers and stats would go stale).
+        if (!video.isConnected) {
+          EnhancerMap.dissociateEnhancer(video);
+          stashedEnhancer.destroy();
+        }
+      }).catch(error => {
         console.error('[Anime4K] Failed to reattach a replaced video element.', error);
         EnhancerMap.dissociateEnhancer(video);
         stashedEnhancer.destroy();

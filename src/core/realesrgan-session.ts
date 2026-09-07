@@ -26,19 +26,18 @@
  * succeeds is persisted so later model variants skip the dead steps.
  */
 import type { InferenceSession } from 'onnxruntime-web';
+import type { RealEsrganPrecision } from '../types';
 import {
   realEsrganFp16ModelFileForClass,
   realEsrganInt8ModelFileForClass,
   realEsrganModelFileForClass,
+  realEsrganStaticModelFileForShape,
 } from '../shared/realesrgan-models';
-
-const sessionCache = new Map<string, Promise<InferenceSession>>();
+import { formatRealEsrganError, REALESRGAN_ERROR_CODES, withRealEsrganCode } from '../shared/realesrgan-error-codes';
+import { buildFreeDimensionOverrides } from '../shared/realesrgan-ort-shape-pinning.js';
 
 export type ModelUrlResolver = (fileName: string) => string;
 export type ModelAssetExists = (fileName: string) => Promise<boolean>;
-
-let resolveModelUrl: ModelUrlResolver | null = null;
-let modelAssetExists: ModelAssetExists | null = null;
 
 export interface RealEsrganExecutionConfig {
   /** Prefer FP16 WebGPU kernels when the adapter exposes shader-f16. */
@@ -48,53 +47,35 @@ export interface RealEsrganExecutionConfig {
 }
 
 export interface RealEsrganThreadingConfig {
-  /** Run the WASM backend inside a proxy worker (frees the main thread). */
-  proxy: boolean;
   /** WASM thread count. >1 needs SharedArrayBuffer; the runtime may ignore it. */
   numThreads: number;
 }
 
-// Safe floor by default; the browser setup raises this before the first
-// session is created.
-let threadingConfig: RealEsrganThreadingConfig = { proxy: false, numThreads: 1 };
-let executionConfig: RealEsrganExecutionConfig = { preferFloat16: false, preferInt8: false };
-
-// Index into the cascade of the first level that produced a session. Later
-// sessions start here instead of re-probing known-dead configurations.
-let workingLevelIndex: number | null = null;
-
 /**
- * Register how model file names are turned into fetchable URLs. The browser
- * path wires this to chrome.runtime.getURL; tests inject a file:// resolver.
+ * Everything the session factory needs, handed in at CONSTRUCTION — the
+ * former five module-level singletons and their setters. The temporal
+ * invariant "configure before the first session" is now structural: no
+ * factory, no session (the factory is built by
+ * setupRealEsrganBrowserRuntime() and reaches the loader through it).
  */
-export function setRealEsrganModelUrlResolver(resolver: ModelUrlResolver): void {
-  resolveModelUrl = resolver;
+export interface RealEsrganSessionConfig {
+  resolveModelUrl: ModelUrlResolver;
+  modelAssetExists?: ModelAssetExists;
+  threading: RealEsrganThreadingConfig;
+  execution: RealEsrganExecutionConfig;
 }
 
-export function setRealEsrganModelAssetExists(checker: ModelAssetExists): void {
-  modelAssetExists = checker;
-}
-
-/**
- * Register the preferred threading configuration. Call before the first
- * session is created; resets the persisted cascade level so the new
- * configuration is probed from the top.
- */
-export function setRealEsrganThreadingConfig(config: RealEsrganThreadingConfig): void {
-  threadingConfig = config;
-  workingLevelIndex = null;
-}
-
-export function setRealEsrganExecutionConfig(config: RealEsrganExecutionConfig): void {
-  executionConfig = config;
-}
+// Precision label for the pipeline's phase stats. Written ONCE by the
+// factory constructor (the only legitimate writer — the factory exists
+// before any session and before any pipeline), read by getPhaseStats.
+let activeExecution: RealEsrganExecutionConfig = { preferFloat16: false, preferInt8: false };
 
 export function isRealEsrganFloat16Preferred(): boolean {
-  return executionConfig.preferFloat16;
+  return activeExecution.preferFloat16;
 }
 
 export function isRealEsrganInt8Preferred(): boolean {
-  return executionConfig.preferInt8;
+  return activeExecution.preferInt8;
 }
 
 /**
@@ -106,63 +87,111 @@ export function isRealEsrganInt8Preferred(): boolean {
  */
 
 interface CascadeLevel {
-  proxy: boolean;
   numThreads: number;
-  executionProviders: string[];
+  executionProviders: ReadonlyArray<'webgpu' | 'wasm'>;
+}
+
+/**
+ * ORT-boundary classifier (the ONLY prose match on this path): the runtime
+ * exposes its poisoned one-shot initWasm() state through message text alone,
+ * so it is recognized here, once, and converted into control flow (stop
+ * cascading). The failure itself is tagged SESSION_CREATE_FAILED downstream
+ * — nothing else parses prose.
+ */
+function isInitWasmPoisoned(message: string): boolean {
+  return /previous call to 'initWasm\(\)' failed/i.test(message);
 }
 
 /**
  * Fastest-first fallback ladder. Each step loosens exactly one constraint:
- * 1. proxy worker + threads + WebGPU EP
- * 2. threads + WebGPU EP (proxy workers can be blocked in content scripts)
+ * 1. threads + WebGPU EP
+ * 2. single-threaded + WebGPU EP
  * 3. threads, WASM only (WebGPU EP may reject the model's dynamic shapes)
- * 4. single-threaded WASM (no SharedArrayBuffer / worker spawning)
- * Duplicate levels collapse so a conservative config probes only once.
+ * 4. single-threaded WASM (no SharedArrayBuffer)
+ * The old proxy-worker lane is gone: it was permanently disabled by the
+ * browser setup (a failed proxy spawn poisons ORT's one-shot initWasm()), so
+ * keeping a live candidate for it only invited a configuration nobody can
+ * request. Duplicate levels collapse so a conservative config probes once.
  */
-function buildCascadeLevels(config: RealEsrganThreadingConfig): CascadeLevel[] {
-  const webgpu = ['webgpu', 'wasm'];
-  const wasmOnly = ['wasm'];
+function buildCascadeLevels(numThreads: number): CascadeLevel[] {
+  const webgpu: ReadonlyArray<'webgpu' | 'wasm'> = ['webgpu', 'wasm'];
+  const wasmOnly: ReadonlyArray<'webgpu' | 'wasm'> = ['wasm'];
   const candidates: CascadeLevel[] = [
-    { proxy: config.proxy, numThreads: config.numThreads, executionProviders: webgpu },
-    { proxy: false, numThreads: config.numThreads, executionProviders: webgpu },
-    { proxy: false, numThreads: 1, executionProviders: webgpu },
-    { proxy: false, numThreads: config.numThreads, executionProviders: wasmOnly },
-    { proxy: false, numThreads: 1, executionProviders: wasmOnly },
+    { numThreads, executionProviders: webgpu },
+    { numThreads: 1, executionProviders: webgpu },
+    { numThreads, executionProviders: wasmOnly },
+    { numThreads: 1, executionProviders: wasmOnly },
   ];
   const levels: CascadeLevel[] = [];
   for (const level of candidates) {
-    const key = `${level.proxy}|${level.numThreads}|${level.executionProviders.join(',')}`;
+    const key = `${level.numThreads}|${level.executionProviders.join(',')}`;
     if (!levels.some(existing =>
-      `${existing.proxy}|${existing.numThreads}|${existing.executionProviders.join(',')}` === key)) {
+      `${existing.numThreads}|${existing.executionProviders.join(',')}` === key)) {
       levels.push(level);
     }
   }
   return levels;
 }
 
-export function createRealEsrganSession(className: string, width: number, height: number): Promise<InferenceSession> {
+/**
+ * The Session-Fallback factory: owns the shape-pinned session cache and the
+ * persisted cascade level as instance state. The loader creates exactly one
+ * through setupRealEsrganBrowserRuntime().
+ */
+export class RealEsrganSessionFactory {
+  private readonly sessionCache = new Map<string, Promise<InferenceSession>>();
+  // Index into the cascade of the first level that produced a session. Later
+  // sessions start here instead of re-probing known-dead configurations.
+  private workingLevelIndex: number | null = null;
+
+  constructor(private readonly config: RealEsrganSessionConfig) {
+    activeExecution = config.execution;
+  }
+
+  /**
+   * Main-thread fallback session for one class, shape and precision.
+   * `precision` defaults to the factory's construction-time execution config
+   * so callers without a user setting (tests, E2E clip runner) keep the old
+   * behaviour. The cache key carries the precision: int8/fp16/fp32 resolve
+   * to different model files and must never share a session.
+   */
+  createSession(className: string, width: number, height: number, precision?: RealEsrganPrecision): Promise<InferenceSession> {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
     return Promise.reject(new Error(`RealESRGAN session needs positive integer dims, got ${String(width)}x${String(height)}.`));
   }
-  const cacheKey = `${className}_${width}x${height}`;
-  const cached = sessionCache.get(cacheKey);
+  const effective: RealEsrganPrecision = precision
+    ?? (this.config.execution.preferInt8 ? 'int8' : this.config.execution.preferFloat16 ? 'fp16' : 'fp32');
+  const cacheKey = `${className}_${width}x${height}_${effective}`;
+  const cached = this.sessionCache.get(cacheKey);
   if (cached) return cached;
 
   const promise = (async () => {
-    if (!resolveModelUrl) {
-      throw new Error('RealESRGAN model URL resolver is not registered.');
-    }
+    activeExecution = effective === 'int8'
+      ? { preferFloat16: false, preferInt8: true }
+      : effective === 'fp16'
+        ? { preferFloat16: true, preferInt8: false }
+        : { preferFloat16: false, preferInt8: false };
     const fp32FileName = realEsrganModelFileForClass(className);
     const fp16FileName = realEsrganFp16ModelFileForClass(className);
     const int8FileName = realEsrganInt8ModelFileForClass(className);
-    const useInt8 = executionConfig.preferInt8 && modelAssetExists
-      ? await modelAssetExists(int8FileName)
+    const assetExists = this.config.modelAssetExists;
+    const useInt8 = effective === 'int8' && assetExists
+      ? await assetExists(int8FileName)
       : false;
-    const useFloat16 = !useInt8 && executionConfig.preferFloat16 && modelAssetExists
-      ? await modelAssetExists(fp16FileName)
+    const useFloat16 = !useInt8 && effective === 'fp16' && assetExists
+      ? await assetExists(fp16FileName)
       : false;
-    const fileName = useInt8 ? int8FileName : useFloat16 ? fp16FileName : fp32FileName;
-    const modelUrl = resolveModelUrl(fileName);
+    let fileName = useInt8 ? int8FileName : useFloat16 ? fp16FileName : fp32FileName;
+    // Hebel 2.1: exact-shape static fp32 variant when the ladder settled on
+    // the dynamic fp32 file. Static never overrides an int8/fp16 pick, and
+    // only when the packaged asset exists — absence falls back silently.
+    // freeDimensionOverrides stay uniform (harmless on static models): zero
+    // runtime cost, one code path.
+    if (fileName === fp32FileName && assetExists) {
+      const staticFile = realEsrganStaticModelFileForShape(width, height);
+      if (staticFile && await assetExists(staticFile)) fileName = staticFile;
+    }
+    const modelUrl = this.config.resolveModelUrl(fileName);
     const ort = await import(/* webpackChunkName: "ort" */ 'onnxruntime-web');
 
     // Diagnostics: capture the runtime environment so the cascade log tells
@@ -177,10 +206,10 @@ export function createRealEsrganSession(className: string, width: number, height
       fileName, crossOriginIsolated, sharedArrayBuffer,
     );
 
-    const levels = buildCascadeLevels(threadingConfig);
-    const start = workingLevelIndex === null
+    const levels = buildCascadeLevels(this.config.threading.numThreads);
+    const start = this.workingLevelIndex === null
       ? 0
-      : Math.min(workingLevelIndex, levels.length - 1);
+      : Math.min(this.workingLevelIndex, levels.length - 1);
     let lastError: unknown = null;
     for (let index = start; index < levels.length; index += 1) {
       const level = levels[index];
@@ -194,36 +223,32 @@ export function createRealEsrganSession(className: string, width: number, height
         );
         continue;
       }
-      ort.env.wasm.proxy = level.proxy;
       ort.env.wasm.numThreads = level.numThreads;
       console.log(
-        '[RealESRGAN] try level %d: proxy=%s numThreads=%d EPs=%s',
-        index, String(level.proxy), level.numThreads, level.executionProviders.join(','),
+        '[RealESRGAN] try level %d: numThreads=%d EPs=%s',
+        index, level.numThreads, level.executionProviders.join(','),
       );
       try {
+        const freeDimensionOverrides = buildFreeDimensionOverrides({
+          batchSize: 1,
+          height,
+          width,
+          outHeight: height * 4,
+          outWidth: width * 4,
+        });
         const session = await ort.InferenceSession.create(modelUrl, {
           executionProviders: level.executionProviders,
           graphOptimizationLevel: 'all',
-          // Pin the symbolic dims to THIS session's exact inference shape. The
-          // pipeline downscales to maxInferenceHeight before readback, so the
-          // shape varies with the active cap (e.g. 576x432 at cap 432,
-          // 854x480 at cap 480); the session cache is keyed by shape, so each
-          // size builds its own pinned session. ORT 1.29's
-          // WebGPU EP throws "Shape mismatch attempting to re-use buffer
-          // {1,480,640,3} != {1,1920,2560,3}" on the FIRST run of a model
-          // with symbolic dims (batch_size/height/width): the output
-          // buffer-reuse validator compares the NHWC input shape against the
-          // output request. Concrete dims sidestep the symbolic-dim path.
-          // Overrides for symbols a model does not declare are harmless
-          // (verified against python ORT 1.29), so this is safe for both the
-          // dynamic and the static-shape model.
-          freeDimensionOverrides: {
-            batch_size: 1,
-            height,
-            width,
-          },
+          // Shape pinning: same rationale as the worker (see
+          // realesrgan-ort-shape-pinning.js — the single implementation of
+          // the ORT output-buffer workaround, out_* pinned defensively).
+          // The pipeline downscales to maxInferenceHeight before readback,
+          // so the shape varies with the active cap (e.g. 576x432 at cap
+          // 432, 854x480 at cap 480); the session cache is keyed by shape,
+          // so each size builds its own pinned session.
+          freeDimensionOverrides,
         });
-        workingLevelIndex = index;
+        this.workingLevelIndex = index;
         console.log('[RealESRGAN] session created at level %d', index);
         return session;
       } catch (error) {
@@ -233,28 +258,31 @@ export function createRealEsrganSession(className: string, width: number, height
         // Once initWasm() has failed inside the runtime, every subsequent
         // Session.create with a different numThreads will throw the same
         // poisoned error. Stop cascading and surface the original cause.
-        if (/previous call to 'initWasm\(\)' failed/i.test(message)) {
+        if (isInitWasmPoisoned(message)) {
+          // Coded so the E2E gate detects the poison by code, not prose.
           console.error(
-            '[RealESRGAN] initWasm() poisoned; remaining cascade levels skipped. ' +
-            'Underlying cause was on level %d (see warning above).', index,
+            formatRealEsrganError(REALESRGAN_ERROR_CODES.SESSION_CREATE_FAILED,
+              `initWasm() poisoned on cascade level ${index}; remaining levels skipped ` +
+              '(see the warning above for the underlying cause).'),
           );
           break;
         }
       }
     }
-    throw lastError instanceof Error
-      ? lastError
-      : new Error('RealESRGAN session creation failed on every fallback level.');
+    // Coded + prefixed: the drain logs the rejection, and the E2E gate counts
+    // the fatal code instead of matching prose.
+    const finalMessage = lastError instanceof Error
+      ? lastError.message
+      : 'RealESRGAN session creation failed on every fallback level.';
+    throw withRealEsrganCode(
+      new Error(formatRealEsrganError(REALESRGAN_ERROR_CODES.SESSION_CREATE_FAILED, finalMessage)),
+      REALESRGAN_ERROR_CODES.SESSION_CREATE_FAILED,
+    );
   })();
 
   // A failed load must not poison the cache; drop it so a retry can re-attempt.
-  void promise.catch(() => sessionCache.delete(cacheKey));
-  sessionCache.set(cacheKey, promise);
+  void promise.catch(() => this.sessionCache.delete(cacheKey));
+  this.sessionCache.set(cacheKey, promise);
   return promise;
-}
-
-/** Test hook: clear cached sessions and the persisted cascade level. */
-export function clearRealEsrganSessionCache(): void {
-  sessionCache.clear();
-  workingLevelIndex = null;
+  }
 }

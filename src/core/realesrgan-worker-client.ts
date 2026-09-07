@@ -28,43 +28,21 @@ export interface RealEsrganWorkerHandle {
   onerror: ((event: { message?: string }) => void) | null;
 }
 
-interface WorkerInitMessage {
-  type: 'init';
-  ortUrl: string;
-  wasmDir: string;
-}
-
-interface WorkerInferMessage {
-  type: 'infer';
-  id: number;
-  modelUrl: string;
-  modelUrlFp16: string | null;
-  width: number;
-  height: number;
-  data: Float32Array;
-  /** Presentation target (absent/0 = full 4x). The worker box-averages down to a valid target. */
-  targetWidth?: number;
-  targetHeight?: number;
-}
-
-interface WorkerInitReply {
-  type: 'init';
-  ok: boolean;
-  error?: string;
-}
-
-interface WorkerInferReply {
-  type: 'infer';
-  id: number;
-  ok: boolean;
-  width?: number;
-  height?: number;
-  data?: Uint8Array;
-  path?: string;
-  error?: string;
-}
-
-type WorkerReply = WorkerInitReply | WorkerInferReply;
+// Message shapes live in the canonical protocol module (shared with the
+// worker .d.ts mirror and test fakes); this client only consumes them and
+// builds its messages through the protocol builders.
+import type {
+  WorkerInferMessage,
+  WorkerInitMessage,
+} from '../shared/realesrgan-worker-protocol.js';
+import type { RealEsrganPrecision } from '../types';
+import {
+  buildWorkerInferMessage,
+  buildWorkerInitMessage,
+  isWorkerReply,
+  WORKER_REPLY_ERROR_CODES,
+} from '../shared/realesrgan-worker-protocol.js';
+import { formatRealEsrganError, REALESRGAN_ERROR_CODES, withRealEsrganCode } from '../shared/realesrgan-error-codes';
 
 /** Overridable primitives so tests can drive the client without a browser. */
 export interface RealEsrganWorkerClientOptions {
@@ -84,6 +62,13 @@ export interface RealEsrganWorkerClientOptions {
   inferTimeoutMs?: number;
   /** Maximum simultaneous worker inference requests. */
   maxConcurrentRequests?: number;
+  /**
+   * Hebel E5: extension-relative URL of the WASM-SIMD compose module,
+   * resolved like the worker script. The worker loads it lazily and falls
+   * back to JS compose when absent/unloadable. Undefined (default) keeps
+   * pure JS compose.
+   */
+  pixelsWasmPath?: string;
 }
 
 interface PendingInference {
@@ -95,33 +80,60 @@ interface PendingInference {
 const DEFAULT_INIT_TIMEOUT_MS = 15_000;
 // 18s: the first fp32 inference includes WebGPU shader compilation for every
 // kernel; on a busy system that measured >12s (the old cap), which disabled a
-// perfectly good worker after ONE slow frame.
+// perfectly good worker after ONE slow frame. Documented interplay: the
+// worker's own session-create bound (30s) is LONGER than this infer timer, so
+// a slow first create always loses the race here — the frame fails, the
+// client timer tags it transient, and the worker's session stays cached for
+// the retry.
 const DEFAULT_INFER_TIMEOUT_MS = 18_000;
 
-function isWorkerReply(value: unknown): value is WorkerReply {
-  return typeof value === 'object' && value !== null
-    && ((value as WorkerReply).type === 'init' || (value as WorkerReply).type === 'infer');
-}
-
-/**
- * Minimal inference contract the pipeline depends on. The worker client
- * implements it; tests stub it. Keeps the pipeline decoupled from the
- * client's spawn/protocol machinery.
- *
- * `runFrame` hands the WHOLE frame to the worker: tile planning, batched
- * inference, feathered composition and RGBA8 packing happen there. The
- * returned frame is tightly packed RGBA8. `targetWidth/targetHeight` are
- * OPTIONAL (0 = legacy full 4x frame): a runner that supports
- * transport-sized output box-averages the 4x result down to this size and
- * reports the actual dimensions alongside the bytes. A runner MAY ignore
- * the target (returns 4x dims) - the pipeline handles both.
- */
 export interface RealEsrganFrameResult {
   data: Uint8Array;
   width: number;
   height: number;
+  /**
+   * Precision that served this frame. Set by the ORT worker from its reply
+   * (fp16 model URL won or not); absent on the native client, whose model
+   * is baked into the host. The pipeline counts fp16 worker frames for the
+   * overlay label — unknown counts as fp32.
+   */
+  precision?: RealEsrganPrecision;
 }
 
+/**
+ * Minimal inference contract the pipeline depends on. The worker client and
+ * the native Vulkan client are the two adapters behind this seam (the
+ * Runner-Broker picks between them); tests stub it. Keeps the pipeline
+ * decoupled from each adapter's transport machinery.
+ *
+ * Everything a caller must know lives here:
+ *
+ * - Entry points. `runFrame` accepts planar NCHW RGB ([1,3,h,w]); the
+ *   returned frame is tightly packed RGBA8 with its ACTUAL dimensions.
+ *   `runFrameRgba` is the optional tight-RGBA fast path (only the native
+ *   host offers it — it POSTs RGBA8 anyway); a caller probes nothing: the
+ *   Pfadauswahl (realesrgan-inference-path) reads the capability off the
+ *   interface.
+ * - Capabilities. `supportsTargetDownscale` declares whether the adapter
+ *   box-averages the result down to `targetWidth/targetHeight` before
+ *   returning (native host: true, worker: absent). `maxInFlight` declares
+ *   how many runFrame calls the adapter overlaps (native: 2, upload N+1
+ *   overlaps compute N; worker: absent = 1, ORT's global output-buffer
+ *   cache; main-thread session: absent = 1, shared session). Absent
+ *   capabilities mean "not offered", never "probe the concrete class".
+ * - Model parameters. `modelUrl`/`modelUrlFp16` name the model asset for
+ *   this frame (resolved by the Modell-Auswahl, realesrgan-model-assets).
+ *   Only session-backed adapters consume them; the native host has its
+ *   model baked in and ignores both. `modelUrlFp16` may be null.
+ * - Buffer discipline. The caller owns the input buffer and may reuse or
+ *   free it as soon as the call returns; an adapter that still needs the
+ *   bytes in flight must copy them (the pooled pipeline buffers are reused
+ *   every frame). Results are fresh buffers owned by the caller.
+ * - Lifetime. Runners are process-lifetime singletons owned by the
+ *   Runner-Broker and shared across pipeline instances; callers must not
+ *   dispose them. Teardown belongs to the adapter classes themselves (each
+ *   cleans up its own create-failure path).
+ */
 export interface RealEsrganInferenceRunner {
   runFrame(
     modelUrl: string,
@@ -132,7 +144,27 @@ export interface RealEsrganInferenceRunner {
     targetWidth?: number,
     targetHeight?: number,
   ): Promise<RealEsrganFrameResult>;
-  dispose?(): void;
+  /**
+   * Optional fast path: tightly packed RGBA8 straight in, skipping the
+   * planar-float roundtrip. Bit-identical output for opaque video.
+   */
+  runFrameRgba?(
+    modelUrl: string,
+    width: number,
+    height: number,
+    data: Uint8Array,
+    targetWidth?: number,
+    targetHeight?: number,
+  ): Promise<RealEsrganFrameResult>;
+  readonly maxInFlight?: number;
+  /** Adapter box-averages the 4x result down to the requested target. */
+  readonly supportsTargetDownscale?: boolean;
+  /**
+   * Diagnostics hook: adapters that produce per-frame path labels fire it
+   * (once per distinct value). Assigning it on an adapter that never fires
+   * is harmless.
+   */
+  onFramePath?: ((path: string) => void) | null;
 }
 
 export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
@@ -203,20 +235,22 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
       // the main-thread session automatically.
       const message = error instanceof Error ? error.message : String(error);
       const name = error instanceof Error ? error.name : 'Error';
-      console.warn(
-        '[RealESRGAN] worker spawn failed (%s: %s); falling back to main-thread session.',
-        name, message,
-      );
+      console.warn(formatRealEsrganError(REALESRGAN_ERROR_CODES.WORKER_SPAWN_FAILED,
+        `worker spawn failed (${name}: ${message}); falling back to main-thread session.`,
+      ));
       return null;
     }
 
     const client = new RealEsrganWorkerClient(worker, inferTimeoutMs, maxConcurrentRequests);
-    const initialised = await client.initialise(resolveUrl, initTimeoutMs);
+    const initialised = await client.initialise(
+      resolveUrl,
+      initTimeoutMs,
+      options.pixelsWasmPath ? resolveUrl(options.pixelsWasmPath) : undefined,
+    );
     if (!initialised) {
-      console.warn(
-        '[RealESRGAN] worker init handshake timed out (>%dms); main-thread session will be used.',
-        initTimeoutMs,
-      );
+      console.warn(formatRealEsrganError(REALESRGAN_ERROR_CODES.WORKER_INIT_TIMEOUT,
+        `worker init handshake timed out (>${initTimeoutMs}ms); main-thread session will be used.`,
+      ));
       client.dispose();
       return null;
     }
@@ -226,12 +260,13 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
   private initialise(
     resolveUrl: (path: string) => string,
     timeoutMs: number,
+    pixelsUrl?: string,
   ): Promise<boolean> {
-    const message: WorkerInitMessage = {
-      type: 'init',
+    const message: WorkerInitMessage = buildWorkerInitMessage({
       ortUrl: resolveUrl('ort/ort.webgpu.min.mjs'),
       wasmDir: resolveUrl('ort/'),
-    };
+      ...(pixelsUrl ? { pixelsUrl } : {}),
+    });
     return new Promise<boolean>(resolve => {
       const timer = setTimeout(() => {
         this.initResolver = null;
@@ -281,9 +316,22 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
         this.lastLoggedPath = value.path;
         this.onFramePath?.(value.path);
       }
-      pending.resolve({ data: value.data, width: outputWidth, height: outputHeight });
+      pending.resolve({
+        data: value.data,
+        width: outputWidth,
+        height: outputHeight,
+        precision: value.fp16 === true ? 'fp16' : 'fp32',
+      });
     } else {
-      pending.reject(new Error(value.error ?? 'RealESRGAN worker inference failed'));
+      // Producer-side classification rides the reply's taxonomy code (the
+      // worker tags its own timeouts at the throw sites) — never prose
+      // parsing. A reply without a code is permanent, like any untagged
+      // failure the Runner-Guard sees.
+      const text = value.error ?? 'RealESRGAN worker inference failed';
+      pending.reject(withRealEsrganCode(new Error(text),
+        value.code === WORKER_REPLY_ERROR_CODES.TIMEOUT
+          ? REALESRGAN_ERROR_CODES.WORKER_TIMEOUT
+          : REALESRGAN_ERROR_CODES.WORKER_FAILED));
     }
     this.pumpRequests();
   }
@@ -309,7 +357,8 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
     const timer = setTimeout(() => {
       this.pending.delete(message.id);
       this.activeRequests = Math.max(0, this.activeRequests - 1);
-      reject(new Error('RealESRGAN worker inference timed out.'));
+      reject(withRealEsrganCode(new Error('RealESRGAN worker inference timed out.'),
+        REALESRGAN_ERROR_CODES.WORKER_TIMEOUT));
       this.pumpRequests();
     }, this.inferTimeoutMs);
     this.pending.set(message.id, { resolve, reject, timer });
@@ -351,10 +400,9 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
     this.nextId += 1;
     // Copy so the transfer never detaches a buffer the caller still owns.
     const payload = new Float32Array(data);
-    const message: WorkerInferMessage = {
-      type: 'infer', id, modelUrl, modelUrlFp16, width, height, data: payload,
-      ...(targetWidth > 0 && targetHeight > 0 ? { targetWidth, targetHeight } : {}),
-    };
+    const message: WorkerInferMessage = buildWorkerInferMessage({
+      id, modelUrl, modelUrlFp16, width, height, data: payload, targetWidth, targetHeight,
+    });
     return new Promise<RealEsrganFrameResult>((resolve, reject) => {
       this.requestQueue.push({ message, resolve, reject });
       this.pumpRequests();

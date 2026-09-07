@@ -39,6 +39,7 @@
     {
       "resources": [
         "chunks/*.js",
+        "chunks/*.wasm",
         "models/realesrgan/*",
         "models/realcugan/*",
         "ort/*"

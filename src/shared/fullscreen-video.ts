@@ -36,6 +36,12 @@ function ensureFullscreenChangeListener(): void {
     const fullscreen = getFullscreenElement();
     if (fullscreen) {
       fullscreenSeen = true;
+      // Re-arm the exit stamp: a stale stamp from an earlier cycle must not
+      // swallow the next exit's grace window (isVideoInFullscreenContext
+      // re-arms on its own non-null observations; the event path does the
+      // same here so hasPlayerFullscreenSignal's standalone grace query
+      // stays correct across cycles).
+      fullscreenExitAt = 0;
     } else if (fullscreenSeen && fullscreenExitAt === 0) {
       fullscreenExitAt = Date.now();
     }
@@ -119,7 +125,7 @@ export function getFullscreenElement(target: Document = document): Element | nul
  * against the real fullscreen subtree.
  */
 export function getAuthoritativeFullscreenElement(): Element | null {
-  if (window.top === window || !window.top) return getFullscreenElement();
+  if (typeof window === 'undefined' || window.top === window || !window.top) return getFullscreenElement();
   try {
     return getFullscreenElement(window.top.document);
   } catch {
@@ -171,9 +177,14 @@ export function videoFillsOwnViewport(video: HTMLVideoElement): boolean {
   if (!fillsViewport) return false;
   if (typeof getComputedStyle !== 'function') return true;
   const style = getComputedStyle(video);
-  return style.display !== 'none'
-    && style.visibility !== 'hidden'
-    && style.opacity !== '0';
+  if (style.display === 'none' || style.visibility === 'hidden') return false;
+  // OverlayManager hides the source video behind the output canvas with an
+  // inline opacity: 0 while the enhancement renders. Like
+  // isFullscreenVideoEligible, the applied marker exempts the video from the
+  // opacity veto — without it the first rendered frame would flip this
+  // signal off and the fullscreen reconcile would start/stop in a loop.
+  if (video.getAttribute(ANIME4K_APPLIED_ATTR) === 'true') return true;
+  return Number.parseFloat(style.opacity || '1') > 0;
 }
 
 export function rectOccupiesViewport(rect: ElementRect, viewport: ViewportMetrics): boolean {
@@ -271,18 +282,21 @@ export function isVideoInFullscreenContext(
   try {
     const top = window.top;
     if (top && top !== window) {
-      topLevel = {
-        viewport: {
-          width: top.document.documentElement.clientWidth,
-          height: top.document.documentElement.clientHeight,
-        },
-        display: {
-          width: top.screen.width,
-          height: top.screen.height,
-          availWidth: top.screen.availWidth,
-          availHeight: top.screen.availHeight,
-        },
-      };
+      const root = top.document?.documentElement;
+      if (root) {
+        topLevel = {
+          viewport: {
+            width: root.clientWidth,
+            height: root.clientHeight,
+          },
+          display: {
+            width: top.screen.width,
+            height: top.screen.height,
+            availWidth: top.screen.availWidth,
+            availHeight: top.screen.availHeight,
+          },
+        };
+      }
     }
   } catch {
     // Cross-origin top documents deny these reads; local metrics apply.

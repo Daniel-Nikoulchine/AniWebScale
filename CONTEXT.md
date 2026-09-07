@@ -54,10 +54,113 @@ gebaut (`src/shared/runtime-messages.ts`).
 **Frame-Message** — Nachricht vom Background an einen Content-Script-Frame
 (`chrome.tabs.sendMessage`), dieselbe Disziplin in beide Richtungen.
 
+## RealESRGAN
+
+**Pipeline** — die GPU-Pipeline-Klasse (`createRealEsrganPipelineClass` in
+`src/core/realesrgan-pipeline.ts`), die pro Frame Readback, Pfadauswahl,
+Inferenz-Dispatch und Composition über Staging-Slots serialisiert.
+
+**Runner** — ein Inferenz-Backend hinter `RealEsrganInferenceRunner`
+(Worker mit ORT-Session oder nativer Vulkan-Host über
+`runFrame`/`runFrameRgba`). Runner werden über den **Runner-Broker**
+(`src/core/realesrgan-runner-broker.ts`) gewählt: native-first mit
+Retry-Cooldown, Worker-Fallback, E2E-Override. Das Interface trägt seine
+Capabilities (Target-Downscale, `maxInFlight`, RGBA-Schnellpfad) als
+deklarierte optionale Member — kein Duck-Typing. Langlebigkeit: Runner
+sind prozess-langlebige Singletons des Brokers; ein Runner-Guard-Todesurteil
+eskaliert über `markRunnerDead` an den Broker (Health-Owner), der den
+Cache verwirft und beim nächsten Resolve neu wählt. Policy- und
+Statistik-Vokabular sagt **Runner**, nicht „Worker“ (der ORT-Worker ist
+ein Adapter unter mehreren); nur Adapter-eigene Namen (Worker-Client,
+Worker-Protokoll) bleiben beim Worker.
+
+**Runner-Guard** — die Failover-Policy (`src/core/realesrgan-runner-guard.ts`):
+transiente Timeouts bekommen ein Budget, permanente Fehler und
+Budgetverbrauch deaktivieren den Runner und wärmen die
+Main-Thread-Fallback-Session. Klassifiziert über Fehler-Codes auf
+Rejections, nie über Nachrichtentext. Transient ist, was in
+`REALESRGAN_TRANSIENT_ERROR_CODES` steht (`worker-timeout`,
+`native-frame-failed`, `native-frame-timeout`).
+
+**Modell-Auswahl** — das Asset-Modul (`src/core/realesrgan-model-assets.ts`),
+das „welche Modelldatei dient diesem Frame“ besitzt: URL-Resolution pro
+Klasse (inkl. E2E-File-Override), einmalige HEAD-Verifikation der
+Static-Shape-Varianten und den Per-Frame-Pick (`urlForShape`). Die
+Session-Kaskade (`realesrgan-session.ts`) behält ihr eigenes
+int8/fp16-Probing für den Main-Thread-Fallback; die Static-Shape-Regel
+teilen beide über die Tabelle in `realesrgan-models.ts`. Eine
+**Runner-Binding** koppelt Runner + Modell-Auswahl — das Runner-Interface
+selbst bleibt modellagnostisch (der Worker bekommt die URL pro Frame, der
+Native-Host hat sein Modell eingebrannt).
+
+**Frame-Entscheidung** — der pure Per-Frame-Entscheidungskern
+(`src/shared/realesrgan-frame-decision.ts`): Letterbox-Folge (verify →
+reset → poll → observe → snap — die Reihenfolge trägt die Korrektheit),
+Ziel-Geometrie (`planCropGeometry`) und Stillframe-Hold-Gate. Die Tracker
+bleiben beim Pipeline-Besitzer; der Drain konsumiert Entscheidungen und
+macht nur noch GPU-Arbeit.
+
+**Pfadauswahl (Inference Path)** — die pure Entscheidung
+(`src/shared/realesrgan-inference-path.ts`), in welcher Form ein Frame in
+die Inferenz geht (`tight-rgba | planar`) und welcher Runner ihn bedient
+(`runner-rgba | runner-planar | session`). Die Drain konsumiert den Tag
+und bekommt verengte Buffer zurück.
+
+**Session-Fallback** — die Main-Thread-ONNX-Session
+(`src/core/realesrgan-session.ts`), shape-gepinnt und pro Klasse gecacht.
+Sie dient Frames, wenn kein Runner lebt oder der Runner stirbt. Die
+**Session-Factory** (`RealEsrganSessionFactory`) wird von
+`setupRealEsrganBrowserRuntime()` gebaut und an den Loader gereicht:
+Konfiguration, Cache und Kaskaden-Fortschritt sind Instanzzustand — „erst
+konfigurieren, dann Session“ ist strukturell (keine Factory, keine
+Session), nicht mehr nur Await-Disziplin.
+
+**Frame-Job** — die Job-Orchestrierung (`src/core/realesrgan-frame-job.ts`)
+über dem Pacing-Scheduler. Sie besitzt zwei verschiedene „newest“-Fragen:
+den Publish-Gate (nur das neueste **eingereichte** Work published — für
+Buchhaltung) und `claimPresentation`, das monotone Wasserzeichen über das
+tatsächlich **Präsentierte** (für out-of-band Präsentation im Drain: ein
+älteres Später-Landean kosmetisch nie über ein neueres Ergebnis malen, ein
+älteres aber neuestes vollendetes wird trotzdem gezeigt). Slot-Bücher und
+Adapter-Backpressure bleiben bei ihren Besitzern (Pipeline-Staging, Client).
+
+**Tiling** — die Kachelplanung (`src/shared/realesrgan-tile-geometry.js`
+als kanonisches Werk mit generierter Worker-Kopie): statische Modelle bei
+exakter Shape-Übereinstimmung, dynamische sonst. Das Geometrie-Werk besitzt
+auch die Main-Thread-Planungs-API (`adaptiveRealEsrganTiling`,
+`planRealEsrganTiles`) und das Feather-Fenster — eine Formel für alle
+Compose-Engines.
+
+**Auto-Cap** — die Lastregelung (`src/shared/realesrgan-auto-cap.ts`):
+anhaltende Überlast schaltet die Live-Inferenzhöhe die Leiter runter
+(und bei Headroom wieder hoch), ohne gespeicherte Einstellungen zu
+ändern.
+
+**Letterbox** — die Inhaltserkennung (`src/shared/realesrgan-letterbox.ts`):
+hysteretisch adoptiertes Content-Rechteck, pro Frame gegen die Balken
+verifiziert; nur der Inhalt geht in die Inferenz.
+
+**Stillframe** — das Halten (`src/shared/realesrgan-stillframe.ts`):
+wiederholt sich der exakte Runner-Input, wird Inferenz und Compose
+übersprungen und das präsentierte Ergebnis gehalten.
+
+**Fehler-Codes** — die Taxonomie (`src/shared/realesrgan-error-codes.ts`):
+`[RealESRGAN:{code}]` vor Klartext in Logs, Codes auf Rejections für
+Policy-Entscheidungen. Fatal (kein Recovery: Gate fällt) gegen transient
+(Retry deckt es: Gate zählt); `auto-cap-step` ist informativ (gehört in
+keine der beiden Mengen). Produzenten taggen, der Guard entscheidet —
+Produzentenseitige Klassifikation per Code, nie per Prosa (Worker-Replies
+tragen `code`, der Native-Client taggt selbst).
+
 ## Renderer
 
 **Renderer** — der WebGPU-Teil (Device, Pipelines, Presentation). Besitzt
-sein GPU-Device hinter einem injizierbaren Provider (Test-Seam).
+sein GPU-Device hinter einem injizierbaren Provider (Test-Seam). Der
+Pipeline-Vertrag ist zweiphasig: `pass(encoder)` encodiert,
+`afterSubmit()` wird nach dem `queue.submit()` gerufen — Pipelines mit
+Nach-Submit-Arbeit (RealESRGAN-Readback) registrieren ihre
+Completion-Tracking erst dort; die Ordnung ist Interface-Vertrag, kein
+Timing-Unfall.
 
 **Frame-Generation** — Interpolations-Subsystem des Renderers hinter dem
 `FrameGenerationHost`-Seam; besitzt die Zwei-Textur-Historie.

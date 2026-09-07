@@ -102,6 +102,7 @@ export function qualityToLegacyTier(quality: QualityTier): PerformanceTier {
 
 export function legacyTierToQuality(tier: unknown): QualityTier {
   if (tier === 'performance') return 'M';
+  if (tier === 'balanced') return 'VL';
   if (tier === 'quality' || tier === 'ultra') return 'UL';
   return 'VL';
 }

@@ -106,7 +106,15 @@ export class FrameGeneration {
   /** Release the frame history and stop any scheduled generated frame. */
   destroyResources(): void {
     this.stopAnimation();
-    this.historyTextures?.forEach(texture => texture.destroy());
+    // A lost device may already have released these allocations; never let
+    // a throwing destroy leave stale history references behind.
+    for (const texture of this.historyTextures ?? []) {
+      try {
+        texture.destroy();
+      } catch {
+        // The old texture is unusable either way; continue teardown.
+      }
+    }
     this.historyTextures = null;
     this.previousHistoryTexture = null;
     this.currentHistoryTexture = null;
@@ -159,10 +167,17 @@ export class FrameGeneration {
   private renderHistoryFrame(factor: Float32Array<ArrayBuffer>, label: string): void {
     if (this.host.isDestroyed() || !this.host.frameGenerationEnabled
         || !this.historyReady || this.host.isRebuilding()) return;
-    this.host.device.queue.writeBuffer(this.host.presentationUniform, 0, factor);
-    const encoder = this.host.device.createCommandEncoder({ label });
-    this.host.encodePresentation(encoder);
-    this.host.device.queue.submit([encoder.finish()]);
+    // Called from finally blocks (pause flush, rebuild cleanup): never let a
+    // presentation failure mask the original error or produce unhandled
+    // rejections from void drainFrames.
+    try {
+      this.host.device.queue.writeBuffer(this.host.presentationUniform, 0, factor);
+      const encoder = this.host.device.createCommandEncoder({ label });
+      this.host.encodePresentation(encoder);
+      this.host.device.queue.submit([encoder.finish()]);
+    } catch (error) {
+      console.warn('[Anime4K] Frame generation present failed:', error);
+    }
   }
 
   private renderGeneratedIntermediate(): void {
@@ -210,6 +225,12 @@ export class FrameGeneration {
     const tick = (now: number) => {
       this.generatedFrameAnimationId = null;
       if (this.host.isDestroyed() || !this.host.frameGenerationEnabled || this.host.isRebuilding()) return;
+      // Never present an intermediate while the main loop encodes the next
+      // real frame: both write presentationUniform and would race the factor.
+      if (this.host.isFrameProcessing()) {
+        this.generatedFrameAnimationId = requestAnimationFrame(tick);
+        return;
+      }
       if (this.host.video.paused || this.host.video.ended) {
         this.onPlaybackStopped();
         return;

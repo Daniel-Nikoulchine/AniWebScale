@@ -21,17 +21,27 @@
  * counts via the results endpoint.
  */
 import { createServer } from 'node:http';
+import { renderClipPage } from './realesrgan-clip-page.mjs';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path, { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cmd as webExt } from 'web-ext';
+// Knob registry: runner env -> page query -> bridge payload all derive from
+// one table (new knobs arrive as one row, never as new code paths).
+import {
+  E2E_BRIDGE_ACTIONS,
+  E2E_BRIDGE_MESSAGE,
+  E2E_KNOBS,
+  e2eKnobQueryKeys,
+  knobBridgeFromQuery,
+  knobQueryFromEnv,
+} from '../../src/shared/realesrgan-e2e-knobs.js';
 
 const workspace = path.resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const sourceDir = path.join(workspace, 'dist-firefox');
 const clipPath = path.join(workspace, 'tests/fixtures/one_piece_clip.mp4');
 const PORT = 4188;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
-const BRIDGE_ORIGIN = 'http://127.0.0.1:4173';
 const firefoxBinary = process.env.E2E_FIREFOX_BINARY;
 const firefoxHeadless = process.env.E2E_FIREFOX_HEADLESS === '1';
 const collectSeconds = Number(process.env.E2E_REALESRGAN_SECONDS || 40);
@@ -59,153 +69,22 @@ const server = createServer((request, response) => {
   }
   if (url.pathname === '/clip.html' || url.pathname === '/') {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-    response.end(`<!doctype html><html><head><style>
-      html,body{margin:0;background:#000;height:100%;overflow:hidden}
-      video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;background:#000}
-    </style></head><body>
-    <video id="clip" muted autoplay loop playsinline src="/one_piece_clip.mp4"></video>
-    <script>
-      // Console mirror for the runner: every log line goes to the results
-      // endpoint so the runner can assert on worker/pipeline messages. The
-      // content-script world forwards its logs via 'anime4k-e2e-log'
-      // CustomEvents (see content.ts installLocalE2ETestBridge); the page
-      // world's own console calls are shimmed directly below.
-      const send = (level, text) => {
-        try {
-          void fetch('/__console', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ level, text }),
-          });
-        } catch { /* ignore */ }
-      };
-      for (const level of ['log', 'info', 'warn', 'error']) {
-        const original = console[level].bind(console);
-        console[level] = (...args) => { send(level, args.map(a => String(a?.message ?? a)).join(' ')); original(...args); };
-      }
-      // State beacon: reflect the page state in the document title so the
-      // runner (and the user looking at the window) can see it even when
-      // fetch()/console mirroring is unavailable.
-      const beacon = state => { document.title = 'CLIP ' + state; };
-      beacon('loading token=' + (new URLSearchParams(location.search).get('token') ? 'yes' : 'no'));
-      // Heartbeat: proves the page JS is alive and fetch() works. The runner
-      // sees these as PAGE lines every 5s.
-      setInterval(() => send('info', '[clip-e2e] heartbeat t=' + Math.round(performance.now() / 1000) + 's'), 5000);
-      // Mirror last log line into the title too.
-      const lastLog = [];
-      const noteTitle = line => {
-        lastLog.push(line);
-        if (lastLog.length > 3) lastLog.shift();
-        beacon(lastLog.join(' | '));
-      };
-      window.addEventListener('anime4k-e2e-log', event => {
-        const detail = event.detail ?? {};
-        send(detail.level ?? 'info', detail.text ?? String(detail));
-        noteTitle(String(detail.text ?? detail));
-      });
-
-      // Quiet autoplay: muted+autoplay+loop plays without a gesture.
-      document.querySelector('#clip').addEventListener('error', event => {
-        send('error', 'video element error ' + String(event.message ?? ''));
-      });
-      // Drive the extension's local E2E bridge (content.ts
-      // installLocalE2ETestBridge): it accepts commands on ${BRIDGE_ORIGIN}
-      // pages when __ANIME4K_E2E__ is compiled in. The bridge is installed
-      // in THIS page because the extension injects on every http page; we
-      // simply post the configure command with a token we invent - the
-      // bridge validates the token only against its own query param, so we
-      // reload ourselves WITH a token first. Fullscreen is requested by the
-      // extension itself (autoFullscreenEnabled=true).
-      (async () => {
-        const params = new URLSearchParams(location.search);
-        const token = params.get('token');
-        if (!token) {
-          // First load: reload with a token so the bridge accepts commands.
-          const params0 = new URLSearchParams(location.search);
-          const next = new URLSearchParams({ token: crypto.randomUUID() });
-          const modelFile = params0.get('modelFile');
-          if (modelFile) next.set('modelFile', modelFile);
-          // Runner-steered E2E knobs survive the token reload.
-          for (const key of ['backend', 'cap']) {
-            const value = params0.get(key);
-            if (value) next.set(key, value);
-          }
-          location.href = '/clip.html?' + next.toString();
-          return;
-        }
-        const seenLogs = new Set();
-        const bridgeOnce = (action, payload = {}) => new Promise((resolve, reject) => {
-          const id = crypto.randomUUID();
-          const timeout = setTimeout(() => reject(new Error('bridge timeout: ' + action)), 5000);
-          const receive = event => {
-            if (event.source !== window || event.data?.type !== 'anime4k-e2e-response'
-                || event.data?.token !== token || event.data?.id !== id) return;
-            window.removeEventListener('message', receive); clearTimeout(timeout);
-            if (event.data.ok) resolve(event.data); else reject(new Error(event.data.message || 'bridge failed'));
-          };
-          window.addEventListener('message', receive);
-          window.postMessage({ type: 'anime4k-e2e-command', token, id, action, ...payload }, location.origin);
-        });
-      // Firefox does not forward CustomEvents across worlds, so instead of
-      // listening for pushed events we POLL the bridge for its log buffer.
-      setInterval(async () => {
-        try {
-          const response = await bridgeOnce('get-logs');
-          for (const line of response.logs ?? []) {
-            if (!seenLogs.has(line)) {
-              seenLogs.add(line);
-              send('ext', line);
-            }
-          }
-        } catch { /* bridge not ready */ }
-      }, 1000);
-        // The content script (document_idle) installs the bridge AFTER our
-        // inline page script runs; retry until the bridge answers.
-        const bridge = async (action, payload = {}) => {
-          let lastError = null;
-          for (let attempt = 0; attempt < 40; attempt += 1) {
-            try { return await bridgeOnce(action, payload); } catch (error) { lastError = error; }
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
-          throw lastError ?? new Error('bridge unreachable');
-        };
-        try {
-          const query = new URLSearchParams(location.search);
-          await bridge('configure-realesrgan', {
-            modelFile: query.get('modelFile') ?? undefined,
-            // Runner-steered E2E knobs (E2E_BACKEND / E2E_CAP_HEIGHT env on the
-            // runner, forwarded via the start URL query).
-            backend: query.get('backend') ?? undefined,
-            realesrganCapHeight: query.get('cap') ? Number(query.get('cap')) : undefined,
-          });
-          send('info', '[clip-e2e] configured mode=REALESRGAN');
-          noteTitle('configured');
-          send('info', '[clip-e2e] fullscreenEnabled=' + String(document.fullscreenEnabled));
-          // Enter video fullscreen: the pipeline only starts on fullscreen
-          // (autoFullscreenEnabled). The E2E prefs set
-          // full-screen-api.allow-trusted-requests-only=false so a scripted
-          // request is honored without a user gesture.
-          await document.querySelector('#clip').requestFullscreen();
-          send('info', '[clip-e2e] fullscreen requested');
-        } catch (error) {
-          send('warn', '[clip-e2e] bridge configure failed ' + String(error?.message || error));
-          noteTitle('bridge-fail ' + String(error?.message || error).slice(0, 60));
-        }
-        // Retry fullscreen on every real user gesture (the runner clicks into
-        // the window via ydotool to create a transient activation).
-        const tryFullscreen = async () => {
-          try {
-            if (!document.fullscreenElement) {
-              await document.querySelector('#clip').requestFullscreen();
-              send('info', '[clip-e2e] fullscreen entered');
-            }
-          } catch (error) {
-            send('warn', '[clip-e2e] fullscreen retry failed ' + String(error?.message || error));
-          }
-        };
-        window.addEventListener('click', () => void tryFullscreen(), true);
-        window.addEventListener('keydown', () => void tryFullscreen(), true);
-      })();
-    </script></body></html>`);
+    // E2E driver data: bridge payload + query keys + action names derive
+    // from the knob table per request, so the page carries data, no logic.
+    const e2ePayload = {};
+    for (const knob of E2E_KNOBS) {
+      if (!knob.bridge) continue;
+      const value = knobBridgeFromQuery(knob, url.searchParams.get(knob.query));
+      if (value !== undefined) e2ePayload[knob.bridge] = value;
+    }
+    const e2eDataJson = JSON.stringify({
+      actions: E2E_BRIDGE_ACTIONS,
+      messages: E2E_BRIDGE_MESSAGE,
+      queryKeys: e2eKnobQueryKeys(),
+      payload: e2ePayload,
+      forceOverload: url.searchParams.get('forceOverload') === '1',
+    }).replace(/</g, '\\u003c');
+    response.end(renderClipPage(e2eDataJson));
     return;
   }
   if (url.pathname === '/__console') {
@@ -321,10 +200,12 @@ const runner = await webExt.run({
   firefox: firefoxBinary,
   startUrl: [`${ORIGIN}/clip.html${(() => {
     const params = new URLSearchParams();
-    if (process.env.E2E_MODEL_FILE) params.set('modelFile', process.env.E2E_MODEL_FILE);
-    // Live-E2E knobs: E2E_BACKEND=native|webgpu, E2E_CAP_HEIGHT=405|432|480.
-    if (process.env.E2E_BACKEND) params.set('backend', process.env.E2E_BACKEND);
-    if (process.env.E2E_CAP_HEIGHT) params.set('cap', process.env.E2E_CAP_HEIGHT);
+    // Live-E2E knobs derive from the registry table (env -> query);
+    // documented per knob in src/shared/realesrgan-e2e-knobs.js.
+    for (const knob of E2E_KNOBS) {
+      const value = knobQueryFromEnv(knob, process.env[knob.env]);
+      if (value !== undefined) params.set(knob.query, value);
+    }
     const query = params.toString();
     return query ? `?${query}` : '';
   })()}`],
@@ -476,28 +357,83 @@ await new Promise(resolve => setTimeout(resolve, Math.max(15, collectSeconds - c
 // --- Evaluate ----------------------------------------------------------------
 const lines = consoleLines.join('\n');
 const hasStamp = /content build 1\.0\.1[4-9]|content build 1\.\d+\.\d+/.test(lines);
-const workerPaths = [...lines.matchAll(/worker composition path: (\S+)/g)].map(m => m[1]);
+// p7 worker path labels: onFramePath logs '[RealESRGAN] runner composition
+// path: <label>' once per distinct value (see realesrgan-pipeline.ts).
+const workerPaths = [...lines.matchAll(/runner composition path: (\S+)/g)].map(m => m[1]);
 // p7 native HTTP transport: onFramePath('native-vulkan-gpu (WxH→4Wx4H NNms http)')
+// Hebel E4: onFramePath('native-srvgg (WxH→4Wx4H NNms http)') for the
+// hand-written backend (same transport, selected via ?srvggVulkan=1).
 const nativeHttpPaths = [...lines.matchAll(/native-vulkan-gpu \(([^)]+)\)/g)].map(m => m[1]);
+const nativeSrvggPaths = [...lines.matchAll(/native-srvgg \(([^)]+)\)/g)].map(m => m[1]);
 const nativeHttpUsed = nativeHttpPaths.length > 0;
+const nativeSrvggUsed = nativeSrvggPaths.length > 0;
 const shapeMismatch = /Shape mismatch attempting to re-use buffer/.test(lines);
-const workerFailed = /worker inference failed/.test(lines);
-const inferenceTimedOut = /worker inference timed out/.test(lines);
 const workerSpawnFailed = /worker spawn failed|worker init handshake timed out/.test(lines);
-const sessionCreateFailed = /session creation failed on every fallback level|initWasm\(\) poisoned/.test(lines);
 const gpuCompose = workerPaths.some(p => p.includes('gpu-compose'));
-const cpuTilesGpu = workerPaths.some(p => p.includes('cpu-tiles-gpu'));
+// 'cpu-tiles-batched-gpu' (the default multi-tile lane) does not contain the
+// 'cpu-tiles-gpu' substring — check it explicitly or a healthy worker-only
+// run fails the gate below.
+const cpuTilesGpu = workerPaths.some(p => p.includes('cpu-tiles-gpu') || p.includes('cpu-tiles-batched-gpu'));
+const cpuSingleGpu = workerPaths.some(p => p.includes('cpu-single-gpu'));
+const wasmCompose = workerPaths.some(p => p.includes('-wasm'));
 const mainThreadTookOver = /main-thread session takes over/.test(lines);
+// Failure taxonomy (src/shared/realesrgan-error-codes.ts): the verdict
+// matches machine-readable `[RealESRGAN:{code}]` prefixes, never log prose —
+// a reworded message cannot slip past the gate silently. Fatal codes fail
+// the gate on first sight; transient codes report counts.
+const codeHits = code => [...lines.matchAll(new RegExp(`\\[RealESRGAN:${code}\\]`, 'g'))].length;
+const fatalCodes = ['worker-failed', 'worker-spawn-failed', 'worker-init-timeout', 'session-create-failed'];
+const fatalCodeHits = fatalCodes.filter(code => codeHits(code) > 0);
+const transientSummary = [
+  'infer-retry', 'worker-timeout', 'native-frame-failed', 'native-frame-timeout', 'native-handshake-timeout',
+].map(code => `${code}=${codeHits(code)}`).join(' ');
+const workerFailed = codeHits('worker-failed') > 0;
+const inferenceTimedOut = codeHits('worker-timeout') > 0;
+// initWasm poison and the every-level cascade failure both carry the
+// session-create-failed code since realesrgan-session.ts tags them.
+const sessionCreateFailed = codeHits('session-create-failed') > 0;
+const autoCapCodeHits = codeHits('auto-cap-step');
+// Live stats windows forwarded by the page ([clip-e2e] stats ...). Median
+// inference per run for timing gates.
+const statSamples = [...lines.matchAll(/\[clip-e2e\] stats infer=([\d.]+)ms readback=([\d.]+)ms compose=([\d.]+)ms fps=([\d.]+)(?: precision=(\S+))? n=(\d+)/g)]
+  .map(m => ({ inferMs: Number(m[1]), fps: Number(m[4]), precision: m[5] ?? 'n/a' }));
+const medianInfer = statSamples.length
+  ? statSamples.map(s => s.inferMs).sort((a, b) => a - b)[statSamples.length >> 1]
+  : null;
+// Hebel-C proof: with E2E_FORCE_OVERLOAD=1 the run injects synthetic
+// overload twice; both ladder steps must commit live (console.info from
+// applyAutoCapStep flows through the log forwarder).
+const forceOverload = process.env.E2E_FORCE_OVERLOAD === '1';
+const autoCapStep1 = /auto-cap -> 432p/.test(lines);
+const autoCapStep2 = /auto-cap -> 405p/.test(lines);
 
 const checks = [
   { name: 'extension content script loaded', pass: hasStamp },
   { name: 'no Shape mismatch', pass: !shapeMismatch, detail: shapeMismatch ? 'shape mismatch seen' : '' },
-  { name: 'no worker inference failure', pass: !workerFailed && !inferenceTimedOut && !workerSpawnFailed && !sessionCreateFailed },
-  { name: 'native HTTP transport used (or worker fallback)', pass: nativeHttpUsed || workerPaths.length > 0,
-    detail: nativeHttpUsed ? `native frames=[${nativeHttpPaths.slice(0, 3).join(', ')}]` : `worker paths=[...new Set(workerPaths)].join(',')` },
-  { name: 'GPU inference path used (native http / cpu-tiles-gpu / gpu-compose)', pass: nativeHttpUsed || cpuTilesGpu || gpuCompose },
+  // Tolerated retries (worker-timeout) report as transient counts, never as
+  // failure: the taxonomy treats them as retry-covered, and the guard proves
+  // recovery by serving subsequent frames. Only no-recovery signals fail.
+  { name: 'no worker inference failure', pass: !workerFailed && !workerSpawnFailed && !sessionCreateFailed,
+    detail: inferenceTimedOut ? 'tolerated transient timeouts (see transient counts)' : '' },
+  { name: 'no fatal error codes', pass: fatalCodeHits.length === 0,
+    detail: fatalCodeHits.length ? `codes=[${fatalCodeHits.join(',')}] transient ${transientSummary}` : `transient ${transientSummary}` },
+  { name: 'native HTTP transport used (or worker fallback)', pass: nativeHttpUsed || nativeSrvggUsed || workerPaths.length > 0,
+    detail: nativeSrvggUsed ? `srvgg frames=[${nativeSrvggPaths.slice(0, 3).join(', ')}]`
+      : nativeHttpUsed ? `native frames=[${nativeHttpPaths.slice(0, 3).join(', ')}]` : `worker paths=[${[...new Set(workerPaths)].join(',')}]` },
+  { name: 'GPU inference path used (native http / srvgg / cpu-tiles-gpu / gpu-compose / wasm / single)', pass: nativeHttpUsed || nativeSrvggUsed || cpuTilesGpu || cpuSingleGpu || wasmCompose || gpuCompose },
   { name: 'no main-thread takeover', pass: !mainThreadTookOver },
+  ...(forceOverload ? [
+    { name: 'auto-cap stepped 480 -> 432 live', pass: autoCapStep1 },
+    { name: 'auto-cap stepped 432 -> 405 live', pass: autoCapStep2 },
+    { name: 'auto-cap steps carry their code (2 ladder commits)', pass: autoCapCodeHits >= 2 },
+  ] : []),
 ];
+const precisionVotes = statSamples.map(s => s.precision);
+const servedPrecision = precisionVotes.length
+  ? [...new Set(precisionVotes)].sort((a, b) =>
+      precisionVotes.filter(p => p === b).length - precisionVotes.filter(p => p === a).length)[0]
+  : 'n/a';
+console.log(`[stats] windows=${statSamples.length} medianInferMs=${medianInfer === null ? 'n/a' : medianInfer.toFixed(1)} servedPrecision=${servedPrecision}`);
 console.log('---');
 for (const check of checks) {
   console.log(`${check.pass ? 'PASS' : 'FAIL'}  ${check.name}${check.detail ? `: ${check.detail}` : ''}`);

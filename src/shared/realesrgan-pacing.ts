@@ -3,32 +3,38 @@
  *
  * RealESRGAN inference can take longer than a video frame interval. The video
  * keeps running; this scheduler decides which frame is worth processing and
- * which results are stale. A frame is processed only when no inference is in
- * flight. When a newer frame arrives mid-inference, the in-flight result is
- * marked stale and dropped on completion, and the skipped frames are counted
- * for the stats overlay.
+ * which results are stale. A frame is processed only when fewer than `depth`
+ * inferences are in flight (Hebel 2.4: depth 2 on the native path so upload
+ * N+1 overlaps compute N; 1 everywhere else). When no slot is free, newly
+ * arriving frames are skipped and counted for the stats overlay.
  */
 export class RealEsrganFrameScheduler {
-  private inFlightFrame: number | null = null;
+  private readonly inFlight = new Set<number>();
   private newestSeenFrame = -1;
   private skipped = 0;
   private dropped = 0;
 
-  /** True when no inference is running and this frame may start one. */
-  shouldProcess(frameIndex: number): boolean {
-    return this.inFlightFrame === null && frameIndex > this.newestSeenFrame;
+  /** True when a slot below `depth` is free and this frame is new. */
+  shouldProcess(frameIndex: number, depth = 1): boolean {
+    return this.inFlight.size < Math.max(1, Math.floor(depth))
+      && frameIndex > this.newestSeenFrame;
   }
 
   /** Mark that inference for `frameIndex` has started. */
   markStarted(frameIndex: number): void {
-    this.inFlightFrame = frameIndex;
+    this.inFlight.add(frameIndex);
     if (frameIndex > this.newestSeenFrame) this.newestSeenFrame = frameIndex;
   }
 
-  /** A newer frame arrived from the video while inference may be running. */
-  noteNewerFrame(frameIndex: number): void {
+  /**
+   * A frame arrived that will NOT be processed (no free slot). Counts the
+   * gap since the last seen frame while work is in flight. Call only on the
+   * skip path: processed frames go through markStarted(), which never
+   * counts — otherwise a depth-2 start would bill itself as skipped.
+   */
+  noteSkipped(frameIndex: number): void {
     if (frameIndex <= this.newestSeenFrame) return;
-    if (this.inFlightFrame !== null && frameIndex > this.inFlightFrame) {
+    if (this.inFlight.size > 0) {
       this.skipped += frameIndex - this.newestSeenFrame;
     }
     this.newestSeenFrame = frameIndex;
@@ -45,7 +51,21 @@ export class RealEsrganFrameScheduler {
 
   /** Mark inference for `frameIndex` as finished. */
   markCompleted(frameIndex: number): void {
-    if (this.inFlightFrame === frameIndex) this.inFlightFrame = null;
+    this.inFlight.delete(frameIndex);
+  }
+
+  /**
+   * Newest submitted-but-unfinished frame, or -1 when idle. Lets the
+   * pipeline skip fetching a frame that newer in-flight work has already
+   * made redundant (stale-skip), instead of burning serial host time on
+   * bytes claimPresentation would drop anyway.
+   */
+  newestInFlightFrame(): number {
+    let newest = -1;
+    for (const frame of this.inFlight) {
+      if (frame > newest) newest = frame;
+    }
+    return newest;
   }
 
   /** Frames that arrived but were never processed because inference was busy. */
@@ -59,7 +79,7 @@ export class RealEsrganFrameScheduler {
   }
 
   reset(): void {
-    this.inFlightFrame = null;
+    this.inFlight.clear();
     this.newestSeenFrame = -1;
     this.skipped = 0;
     this.dropped = 0;

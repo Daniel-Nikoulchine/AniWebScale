@@ -23,16 +23,24 @@ export function stashEnhancer(enhancer: VideoEnhancer): boolean {
   debug(`Stashing active enhancer for ${mediaKey}.`);
   enhancer.detach();
 
-  const cleanupTimer = window.setTimeout(() => {
-    debug(`Stash for ${mediaKey} expired. Cleaning up.`);
-    clearStashEntry(mediaKey);
-  }, STASH_TTL);
-
-  stash.push({
+  const item: StashedEnhancer = {
     enhancer,
     mediaKey,
-    cleanupTimer,
-  });
+    cleanupTimer: 0,
+  };
+  // Expire this exact stash item, not "whichever entry currently holds the
+  // key": two players sharing one source URL would otherwise let the first
+  // expiry kill the second (newer) entry.
+  item.cleanupTimer = window.setTimeout(() => {
+    debug(`Stash for ${mediaKey} expired. Cleaning up.`);
+    const index = stash.indexOf(item);
+    if (index !== -1) {
+      const [stashed] = stash.splice(index, 1);
+      stashed.enhancer.destroy();
+    }
+  }, STASH_TTL);
+
+  stash.push(item);
   return true;
 }
 
@@ -51,16 +59,6 @@ export function findAndUnstashEnhancer(video: HTMLVideoElement): VideoEnhancer |
   stash.splice(index, 1);
 
   return stashedItem.enhancer;
-}
-
-function clearStashEntry(mediaKey: string): void {
-  const index = stash.findIndex(item => item.mediaKey === mediaKey);
-  if (index !== -1) {
-    const stashedItem = stash[index];
-    clearTimeout(stashedItem.cleanupTimer);
-    stashedItem.enhancer.destroy();
-    stash.splice(index, 1);
-  }
 }
 
 export function clearEnhancerStash(): void {

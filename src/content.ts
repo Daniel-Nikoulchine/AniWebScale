@@ -5,7 +5,7 @@
  * gesture forwarding.
  */
 import { initializeOnPage, reapplySettings } from './core/video-manager';
-import { getEnhancer } from './core/enhancer-map';
+import { getAllManagedVideos, getEnhancer } from './core/enhancer-map';
 import { NativeIsolationSession } from './core/native-isolation';
 import { NativeInputBridge, showNotice } from './core/native-input-bridge';
 import { installIframeSiteAccessProbe } from './core/iframe-site-access';
@@ -16,6 +16,7 @@ import { nativeStopMessage } from './shared/runtime-messages';
 import { nativeConsentPrompt } from './shared/native-consent';
 import { shouldApplySettingsChange } from './utils/settings-change';
 import { initDebugLogging, setVerboseLogging } from './utils/debug-log';
+import { E2E_BRIDGE_ACTIONS, E2E_BRIDGE_MESSAGE, E2E_KNOBS, knobStorageFromBridge } from './shared/realesrgan-e2e-knobs.js';
 
 const CONTENT_INSTANCE_KEY = '__anime4kContentInstalledV1';
 const contentGlobal = globalThis as typeof globalThis & { [CONTENT_INSTANCE_KEY]?: boolean };
@@ -34,6 +35,27 @@ const inputBridge = new NativeInputBridge(isolation);
 // Firefox, so push-based forwarding silently fails there).
 const E2E_LOG_BUFFER: string[] = [];
 
+/**
+ * Compartment-safe single-arg formatting for the E2E log ring: Firefox
+ * content scripts can hold cross-compartment rejections where even
+ * `instanceof` or String() throws ("Permission denied to access property
+ * constructor", "non-unwrappable wrapper"). A throwing formatter used to
+ * lose exactly the failure lines E2E needs, so every read is guarded.
+ * Readable values keep their exact text (machine-parsed delimiters like
+ * the onFramePath parens must survive); only unreadable values degrade.
+ */
+function safeLogArg(value: unknown): string {
+  try {
+    const message = (value as { message?: unknown })?.message;
+    if (typeof message === 'string' && message.length > 0) return message;
+  } catch { /* cross-compartment: fall through to String() */ }
+  try {
+    return String(value);
+  } catch {
+    return '<unreadable cross-compartment value>';
+  }
+}
+
 function installLogForwarder(): void {
   if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(location.origin)) return;
   for (const level of ['log', 'info', 'warn', 'error'] as const) {
@@ -41,7 +63,13 @@ function installLogForwarder(): void {
       const original = console[level].bind(console);
       Object.defineProperty(console, level, {
         value: (...args: unknown[]) => {
-          E2E_LOG_BUFFER.push(`[${level}] ${args.map(value => String(value instanceof Error ? value.message : value)).join(' ')}`);
+          let text: string;
+          try {
+            text = args.map(safeLogArg).join(' ');
+          } catch {
+            text = '<unreadable log args>';
+          }
+          E2E_LOG_BUFFER.push(`[${level}] ${text}`);
           if (E2E_LOG_BUFFER.length > 200) E2E_LOG_BUFFER.shift();
           original(...args);
         },
@@ -61,10 +89,10 @@ function installLocalE2ETestBridge(): void {
   if (!token) return;
   window.addEventListener('message', event => {
     const data = event.data as Record<string, unknown> | null;
-    if (event.source !== window || !data || data.type !== 'anime4k-e2e-command' || data.token !== token
+    if (event.source !== window || !data || data.type !== E2E_BRIDGE_MESSAGE.COMMAND || data.token !== token
         || typeof data.id !== 'string') return;
     void (async () => {
-      if (data.action === 'configure') {
+      if (data.action === E2E_BRIDGE_ACTIONS.CONFIGURE) {
         if (data.forceNoAdapter === true && navigator.gpu) {
           Object.defineProperty(navigator.gpu, 'requestAdapter', {
             configurable: true,
@@ -77,33 +105,47 @@ function installLocalE2ETestBridge(): void {
         });
         return;
       }
-      if (data.action === 'configure-realesrgan') {
-        // E2E knobs from the clip runner page (query params): backend
-        // 'native' exercises the ncnn-Vulkan host, realesrganCapHeight
-        // 405|432|480 selects the inference cap preset under test.
-        const backend = data.backend === 'native' ? 'native' : 'webgpu';
-        const cap = data.realesrganCapHeight === 405 || data.realesrganCapHeight === 432
-          || data.realesrganCapHeight === 480 ? data.realesrganCapHeight : undefined;
-        await chrome.storage.local.set({
+      if (data.action === E2E_BRIDGE_ACTIONS.CONFIGURE_REALESRGAN) {
+        // E2E knobs ride the registry table (env -> query -> bridge ->
+        // storage): new knobs arrive as one table row, never as new code.
+        const storagePatch = {
           extensionEnabled: true, mode: 'REALESRGAN', quality: 'M', output: 'auto',
-          backend, statsEnabled: true, autoFullscreenEnabled: true,
+          backend: 'webgpu', statsEnabled: true, autoFullscreenEnabled: true,
           frameGenerationEnabled: false,
-          ...(cap !== undefined ? { realesrganCapHeight: cap } : {}),
-        });
-        // Optional static-shape model override for the clip E2E runner.
-        if (typeof data.modelFile === 'string') {
-          await chrome.storage.local.set({ e2eModelFile: data.modelFile });
+        };
+        for (const knob of E2E_KNOBS) {
+          if (!knob.bridge) continue;
+          const patch = knobStorageFromBridge(knob, data[knob.bridge]);
+          if (patch) Object.assign(storagePatch, patch);
         }
+        await chrome.storage.local.set(storagePatch);
         return;
       }
-      if (data.action === 'get-logs') {
+      if (data.action === E2E_BRIDGE_ACTIONS.GET_LOGS) {
         return { logs: E2E_LOG_BUFFER.slice() };
+      }
+      if (data.action === E2E_BRIDGE_ACTIONS.FORCE_OVERLOAD) {
+        // Hebel-C E2E proof: inject one synthetic overload sample into the
+        // live enhancer so the run can verify the cap step without real
+        // GPU overload. Returns the effective cap afterwards.
+        const videos = getAllManagedVideos();
+        const enhancer = videos.length > 0 ? getEnhancer(videos[0]!) : undefined;
+        if (!enhancer) throw new Error('no live enhancer for force-overload');
+        return { effectiveCap: enhancer.e2eInjectOverloadStats() };
+      }
+      if (data.action === E2E_BRIDGE_ACTIONS.GET_STATS) {
+        // E1 timing gate: sample the live RealESRGAN stats window so the
+        // runner can compare inference medians across runs (ORT vs engine).
+        const videos = getAllManagedVideos();
+        const enhancer = videos.length > 0 ? getEnhancer(videos[0]!) : undefined;
+        if (!enhancer) throw new Error('no live enhancer for get-stats');
+        return { stats: enhancer.e2eLastStats() ?? null };
       }
       throw new Error('Unsupported local E2E command.');
     })().then(
-      result => window.postMessage({ type: 'anime4k-e2e-response', token, id: data.id, ok: true, ...result }, location.origin),
+      result => window.postMessage({ type: E2E_BRIDGE_MESSAGE.RESPONSE, token, id: data.id, ok: true, ...result }, location.origin),
       error => window.postMessage({
-        type: 'anime4k-e2e-response', token, id: data.id, ok: false,
+        type: E2E_BRIDGE_MESSAGE.RESPONSE, token, id: data.id, ok: false,
         message: error instanceof Error ? error.message : String(error),
       }, location.origin),
     );

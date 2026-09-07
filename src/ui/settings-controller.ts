@@ -1,5 +1,6 @@
-import type { EnhancementMode, QualityTier, RealEsrganCapHeight, RenderBackend } from '../types';
+import type { EnhancementMode, QualityTier, RealEsrganCapHeight, RealEsrganPrecision, RenderBackend } from '../types';
 import type { LocalSettings } from '../types';
+import { DEFAULT_SETTINGS } from '../utils/settings';
 import { applySettings, type SettingsApplyResult, type SettingsUpdate } from '../utils/apply-settings';
 
 export interface RenderControlElements {
@@ -7,13 +8,35 @@ export interface RenderControlElements {
   quality: HTMLSelectElement;
   backend: HTMLSelectElement;
   realesrganCap?: HTMLSelectElement;
+  realesrganPrecision?: HTMLSelectElement;
   statistics: HTMLInputElement;
   frameGeneration: HTMLInputElement;
 }
 
 function parseRealEsrganCap(value: string): RealEsrganCapHeight | null {
   const parsed = Number(value);
-  return parsed === 480 || parsed === 432 || parsed === 405 ? parsed : null;
+  return parsed === 480 || parsed === 432 || parsed === 405 || parsed === 360 ? parsed : null;
+}
+
+function parseRealEsrganPrecision(value: string): RealEsrganPrecision | null {
+  return value === 'fp32' || value === 'fp16' || value === 'int8' ? value : null;
+}
+
+/** Built-in default per render/local key, used when a storage key is removed. */
+function defaultForKey(key: string): string | number | boolean | undefined {
+  switch (key) {
+    case 'mode': return DEFAULT_SETTINGS.mode;
+    case 'quality': return DEFAULT_SETTINGS.quality;
+    case 'backend': return DEFAULT_SETTINGS.backend;
+    case 'realesrganCapHeight': return DEFAULT_SETTINGS.realesrganCapHeight;
+    case 'realesrganPrecision': return DEFAULT_SETTINGS.realesrganPrecision;
+    case 'statsEnabled': return DEFAULT_SETTINGS.statsEnabled;
+    case 'frameGenerationEnabled': return DEFAULT_SETTINGS.frameGenerationEnabled;
+    case 'extensionEnabled': return DEFAULT_SETTINGS.extensionEnabled;
+    case 'autoFullscreenEnabled': return DEFAULT_SETTINGS.autoFullscreenEnabled;
+    case 'verboseLogging': return false;
+    default: return undefined;
+  }
 }
 
 export function collectRenderSettings(controls: RenderControlElements): SettingsUpdate {
@@ -27,6 +50,8 @@ export function collectRenderSettings(controls: RenderControlElements): Settings
   };
   const cap = controls.realesrganCap ? parseRealEsrganCap(controls.realesrganCap.value) : null;
   if (cap !== null) update.realesrganCapHeight = cap;
+  const precision = controls.realesrganPrecision ? parseRealEsrganPrecision(controls.realesrganPrecision.value) : null;
+  if (precision !== null) update.realesrganPrecision = precision;
   return update;
 }
 
@@ -43,6 +68,7 @@ export function syncRenderSettings(
     backend: controls.backend,
   };
   if (controls.realesrganCap) selectBindings.realesrganCapHeight = controls.realesrganCap;
+  if (controls.realesrganPrecision) selectBindings.realesrganPrecision = controls.realesrganPrecision;
   const booleanBindings: Record<string, HTMLInputElement> = {
     statsEnabled: controls.statistics,
     frameGenerationEnabled: controls.frameGeneration,
@@ -50,7 +76,14 @@ export function syncRenderSettings(
   };
 
   for (const [key, select] of Object.entries(selectBindings)) {
-    const value = changes[key]?.newValue;
+    const change = changes[key];
+    // A removed key (e.g. after storage cleanup) carries newValue undefined:
+    // fall back to the built-in default instead of keeping a stale display.
+    const rawValue = change?.newValue
+      ?? (change && 'newValue' in change && change.newValue === undefined
+        ? defaultForKey(key)
+        : undefined);
+    const value = rawValue;
     // String() because the cap travels as a number (480) while option
     // values are strings ("480").
     if ((typeof value === 'string' || typeof value === 'number') && select.value !== String(value)) {
@@ -64,7 +97,11 @@ export function syncRenderSettings(
     }
   }
   for (const [key, input] of Object.entries(booleanBindings)) {
-    const value = changes[key]?.newValue;
+    const change = changes[key];
+    const value = change?.newValue
+      ?? (change && 'newValue' in change && change.newValue === undefined
+        ? defaultForKey(key)
+        : undefined);
     if (typeof value === 'boolean' && input.checked !== value) {
       input.checked = value;
       changed = true;
@@ -109,6 +146,7 @@ export function createSettingsController(options: SettingsControllerOptions): Se
 
   async function saveNow(): Promise<SettingsApplyResult> {
     clearTimeout(saveTimer);
+    saveTimer = undefined;
     options.showStatus(messages.saving);
     const result = await applySettings(
       options.collectSettings?.() ?? collectRenderSettings(options.controls),
@@ -123,8 +161,17 @@ export function createSettingsController(options: SettingsControllerOptions): Se
 
   function scheduleSave(): void {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => void saveNow(), 300);
+    saveTimer = setTimeout(() => {
+      saveTimer = undefined;
+      void saveNow();
+    }, 300);
   }
+
+  // A debounced change must not be lost when the popup closes or the options
+  // tab navigates away before the timer fires.
+  window.addEventListener('pagehide', () => {
+    if (saveTimer !== undefined) void saveNow();
+  });
 
   const controls = [
     options.controls.mode,
@@ -133,6 +180,7 @@ export function createSettingsController(options: SettingsControllerOptions): Se
     options.controls.statistics,
     options.controls.frameGeneration,
     ...(options.controls.realesrganCap ? [options.controls.realesrganCap] : []),
+    ...(options.controls.realesrganPrecision ? [options.controls.realesrganPrecision] : []),
     ...(options.additionalControls ?? []),
   ];
   for (const control of controls) {

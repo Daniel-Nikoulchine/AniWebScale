@@ -55,6 +55,12 @@ export interface NativeSessionClient {
   stop(input: { sessionId?: string; videoId?: string }): Promise<void>;
   /** Whether a fallback request for this video is still awaiting its response. */
   hasPendingFallback(videoId: string): boolean;
+  /**
+   * Whether a fallback request is in flight that has NOT been cancelled:
+   * cancellation-marked entries are still settling, but must not block a
+   * fresh start the way a live request does.
+   */
+  hasActiveFallback(videoId: string): boolean;
   /** Push a new configuration to the active native session. */
   updateConfiguration(input: {
     sessionId?: string;
@@ -84,6 +90,11 @@ export function createNativeSessionClient(send: Send = message => chrome.runtime
     },
     async requestFallback(input) {
       const pending = { stopRequested: false };
+      // A second request supersedes one still in flight: mark the older
+      // ledger entry so its late success is absorbed by the compensating
+      // stop below instead of resolving as a second live session.
+      const superseded = pendingFallbacks.get(input.videoId);
+      if (superseded) superseded.stopRequested = true;
       pendingFallbacks.set(input.videoId, pending);
       try {
         const response = parseNativeFallbackResponse(await send(nativeFallbackRequestMessage({
@@ -94,12 +105,22 @@ export function createNativeSessionClient(send: Send = message => chrome.runtime
           videoRect: input.rect,
         })));
         if (response.ok && pending.stopRequested) {
-          // A stop was issued while this request was in flight. Absorb the
-          // late session instead of letting it resolve as started.
+          // A stop was issued while this request was in flight, or a newer
+          // request superseded it. Absorb the late session instead of
+          // letting it resolve as started.
           if (response.sessionId !== undefined) {
             await send(nativeStopMessage({ sessionId: response.sessionId, videoId: input.videoId }))
               .catch(() => undefined);
           }
+          return {
+            ok: false,
+            message: 'The native renderer start was stopped before it completed.',
+          };
+        }
+        if (!response.ok && pending.stopRequested) {
+          // Superseded/terminated while in flight: report cancellation, not
+          // the late failure, so the caller does not trigger a redundant
+          // fallback while the replacement request is still running.
           return {
             ok: false,
             message: 'The native renderer start was stopped before it completed.',
@@ -123,11 +144,21 @@ export function createNativeSessionClient(send: Send = message => chrome.runtime
       if (input.videoId !== undefined) {
         const pending = pendingFallbacks.get(input.videoId);
         if (pending) pending.stopRequested = true;
+      } else {
+        // Session-scoped stop without a video key: no ledger entry can be
+        // matched, so mark every in-flight request rather than risking an
+        // orphaned late success resolving as a live session. All production
+        // callers pass videoId; this is the teardown safety net.
+        for (const pending of pendingFallbacks.values()) pending.stopRequested = true;
       }
       await send(nativeStopMessage(input));
     },
     hasPendingFallback(videoId) {
       return pendingFallbacks.has(videoId);
+    },
+    hasActiveFallback(videoId) {
+      const pending = pendingFallbacks.get(videoId);
+      return pending !== undefined && !pending.stopRequested;
     },
     async updateConfiguration(input) {
       return parseStatusResponse(await send(nativeUpdateConfigurationMessage(input)));

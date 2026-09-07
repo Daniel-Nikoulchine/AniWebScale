@@ -21,6 +21,12 @@ export type BackendPhase = 'idle' | 'starting' | 'webgpu-active' | 'native-activ
 
 export class BackendState {
   private phase: BackendPhase = 'idle';
+  private destroyedFlag = false;
+
+  /** Whether destroy() ran; late async continuations must not re-arm it. */
+  get destroyed(): boolean {
+    return this.destroyedFlag;
+  }
 
   /** Whether any enhancement is active or starting. */
   get isBusy(): boolean {
@@ -58,16 +64,19 @@ export class BackendState {
 
   /** Abort every in-flight transition (destroy path). */
   destroy(): void {
+    this.destroyedFlag = true;
     this.phase = 'idle';
   }
 
   /** Commit the machine to the webgpu-active phase. */
   markWebGPUActive(): void {
+    if (this.destroyedFlag) return;
     this.phase = 'webgpu-active';
   }
 
   /** Commit the machine to the native-active phase. */
   markNativeActive(): void {
+    if (this.destroyedFlag) return;
     this.phase = 'native-active';
   }
 

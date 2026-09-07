@@ -51,7 +51,7 @@ set(SHADER_GEN_DIR "${CMAKE_BINARY_DIR}/generated/shaders")
 file(MAKE_DIRECTORY "${SHADER_GEN_DIR}")
 
 set(SHADER_HEADERS "")
-foreach(shader_name IN ITEMS realesrgan_spike_postproc realesrgan_spike_preproc)
+foreach(shader_name IN ITEMS realesrgan_spike_postproc realesrgan_spike_preproc srvgg_conv srvgg_tail srvgg_conv_tiled srvgg_traffic)
     set(spv "${SHADER_GEN_DIR}/${shader_name}.spv")
     set(hex_header "${SHADER_GEN_DIR}/${shader_name}.comp.hex.h")
     add_custom_command(
@@ -75,6 +75,7 @@ set(JSON_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 
 add_executable(aniwebscale-ncnn-host
     main.cpp
+    srvgg-vulkan.cpp
     ${JSON_SRC}
     ${SHADER_HEADERS}
 )

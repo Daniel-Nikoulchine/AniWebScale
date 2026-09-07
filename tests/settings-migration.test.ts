@@ -21,7 +21,9 @@ describe('settings migration', () => {
       autoFullscreenEnabled: false,
       frameGenerationEnabled: false,
       realesrganCapHeight: 480,
+      realesrganPrecision: 'int8',
       hasCompletedOnboarding: true,
+      siteAccessModelAcknowledged: false,
     });
   });
 
@@ -41,7 +43,9 @@ describe('settings migration', () => {
       autoFullscreenEnabled: true,
       frameGenerationEnabled: false,
       realesrganCapHeight: 480,
+      realesrganPrecision: 'int8',
       hasCompletedOnboarding: false,
+      siteAccessModelAcknowledged: false,
     });
   });
 
@@ -51,6 +55,18 @@ describe('settings migration', () => {
     });
     expect(normalizeLegacySettings({}, { realesrganCapHeight: 999 })).toMatchObject({
       realesrganCapHeight: 480,
+    });
+  });
+
+  it('preserves a previously selected RealESRGAN precision', () => {
+    expect(normalizeLegacySettings({}, { realesrganPrecision: 'fp16' })).toMatchObject({
+      realesrganPrecision: 'fp16',
+    });
+    expect(normalizeLegacySettings({}, { realesrganPrecision: 'half' })).toMatchObject({
+      realesrganPrecision: 'int8',
+    });
+    expect(normalizeLegacySettings({ realesrganPrecision: 'fp32' }, {})).toMatchObject({
+      realesrganPrecision: 'fp32',
     });
   });
 
@@ -77,6 +93,19 @@ describe('settings migration', () => {
     });
   });
 
+  it('preserves the site-access model acknowledgement so onboarding stays closed', () => {
+    expect(normalizeLegacySettings({}, {
+      hasCompletedOnboarding: true,
+      siteAccessModelAcknowledged: true,
+    })).toMatchObject({
+      hasCompletedOnboarding: true,
+      siteAccessModelAcknowledged: true,
+    });
+    expect(normalizeLegacySettings({}, {})).toMatchObject({
+      siteAccessModelAcknowledged: false,
+    });
+  });
+
   it('resets removed GAN modes to the safe default', () => {
     expect(normalizeLegacySettings({ mode: 'GANX3' }, {})).toMatchObject({ mode: 'A' });
     expect(normalizeLegacySettings({ mode: 'GANX4' }, {})).toMatchObject({ mode: 'A' });
@@ -84,6 +113,16 @@ describe('settings migration', () => {
 
   it('resets the removed Real-ESRGAN mode to the safe default', () => {
     expect(normalizeLegacySettings({ mode: 'REALESRGANX4' }, {})).toMatchObject({ mode: 'A' });
+  });
+
+  it('falls back to a sync-stored RealESRGAN cap when local has none', () => {
+    expect(normalizeLegacySettings({ realesrganCapHeight: 432 }, {})).toMatchObject({
+      realesrganCapHeight: 432,
+    });
+    expect(normalizeLegacySettings(
+      { realesrganCapHeight: 432 },
+      { realesrganCapHeight: 405 },
+    )).toMatchObject({ realesrganCapHeight: 405 });
   });
 
 });

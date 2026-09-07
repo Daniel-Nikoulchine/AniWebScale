@@ -26,21 +26,44 @@
  * canvas with its adaptive area sampler.
  */
 import type { InferenceSession, Tensor } from 'onnxruntime-web';
-import type { RealEsrganPhaseStats } from '../types';
+import type { RealEsrganPhaseStats, RealEsrganPrecision } from '../types';
 import { RealEsrganBufferPool } from '../shared/realesrgan-buffer-pool';
-import { adaptiveRealEsrganTiling } from '../shared/realesrgan-tiling';
+import { adaptiveRealEsrganTiling } from '../shared/realesrgan-tile-geometry.js';
 import { RealEsrganFrameScheduler } from '../shared/realesrgan-pacing';
-import { planReadback, unpackReadbackToPlanarRgb, type ReadbackFormat } from '../shared/realesrgan-readback';
+import { planReadback, planUpload, unpackReadback, unpackReadbackToPlanarRgb, copyMappedRange, type ReadbackFormat } from '../shared/realesrgan-readback';
 import {
   composeTileResults,
   inferTiledResults,
   rgbPlanarToPaddedRgba,
   type TiledInferenceResult,
 } from '../shared/realesrgan-tensor';
+import {
+  contentRectKey,
+  cropPlanarRect,
+  cropRgbaRect,
+  LetterboxTracker,
+  type ContentRect,
+} from '../shared/realesrgan-letterbox';
+import { StillframeTracker } from '../shared/realesrgan-stillframe';
+import {
+  decideFrameContent,
+  planCropGeometry,
+  shouldHoldPresentedResult,
+  stillframeGeometryKey,
+} from '../shared/realesrgan-frame-decision';
+import {
+  colorDiagStatsFromPlanar,
+  colorDiagStatsFromRgba,
+  formatColorDiag,
+} from '../shared/realesrgan-color-diagnostic';
+import { planInferenceInput, selectRunnerPath } from '../shared/realesrgan-inference-path';
+import { formatRealEsrganError, REALESRGAN_ERROR_CODES, withRealEsrganCode } from '../shared/realesrgan-error-codes';
 import { RealEsrganGpuComposer } from './realesrgan-compose';
 import type { RealEsrganInferenceRunner, RealEsrganFrameResult } from './realesrgan-worker-client';
-import { isRealEsrganFloat16Preferred, isRealEsrganInt8Preferred } from './realesrgan-session';
+import type { RealEsrganModelAssets } from './realesrgan-model-assets';
 import { RealEsrganFrameJobRunner } from './realesrgan-frame-job';
+import { RealEsrganRunnerGuard } from './realesrgan-runner-guard';
+import { REALESRGAN_NATIVE_MAX_FRAME_DIM } from './realesrgan-native-vulkan-client';
 import type { Anime4KPipeline, PipelineConstructor } from './pipeline-types';
 
 export interface RealEsrganTilingConfig {
@@ -53,22 +76,13 @@ export const DEFAULT_REALESRGAN_TILING: RealEsrganTilingConfig = {
   maxTileSize: 512,
   // 24px is what adaptiveRealEsrganTiling() computes for both geometries
   // (min(24, maxTileSize/16)); the worker plans with the same value, so both
-  // paths place tiles and feather identically. singleTileMaxHeight matches
-  // the adaptive cap for 512px tiles for the same reason.
+  // paths place tiles and feather identically. singleTileMaxHeight stays 512
+  // deliberately: this config feeds the MAIN-THREAD fallback path (weakest
+  // devices, no E2E for larger single transients), while the worker takes
+  // Hebel 1.2's bounded 576 gate via singleTileMaxHeightForFrame().
   overlap: 24,
   singleTileMaxHeight: 512,
 };
-
-const COPY_BYTES_PER_ROW_ALIGNMENT = 256;
-
-/**
- * Consecutive worker timeouts tolerated before the pipeline gives up on the
- * worker and falls back to the main-thread session. A single timeout on a
- * busy system (first-run shader compile, background load) is transient; the
- * main-thread fallback is strictly worse (slower, and session.run can hang
- * without a timeout), so it is a last resort.
- */
-const WORKER_TIMEOUT_GIVE_UP_AFTER = 3;
 
 /**
  * Inference failures without a single successful result after which the
@@ -77,6 +91,26 @@ const WORKER_TIMEOUT_GIVE_UP_AFTER = 3;
  * canvas for half a minute.
  */
 const FATAL_INFERENCE_FAILURES = 4;
+
+/**
+ * Hang guards: a wedged GPU (mapAsync never settling) or a wedged fallback
+ * session run must not park staging slots forever — fail fast into the
+ * transient retry budget instead. E2E showed slots wedging mid-run with the
+ * pipeline limping at ~0 fps and no further errors.
+ */
+const MAP_ASYNC_TIMEOUT_MS = 8000;
+const SESSION_RUN_TIMEOUT_MS = 30_000;
+/** A hung fallback build must not poison the per-shape memo forever. */
+const SESSION_CREATE_TIMEOUT_MS = 30_000;
+/**
+ * Stale-skip: a drain whose frame lags this many submitted-but-unfinished
+ * frames never reaches the canvas (newer in-flight work presents first and
+ * claimPresentation drops it), so skip the serial host fetch and save the
+ * ~22 ms for fresh frames. Only fires in deep arrival bursts; normal flow
+ * (≤ depth in flight) never trips it. Gated on firstResultLanded so the
+ * prime path always runs.
+ */
+const STALE_SKIP_BEHIND = 6;
 
 /**
  * Compartment-safe error text: Firefox throws "Permission denied to access
@@ -166,44 +200,72 @@ function parseMaxInferenceHeight(params: { [key: string]: unknown } | undefined)
 }
 
 /**
- * Optional offload binding: when a worker client is available, the whole
- * frame runs in the worker instead of the main-thread session. `modelUrl` and
- * `modelUrlFp16` are extension URLs of the model files the worker should load
- * (the worker has no chrome.* APIs, so the URLs must be resolved by the
- * caller). `modelUrlFp16` is optional; the worker falls back to `modelUrl`
- * when the FP16 asset is missing or fails to create a session.
+ * Precision selected for this pipeline instance (effect param `precision`,
+ * set from the stored `realesrganPrecision` setting). Unknown values fall
+ * back to int8, the production default — a typo in params must degrade to
+ * the fastest verified path, not throw mid-render.
  */
-export interface RealEsrganWorkerBinding {
+function parsePrecision(params: { [key: string]: unknown } | undefined): RealEsrganPrecision {
+  const value = params?.precision;
+  return value === 'fp32' || value === 'fp16' || value === 'int8' ? value : 'int8';
+}
+
+/**
+ * Runner offload binding: a live Runner (native Vulkan host or ORT worker —
+ * chosen by the Runner-Broker) plus the Modell-Auswahl that decides which
+ * model asset serves each frame. The binding never mixes runner identity
+ * with asset knowledge: the runner interface stays model-agnostic and the
+ * assets module owns resolution/verification/per-frame pick.
+ */
+export interface RealEsrganRunnerBinding {
   runner: RealEsrganInferenceRunner;
-  modelUrl: string;
-  modelUrlFp16?: string | null;
+  modelAssets: RealEsrganModelAssets;
+  /**
+   * Runner-Guard escalation: the guard's "runner dead" verdict is global
+   * (runners are process-lifetime singletons shared across pipelines), so
+   * the loader wires this to the broker to drop the cached runner — the
+   * next resolveRunner() re-runs the preference order instead of re-serving
+   * the runner the guard just buried.
+   */
+  onRunnerDead?: (runner: RealEsrganInferenceRunner) => unknown;
 }
 
 export function createRealEsrganPipelineClass(
-  session: InferenceSession | null,
-  tiling: RealEsrganTilingConfig = DEFAULT_REALESRGAN_TILING,
-  worker: RealEsrganWorkerBinding | null = null,
-  getSession: ((width: number, height: number) => Promise<InferenceSession>) | null = null,
+  binding: RealEsrganRunnerBinding | null = null,
+  getSession: ((width: number, height: number, precision: RealEsrganPrecision) => Promise<InferenceSession>) | null = null,
 ): PipelineConstructor {
   return class RealEsrganPipeline implements Anime4KPipeline {
     private readonly device: GPUDevice;
     private readonly inputTexture: GPUTexture;
     private readonly outputTexture: GPUTexture;
     private readonly stagingBuffers: GPUBuffer[];
-    private readonly stagingBufferCount = 2;
+    // Eight staging slots match the native runner's maxInFlight (depth 8):
+    // frames arrive in groups of ~10 every ~530 ms (headless rVFC batching)
+    // and depth 4 refused 60% of each group. Worker/main-thread paths stay
+    // at depth 1 via their own maxInFlight (see inferenceDepth).
+    private readonly stagingBufferCount = 8;
     // Slot ownership: true = claimed by pass() (encoded copy pending or
     // mapped in drain()), false = free. Cleared at the end of drain().
     private readonly slotStates: boolean[];
     private readbackSlot = 0;
+    // pass() claims a slot and records the frame here; afterSubmit() consumes
+    // the pending entry once the renderer has submitted the encoder.
+    private pendingAfterSubmit: { slot: number; frame: number } | null = null;
     private readonly readbackFormat: ReadbackFormat;
     private readonly readbackBytesPerRow: number;
     private readonly readbackByteLength: number;
     private readonly scheduler = new RealEsrganFrameScheduler();
     private readonly frameJobs = new RealEsrganFrameJobRunner(this.scheduler);
-    // Fallback session is per-instance state. It must not live in the factory
-    // closure: the loader builds the class once and shares it across videos,
-    // so a second video's warmup would overwrite the first video's session.
-    private fallbackSession: InferenceSession | null;
+    // Broker escalation hook (see RealEsrganRunnerBinding.onRunnerDead).
+    // Assigned in the constructor; the guard callback reads it at call time.
+    private onRunnerDead: ((runner: RealEsrganInferenceRunner) => unknown) | null = null;
+    // Fallback session is per-instance state, memoized as ONE promise so the
+    // constructor warmup, the guard's warmFallback and the drain's lazy path
+    // share a single handle (a rejected build resets it so the next frame
+    // retries). It must not live in the factory closure: the loader builds
+    // the class once per construction and shares it across videos, so a
+    // second video's warmup would overwrite the first video's session.
+    private fallbackSessionPromises = new Map<string, Promise<InferenceSession>>();
     // Full-frame scratch buffers are pooled: at 1080p the accumulator alone is
     // ~100 MB, and re-allocating it every processed frame hammers the GC.
     // Dimensions are fixed per pipeline instance, so the pool hits every frame
@@ -217,6 +279,10 @@ export function createRealEsrganPipelineClass(
     // maxInferenceHeight cap forced a GPU downscale.
     private readonly inferenceWidth: number;
     private readonly inferenceHeight: number;
+    // Precision selected via effect params (stored `realesrganPrecision`
+    // setting). Steers the main-thread session model file and gates the
+    // worker's fp16 probe; the native host ignores it (baked-in model).
+    private readonly precision: RealEsrganPrecision;
     // Output texture dimensions (p8: target-sized when the runner supports
     // transport downscaling, otherwise the full 4x frame).
     private readonly outputWidth: number;
@@ -244,32 +310,93 @@ export function createRealEsrganPipelineClass(
     // is unavailable. The CPU feathering pass remains the correctness
     // reference. Mutable so a broken composer can be disabled at runtime.
     private gpuComposer: RealEsrganGpuComposer | null;
-    // Worker offload binding; null on Firefox when the worker file is missing
-    // or the worker failed to start. Mutable so a broken worker can be
-    // disabled at runtime, falling back to the main-thread session for good
-    // (same pattern as gpuComposer).
-    private workerRunner: RealEsrganInferenceRunner | null;
-    private readonly workerModelUrl: string | null;
-    private readonly workerModelUrlFp16: string | null;
-    private workerUsedForFrame = false;
-    private workerTimeouts = 0;
+    // Runner offload (native Vulkan host or ORT worker); null on Firefox
+    // when the worker file is missing or no runner could start. Mutable so
+    // a broken runner can be disabled at runtime, falling back to the
+    // main-thread session for good (same pattern as gpuComposer).
+    private runner: RealEsrganInferenceRunner | null;
+    private readonly modelAssets: RealEsrganModelAssets | null;
+    // Failover policy (retry budget, disable, fallback warmup) lives in the
+    // guard module; the callbacks below keep the pipeline's log lines and
+    // detach the dead runner. Test the policy through the guard, not
+    // through a GPU-constructed pipeline.
+    private readonly runnerGuard = new RealEsrganRunnerGuard({
+      onTimeout: (attempt, max, error) => {
+        console.warn(formatRealEsrganError(REALESRGAN_ERROR_CODES.WORKER_TIMEOUT,
+          `runner inference timed out (${attempt}/${max}); retrying runner next frame`),
+          error,
+        );
+      },
+      onRunnerDead: async error => {
+        // Teardown errors must not escape the dying pipeline: a destroyed
+        // instance detaches silently instead of logging fatal codes, warming
+        // sessions, or parking the broker's shared runner for live pipelines
+        // (E2E: auto-cap rebuilds killed the shared native client for 30 s
+        // and failed the verdict with another pipeline's death rattle).
+        if (this.destroyed) {
+          this.runner = null;
+          return;
+        }
+        console.warn(formatRealEsrganError(REALESRGAN_ERROR_CODES.WORKER_FAILED,
+          'runner inference failed; disabling runner, main-thread session takes over'), error);
+        const dead = this.runner;
+        this.runner = null;
+        // The runner is a shared singleton: escalate so the broker drops it
+        // and the next pipeline build re-resolves instead of re-serving a
+        // runner the guard just declared dead. Awaited: markRunnerDead
+        // compares cached promises asynchronously, and a fire-and-forget
+        // escalation lets the next resolveRunner() re-serve the dead runner.
+        if (dead) await this.onRunnerDead?.(dead);
+      },
+      warmFallback: async () => {
+        if (this.destroyed) return;
+        await this.ensureFallbackSession();
+      },
+    });
     private frameCounter = 0;
     private inferenceErrors = 0;
+    // Hebel 1.1: letterbox content rect. Full frame until a hysteretic shrink
+    // is adopted; the runners take arbitrary shapes, so one implementation
+    // here covers the worker, native and main-thread paths with no protocol
+    // change. Frame geometry is fixed per instance, hence per-instance state.
+    private readonly cropTracker = new LetterboxTracker();
+    // Output-space key the bars were last filled for (null = never). The
+    // output texture persists, so bar fills happen once per geometry.
+    private cropBarsKey: string | null = null;
+    // Throttled skip telemetry (diagnosability): a session that silently
+    // stops enhancing (wedged slots, saturated scheduler) looks identical
+    // to a frozen video without it. Fires at most every 60 skips.
+    private skippedNoSlot = 0;
+    private skippedBusy = 0;
+    private skippedQueue = 0;
+    private skipLogAt = 0;
+    // Presentation drops: frames whose inference COMPLETED but claimPresentation
+    // refused them because a newer frame had already presented. This is the
+    // only correct "completed but unseen" count now that presentation is
+    // out-of-band: the scheduler's droppedResults answers "newest submitted"
+    // (the publish gate), which counts frames this pipeline actually presented
+    // as dropped whenever an older job finishes before a newer one.
+    private presentedDropped = 0;
+    // Hebel 1.4: still-frame gate over the exact runner-input bytes.
+    private readonly stillTracker = new StillframeTracker();
+    // Provenance of the presented result for overlay stats and the
+    // still-frame hold gate: true when the last presented frame came from
+    // the native client (tight-RGBA call), false for ORT worker/main.
+    private lastServedNative = false;
     private destroyed = false;
     // The renderer reads the most recent stat window via `getPhaseStats()` and
     // ships it in `RenderStats.realesrgan`, which feeds the live-stats overlay
     // when `statsEnabled` is on. Aggregation window is owned by the renderer
-    // (it already emits RenderStats every 500ms), so we keep two snapshots:
-    // the previous (read-only) and the currently accumulating one. Reset is
-    // driven by `consumePhaseStats()` from the renderer.
+    // (it already emits RenderStats every 500ms).
     private phaseAccumulator: {
       n: number;
       c: number; r: number; k: number;
       g: number; m: number; u: number;
-      workerCount: number;
+      runnerCount: number;
+      nativeCount: number;
+      workerFp16Count: number;
       gpuComposeCount: number;
     } | null = null;
-    private phaseSnapshot: RealEsrganPhaseStats | null = null;
     // Renderer-provided recovery hook (see PipelineConstructor docs). Fired
     // once when a WebGPU operation fails with "Context lost" - Firefox's
     // device.lost event does not always resolve on RDNA2, so without this the
@@ -297,6 +424,7 @@ export function createRealEsrganPipelineClass(
       this.readbackFormat = inputTexture.format;
 
       const maxHeight = parseMaxInferenceHeight(params);
+      this.precision = parsePrecision(params);
       if (maxHeight !== null && this.inputHeight > maxHeight) {
         this.inferenceHeight = maxHeight;
         this.inferenceWidth = Math.max(1, Math.round(this.inputWidth * maxHeight / this.inputHeight));
@@ -317,7 +445,7 @@ export function createRealEsrganPipelineClass(
       // texture keeps the full 4x size.
       const fullOutW = this.inferenceWidth * 4;
       const fullOutH = this.inferenceHeight * 4;
-      const canDownscale = Boolean(worker?.runner && (worker.runner as { supportsTargetDownscale?: boolean }).supportsTargetDownscale);
+      const canDownscale = Boolean(binding?.runner && binding.runner.supportsTargetDownscale);
       const targetW = Math.floor(targetDimensions?.width ?? 0);
       const targetH = Math.floor(targetDimensions?.height ?? 0);
       if (canDownscale && targetW > 0 && targetH > 0 && (targetW < fullOutW || targetH < fullOutH)) {
@@ -354,6 +482,8 @@ export function createRealEsrganPipelineClass(
         // One bilinear pass. A multi-step or mipmap downscale would alias less
         // on >2x reductions, but the network reconstructs detail anyway and
         // the extra passes would eat into the frame budget this cap buys.
+        // (The renderer may hand us a wgsl-fidelity-proxied device whose
+        // createShaderModule rewrites WGSL — benign for these passes.)
         this.downscaleTexture = device.createTexture({
           label: 'RealESRGAN inference downscale',
           size: [this.inferenceWidth, this.inferenceHeight, 1],
@@ -432,39 +562,82 @@ export function createRealEsrganPipelineClass(
           { binding: 1, resource: this.inputTexture.createView() },
         ],
       });
-      this.workerRunner = worker?.runner ?? null;
-      this.fallbackSession = session;
+      this.runner = binding?.runner ?? null;
+      this.modelAssets = binding?.modelAssets ?? null;
+      this.onRunnerDead = binding?.onRunnerDead ?? null;
+      // Oversize guard: the native host rejects frames beyond its input limit
+      // with an untagged throw, which the Runner-Guard reads as "runner
+      // permanently dead" and escalates GLOBALLY — one 8k video would bury
+      // the shared singleton for every other (small) video too. Crops only
+      // ever shrink, so checking the full inference dims here covers every
+      // frame. Only the native adapter is size-limited (supportsTargetDownscale
+      // is its marker; the worker tiles arbitrary inputs): this instance
+      // drops a size-limited runner and serves oversize inputs from its
+      // main-thread session, never calling (hence never killing) it.
+      if (this.runner?.supportsTargetDownscale
+        && (this.inferenceWidth > REALESRGAN_NATIVE_MAX_FRAME_DIM
+          || this.inferenceHeight > REALESRGAN_NATIVE_MAX_FRAME_DIM)) {
+        console.warn(`[RealESRGAN] inference ${this.inferenceWidth}x${this.inferenceHeight} exceeds the native host limit; this video uses the main-thread session.`);
+        this.runner = null;
+      }
       // Warm the main-thread fallback session for THIS pipeline's inference
-      // shape when no runner serves frames. The session cache is keyed by
-      // shape, so this prebuild pays the ORT session cost once per size
-      // instead of stalling the first frame. Fire-and-forget: the drain path
-      // awaits the same cached promise and surfaces errors there.
-      if (!this.fallbackSession && !this.workerRunner && getSession) {
-        const warmWidth = this.inferenceWidth;
-        const warmHeight = this.inferenceHeight;
-        void getSession(warmWidth, warmHeight).then(
-          (created) => { this.fallbackSession = created; },
+      // shape when no runner serves frames. The memoized promise pays the
+      // ORT session cost once per size instead of stalling the first frame;
+      // the drain path and the guard's warmFallback await the same handle.
+      if (!this.runner && getSession) {
+        void this.ensureFallbackSession().then(
+          () => undefined,
           (error) => {
             console.warn('[RealESRGAN] fallback session warmup failed; first frame will build it', error);
           },
         );
       }
-      this.workerModelUrl = worker?.modelUrl ?? null;
-      this.workerModelUrlFp16 = worker?.modelUrlFp16 ?? null;
-      // Log the composition path the worker reports (once per distinct value)
-      // so the console tells us whether frames come from the GPU compose or a
-      // CPU fallback without any debugger wiring.
-      if (this.workerRunner && 'onFramePath' in this.workerRunner) {
-        (this.workerRunner as { onFramePath: ((path: string) => void) | null }).onFramePath = path => {
-          console.info('[RealESRGAN] worker composition path:', path);
+      // Wire the runner path-label diagnostics (once per distinct value) so
+      // the console tells us which composition path served frames without
+      // any debugger wiring. Adapters without path labels simply never fire.
+      if (this.runner) {
+        this.runner.onFramePath = path => {
+          console.info('[RealESRGAN] runner composition path:', path);
         };
+        // One line per pipeline: runner kind, frame-job depth and geometry
+        // so E2E runs can verify overlap is actually engaged (depth 2 on
+        // the native path, 1 elsewhere). No parens: the verdict regexes
+        // parse onFramePath lines.
+        const kind = typeof this.runner.runFrameRgba === 'function' ? 'native' : 'worker';
+        console.info(`[RealESRGAN] pipeline runner=${kind} depth=${this.inferenceDepth()} `
+          + `infer=${this.inferenceWidth}x${this.inferenceHeight}`);
       }
     }
 
-    public updateParam(): void {
-      // RealESRGAN has no runtime-tunable parameters. The renderer may invoke
-      // this generically across effects, so it must be a safe no-op rather
-      // than a throw (which would crash the frame loop).
+    /**
+     * Per-shape memo for the main-thread fallback session: constructor
+     * warmup, guard warmFallback and the drain's lazy path all await it. A
+     * rejected build drops its key so the next frame retries (the session
+     * factory drops its own failed cache entries too). Sessions are
+     * shape-pinned (buildFreeDimensionOverrides), so a letterbox crop
+     * infers at crop size and needs its own session — the factory caches
+     * per shape, and crop geometries are few (hysteretic letterbox), so
+     * each distinct shape pays the build cost once.
+     */
+    private ensureFallbackSessionFor(width: number, height: number): Promise<InferenceSession> {
+      if (!getSession) {
+        return Promise.reject(new Error('RealESRGAN main-thread fallback session is unavailable.'));
+      }
+      const key = `${width}x${height}`;
+      let promise = this.fallbackSessionPromises.get(key);
+      if (!promise) {
+        promise = getSession(width, height, this.precision).catch(error => {
+          this.fallbackSessionPromises.delete(key);
+          throw error;
+        });
+        this.fallbackSessionPromises.set(key, promise);
+      }
+      return promise;
+    }
+
+    /** Full-shape handle for warmup and the guard's fallback warm. */
+    private ensureFallbackSession(): Promise<InferenceSession> {
+      return this.ensureFallbackSessionFor(this.inferenceWidth, this.inferenceHeight);
     }
 
     /**
@@ -487,21 +660,26 @@ export function createRealEsrganPipelineClass(
             'from', this.inputTexture.width, 'x', this.inputTexture.height, 'fmt', this.inputTexture.format);
         }
         this.device.pushErrorScope('validation');
-        const renderPass = encoder.beginRenderPass({
-          colorAttachments: [{
-            view: this.outputTexture.createView(),
-            loadOp: 'clear',
-            clearValue: { r: 0, g: 0, b: 0, a: 1 },
-            storeOp: 'store',
-          }],
-        });
-        renderPass.setPipeline(this.primePipeline);
-        renderPass.setBindGroup(0, this.primeBindGroup);
-        renderPass.draw(6);
-        renderPass.end();
-        void this.device.popErrorScope().then(error => {
-          if (error) console.warn('[RealESRGAN] prime validation error:', error.message);
-        });
+        try {
+          const renderPass = encoder.beginRenderPass({
+            colorAttachments: [{
+              view: this.outputTexture.createView(),
+              loadOp: 'clear',
+              clearValue: { r: 0, g: 0, b: 0, a: 1 },
+              storeOp: 'store',
+            }],
+          });
+          renderPass.setPipeline(this.primePipeline);
+          renderPass.setBindGroup(0, this.primeBindGroup);
+          renderPass.draw(6);
+          renderPass.end();
+        } finally {
+          // Always pop the scope: a sync throw above must not leak it, and a
+          // device-loss rejection must not surface as unhandled.
+          void this.device.popErrorScope().then(error => {
+            if (error) console.warn('[RealESRGAN] prime validation error:', error.message);
+          }, () => undefined);
+        }
       } catch (error) {
         console.warn('[RealESRGAN] output texture priming failed; first frames may be black', error);
       }
@@ -517,9 +695,9 @@ export function createRealEsrganPipelineClass(
       // Prime it with a bilinear upscale of the current source frame once.
       this.primeOutputTexture(encoder);
       // Ask the scheduler before recording the frame: shouldProcess() gates on
-      // "no inference in flight", then noteNewerFrame() records the frame and
-      // counts it as skipped when one is. The scheduler owns the in-flight
-      // slot; the pipeline keeps no separate busy flag.
+      // free slots below the runner depth, then noteSkipped() records a
+      // rejected frame and counts it when work is in flight. The scheduler
+      // owns the in-flight slots; the pipeline keeps no separate busy flag.
       //
       // A staging slot is only usable when neither mapped (CPU-side read in
       // drain()) nor written by an encoded-but-not-yet-executed copy. Both
@@ -531,6 +709,21 @@ export function createRealEsrganPipelineClass(
       // error killed the WHOLE submit, and the output texture stayed empty
       // (black screen).
       const slotCount = this.stagingBuffers.length;
+      // Belt-and-braces: if a previous frame's pendingAfterSubmit never
+      // reached afterSubmit() (a renderer path dropped the frame between
+      // pass() and submit), its claimed slot would leak into "no free slot".
+      // Release it here — the normal flow already consumed it, so this is
+      // a no-op every frame the contract holds.
+      if (this.pendingAfterSubmit) {
+        const leakedFrame = this.pendingAfterSubmit.frame;
+        this.slotStates[this.pendingAfterSubmit.slot] = false;
+        this.pendingAfterSubmit = null;
+        // The renderer dropped a frame between pass() and afterSubmit(): it
+        // was seen here but never reached the scheduler's markStarted, so the
+        // next gap count would silently swallow it. Record it as skipped.
+        this.scheduler.noteSkipped(leakedFrame);
+        this.noteSkip('queue');
+      }
       let slot = -1;
       for (let i = 0; i < slotCount; i += 1) {
         const candidate = (this.readbackSlot + i) % slotCount;
@@ -541,7 +734,8 @@ export function createRealEsrganPipelineClass(
       }
       if (slot === -1) {
         // Every slot is still owned by an in-flight drain; skip this frame.
-        this.scheduler.noteNewerFrame(frame);
+        this.scheduler.noteSkipped(frame);
+        this.noteSkip('slot');
         return;
       }
       this.slotStates[slot] = true;
@@ -567,34 +761,78 @@ export function createRealEsrganPipelineClass(
         { buffer: stagingBuffer, bytesPerRow: this.readbackBytesPerRow },
         [this.inferenceWidth, this.inferenceHeight, 1],
       );
-      // The renderer submits this encoder synchronously right after every
-      // pass() call returns. Registering onSubmittedWorkDone() now would track
-      // only work submitted *before* this call, missing our copy. Defer to a
-      // microtask so the registration lands after the renderer's submit(), at
-      // which point the promise covers the copy and resolves once it has run.
-      queueMicrotask(() => {
-        void this.device.queue.onSubmittedWorkDone().then(() => {
-          const submitted = this.frameJobs.submit({
-            frame,
-            capture: async () => stagingBuffer,
-            infer: captured => this.drain(captured as GPUBuffer, frame),
-            publish: () => undefined,
-          });
-          if (!submitted) {
-            // Skipped (inference busy): no drain will run, so free the slot now.
-            // Without this the pipeline leaks slots and wedges into "no free slot"
-            // after 2 frames, freezing the output to the first frame.
-            this.slotStates[slot] = false;
-          }
-        }).catch(() => {
-          // Device lost or queue error: the copy never completed, so drain()
-          // will never run to release the slot. Free it here so the pipeline
-          // does not wedge into \"no free slot\" after 2 frames. The scheduler
-          // still needs to know this frame was skipped.
+      // Defer the onSubmittedWorkDone registration to afterSubmit(): the
+      // renderer calls it AFTER submitting this encoder, so the promise is
+      // guaranteed to cover our copy. (This used to be a queueMicrotask
+      // racing the renderer's submit — the ordering is now an interface
+      // contract, Anime4KPipeline.afterSubmit.)
+      this.pendingAfterSubmit = { slot, frame };
+    }
+
+    /**
+     * Renderer contract (see Anime4KPipeline.afterSubmit): called exactly
+     * once per frame after the encoder that carried pass()'s copy was
+     * submitted. Registering onSubmittedWorkDone HERE is what makes the
+     * promise cover the copy — and what makes the ordering testable instead
+     * of a microtask race.
+     */
+    public afterSubmit(): void {
+      const pending = this.pendingAfterSubmit;
+      this.pendingAfterSubmit = null;
+      if (!pending) return;
+      const { slot, frame } = pending;
+      if (this.destroyed) {
+        this.slotStates[slot] = false;
+        return;
+      }
+      const stagingBuffer = this.stagingBuffers[slot];
+      void this.device.queue.onSubmittedWorkDone().then(() => {
+        const submitted = this.frameJobs.submit({
+          frame,
+          capture: async () => stagingBuffer,
+          infer: captured => this.drain(captured as GPUBuffer, frame),
+          // Publish stays a no-op by design: the drain presents in-band
+          // through the frame-job's claimPresentation watermark, because
+          // the job publish gate answers "newest submitted" while
+          // presentation needs "newest completed".
+          publish: () => undefined,
+        }, this.inferenceDepth());
+        if (!submitted) {
+          // Skipped (inference busy): no drain will run, so free the slot now.
+          // Without this the pipeline leaks slots and wedges into "no free slot"
+          // after 2 frames, freezing the output to the first frame.
           this.slotStates[slot] = false;
-          this.scheduler.noteNewerFrame(frame);
-        });
+          this.noteSkip('busy');
+        }
+      }).catch(() => {
+        // Device lost or queue error: the copy never completed, so drain()
+        // will never run to release the slot. Free it here so the pipeline
+        // does not wedge into "no free slot" after 2 frames. The scheduler
+        // still needs to know this frame was skipped.
+        this.slotStates[slot] = false;
+        this.scheduler.noteSkipped(frame);
+        this.noteSkip('queue');
       });
+    }
+
+    /**
+     * Throttled skip telemetry: which gate drops arrivals, every 60 skips.
+     * Distinguishes "video frozen" (silence here) from "pipeline starved"
+     * (slot = staging slots wedged, busy = scheduler at depth, queue =
+     * copy never completed) without spamming the console per frame.
+     */
+    private noteSkip(reason: 'slot' | 'busy' | 'queue'): void {
+      if (reason === 'slot') this.skippedNoSlot += 1;
+      else if (reason === 'busy') this.skippedBusy += 1;
+      else this.skippedQueue += 1;
+      const total = this.skippedNoSlot + this.skippedBusy + this.skippedQueue;
+      if (total - this.skipLogAt >= 60) {
+        this.skipLogAt = total;
+        console.info(
+          `[RealESRGAN] skipping arrivals: ${total} total `
+          + `(no-slot ${this.skippedNoSlot}, busy ${this.skippedBusy}, queue ${this.skippedQueue})`,
+        );
+      }
     }
 
     private async drain(stagingBuffer: GPUBuffer, frame: number): Promise<void> {
@@ -603,64 +841,183 @@ export function createRealEsrganPipelineClass(
       // finally so a failed mapAsync (device loss, destroyed) can never leak
       // a claimed slot and wedge the pipeline into "no free slot" forever.
       const slotIndex = this.stagingBuffers.indexOf(stagingBuffer);
+      // Early stale-skip (same rule as the pre-fetch check below): a drain
+      // that starts while 7+ newer frames are already submitted is usually a
+      // post-hitch backlog veteran — its bytes would die in
+      // claimPresentation anyway. Bailing before pool.acquire keeps deep
+      // recovery bursts from churning pooled buffers for nothing.
+      if (this.firstResultLanded && !this.destroyed
+          && this.scheduler.newestInFlightFrame() - frame > STALE_SKIP_BEHIND) {
+        this.scheduler.isResultCurrent(frame);
+        // This return sits BEFORE the try/finally below, so release the
+        // staging slot here — otherwise the skip itself leaks it.
+        if (slotIndex >= 0) this.slotStates[slotIndex] = false;
+        return;
+      }
       const pixels = this.inferenceWidth * this.inferenceHeight;
-      // Acquire the readback and model-input buffers up front; the (large)
-      // composition buffers are only needed on the CPU fallback path and are
-      // acquired lazily there, so the GPU path keeps less pooled memory hot.
-      const readbackBytes = this.pool.acquire(this.readbackByteLength);
-      const inputRgbBuffer = this.pool.acquire(3 * pixels * 4);
+      // The native runner POSTs RGBA8 anyway: when it offers the fast path
+      // (and the source is already 8-bit), skip the planar-float roundtrip
+      // and hand tight bytes over. The planar form is still needed until the
+      // first result lands (CPU prime fallback) and for the one-shot color
+      // diagnostic, so early frames always take the slow path.
+      const useFastRgba = planInferenceInput({
+        hasRunner: this.runner !== null,
+        hasModelUrl: this.modelAssets !== null,
+        rgbaCapable: typeof this.runner?.runFrameRgba === 'function',
+        readbackRgba8: this.readbackFormat === 'rgba8unorm',
+        primed: this.firstResultLanded,
+      }) === 'tight-rgba';
+      // Acquire the readback buffer up front; the (large) model-input and
+      // composition buffers are only needed on the paths that use them and
+      // are acquired lazily there, so the fast path keeps less pooled
+      // memory hot. The acquires live inside the try: `new ArrayBuffer` on
+      // a pool miss throws under memory pressure, and an allocation before
+      // the try would leak the staging slot (only the finally releases it)
+      // and escape drain as an unhandled rejection.
+      let readbackBytes: ArrayBuffer | null = null;
+      let inputRgbBuffer: ArrayBuffer | null = null;
+      let tightRgbaBuffer: ArrayBuffer | null = null;
+      // Hebel 1.1 crop slices (pooled; assigned in the try, released below).
+      let cropPlanarBuffer: ArrayBuffer | null = null;
+      let cropRgbaBuffer: ArrayBuffer | null = null;
       // Phase timings: always on. The arithmetic is cheap (a `performance.now`
       // and four additions per frame), and the live-stats overlay is the
       // primary UI for understanding inference cost. `getPhaseStats()` returns
       // null until at least one frame has been measured.
       let tCopy = 0, tUnpack = 0, tKernel = 0, tCompose = 0, tUpload = 0;
       let composeUsedGpu = false;
-      let inferWasWorker = false;
+      let inferUsedRunner = false;
+      // Provenance of the presented result for the overlay (native vs ORT
+      // worker): the tight-RGBA call exists only on the native client.
+      let servedNative = false;
+      // Worker fp16 provenance for the overlay precision label: the worker
+      // reports which model URL served each frame (its silent fp16→fp32
+      // fallback would otherwise mislabel the window).
+      let servedWorkerFp16 = false;
+      // Still-hold marker: a held frame presents no new inference, so its
+      // zero kernel/compose timings must not enter the phase averages (they
+      // would drag inferMs toward 0 for the whole window). Checked in the
+      // finally below.
+      let heldPresented = false;
+      // Stale-skip marker: like heldPresented, no inference ran, so no phase
+      // sample (zeros would pollute the window). Checked in the finally below.
+      let staleSkipped = false;
+      // Drain phase for failure diagnosis (error objects are unreadable
+      // across compartments, so the phase rides in the log text).
+      let drainStage = 'enter';
       let t1 = performance.now();
       try {
-        await stagingBuffer.mapAsync(GPUMapMode.READ);
+        readbackBytes = this.pool.acquire(this.readbackByteLength);
+        inputRgbBuffer = useFastRgba ? null : this.pool.acquire(3 * pixels * 4);
+        tightRgbaBuffer = useFastRgba ? this.pool.acquire(4 * pixels) : null;
+        drainStage = 'map';
+        await Promise.race([
+          stagingBuffer.mapAsync(GPUMapMode.READ),
+          new Promise<never>((_, reject) => setTimeout(() => reject(withRealEsrganCode(
+            new Error(`RealESRGAN readback map timed out after ${MAP_ASYNC_TIMEOUT_MS}ms`),
+            REALESRGAN_ERROR_CODES.PIPELINE_INFER_RETRY,
+          )), MAP_ASYNC_TIMEOUT_MS)),
+        ]);
         if (this.destroyed) return;
         const mapped = new Uint8Array(readbackBytes);
         try {
           // The mapped range is only valid until unmap(); copy it out first.
-          mapped.set(new Uint8Array(stagingBuffer.getMappedRange()));
+          // copyMappedRange survives cross-compartment ranges (parent-process
+          // shared memory throws on plain view construction in Firefox).
+          drainStage = 'copy';
+          copyMappedRange(stagingBuffer.getMappedRange(), mapped);
         } finally {
           stagingBuffer.unmap();
         }
         tCopy = performance.now() - t1;
         t1 = performance.now();
 
-        const inputRgb = new Float32Array(inputRgbBuffer);
-        unpackReadbackToPlanarRgb(mapped, this.inferenceWidth, this.inferenceHeight, this.readbackFormat, inputRgb);
+        drainStage = 'unpack';
+        let inputRgb: Float32Array | null = null;
+        let tightRgba: Uint8Array | null = null;
+        if (useFastRgba && tightRgbaBuffer) {
+          tightRgba = unpackReadback(mapped, this.inferenceWidth, this.inferenceHeight, this.readbackFormat, new Uint8Array(tightRgbaBuffer));
+        } else if (inputRgbBuffer) {
+          inputRgb = new Float32Array(inputRgbBuffer);
+          unpackReadbackToPlanarRgb(mapped, this.inferenceWidth, this.inferenceHeight, this.readbackFormat, inputRgb);
+        } else {
+          throw new Error('RealESRGAN drain has no input buffer for the active path.');
+        }
         tUnpack = performance.now() - t1;
+
+        // Hebel 1.1: letterbox content rect — the decision chain (verify →
+        // reset → poll → observe → snap) lives in the Frame-Entscheidung
+        // module; the drain only slices buffers and dispatches.
+        drainStage = 'crop';
+        const fullW = this.inferenceWidth;
+        const fullH = this.inferenceHeight;
+        const { crop, cropActive } = decideFrameContent({
+          width: fullW,
+          height: fullH,
+          tightRgba,
+          planar: inputRgb,
+          cropTracker: this.cropTracker,
+          transportTargetWidth: this.transportTargetWidth,
+          transportTargetHeight: this.transportTargetHeight,
+        });
+
+        // Slice the crop out of the unpacked input (pooled; released below).
+        const geometry = planCropGeometry(
+          crop, fullW, fullH, this.transportTargetWidth, this.transportTargetHeight,
+        );
+        const inferW = geometry.inferWidth;
+        const inferH = geometry.inferHeight;
+        const targetW = geometry.targetWidth;
+        const targetH = geometry.targetHeight;
+        let inferPlanar = inputRgb;
+        let inferRgba = tightRgba;
+        if (cropActive) {
+          if (tightRgba) {
+            cropRgbaBuffer = this.pool.acquire(inferW * inferH * 4);
+            inferRgba = cropRgbaRect(tightRgba, fullW, fullH, crop, new Uint8Array(cropRgbaBuffer));
+          } else if (inputRgb) {
+            cropPlanarBuffer = this.pool.acquire(3 * inferW * inferH * 4);
+            inferPlanar = cropPlanarRect(inputRgb, fullW, fullH, crop, new Float32Array(cropPlanarBuffer));
+          }
+        }
+
+        // Hebel 1.4: hold the presented result when the exact runner input
+        // repeats. Deliberately content-based, NOT video.paused-based: a pure
+        // paused check would freeze seek previews while scrubbing (paused +
+        // changing content must still infer). The gate lives in the
+        // Frame-Entscheidung module; the hash covers the cropped runner
+        // input, so a crop change resets the run via the geometry key.
+        drainStage = 'still';
+        const hashBytes = inferRgba ?? (inferPlanar ? new Uint8Array(inferPlanar.buffer) : null);
+        if (!hashBytes) throw new Error('RealESRGAN drain has no hashable inference input.');
+        if (shouldHoldPresentedResult({
+          stillTracker: this.stillTracker,
+          hashBytes,
+          geometryKey: stillframeGeometryKey(inferW, inferH, crop),
+          firstResultLanded: this.firstResultLanded,
+        })) {
+          // Bytes already presented: skip inference AND compose. The output
+          // texture keeps the identical result; readback/unpack/hash (~ms)
+          // is the only price per held frame vs ~65ms live inference.
+          // Provenance follows the held result, not this arrival. No phase
+          // sample either (see heldPresented): zeros would pollute the window.
+          servedNative = this.lastServedNative;
+          heldPresented = true;
+          return;
+        }
         // One-shot color diagnostic (405p report): compare inference input vs
-        // runner output channel stats on the first frame so a tint/shift can
-        // be attributed to one side of the transport.
-        if (!this.colorDiagDone && !this.colorDiagOutputDone && !this.destroyed) {
+        // runner output channel stats on the first frames so a tint/shift can
+        // be attributed to one side of the transport. Sampling lives in the
+        // pure diagnostic module; the one-shot flags stay here. The input
+        // half is safe to run unconditionally: the fast RGBA path only
+        // starts after the first result landed (primed gate), so the first
+        // frame always has planar input.
+        drainStage = 'diag-prime';
+        if (inputRgb && !this.colorDiagDone && !this.colorDiagOutputDone && !this.destroyed) {
           this.colorDiagDone = true;
           try {
-            const iw = this.inferenceWidth;
-            const ih = this.inferenceHeight;
-            const px = iw * ih;
-            let ir = 0, ig = 0, ib = 0, irg = 0;
-            const y0 = Math.floor(ih * 0.3);
-            const y1 = Math.floor(ih * 0.7);
-            const x0 = Math.floor(iw * 0.3);
-            const x1 = Math.floor(iw * 0.7);
-            let n = 0;
-            for (let y = y0; y < y1; y += 1) {
-              for (let x = x0; x < x1; x += 1) {
-                const p = y * iw + x;
-                const cr = inputRgb[p];
-                const cg = inputRgb[p + px];
-                const cb = inputRgb[p + 2 * px];
-                ir += cr; ig += cg; ib += cb; irg += Math.abs(cr - cg); n += 1;
-              }
-            }
-            console.log(
-              '[RealESRGAN] colordiag in=%dx%d mean=%.3f/%.3f/%.3f rgdiff=%.4f',
-              iw, ih, ir / n, ig / n, ib / n, irg / n,
-            );
+            console.log(formatColorDiag('in', this.inferenceWidth, this.inferenceHeight,
+              colorDiagStatsFromPlanar(inputRgb, this.inferenceWidth, this.inferenceHeight)));
           } catch (e) {
             console.warn('[RealESRGAN] colordiag input failed', e);
           }
@@ -670,94 +1027,165 @@ export function createRealEsrganPipelineClass(
         // error, empty source at first frame). Upscale the *just-unpacked*
         // frame on the CPU and push it to the output texture so the user
         // sees the plain video instead of black, even before inference.
-        if (!this.firstResultLanded && !this.destroyed) {
+        // (Planar-only: the fast path starts after the first result lands.)
+        if (inputRgb && !this.firstResultLanded && !this.destroyed) {
           try {
             this.writePrimeFromPlanar(inputRgb, this.inferenceWidth, this.inferenceHeight);
           } catch (e) {
             console.warn('[RealESRGAN] CPU prime fallback failed', e);
           }
         }
+        // Stale-skip: 7+ newer frames are already submitted and unfinished,
+        // so this result could only present for a blink before newer work
+        // overwrites it (claimPresentation is monotonic). Skip the serial
+        // host fetch and hand the ~22 ms to fresh frames. Safe against the
+        // historic freeze (dropping the ONLY in-flight frame): the newer
+        // in-flight frames behind us still present. Never fires before the
+        // first result (prime path above must run) or when idle.
+        if (this.firstResultLanded && !this.destroyed
+            && this.scheduler.newestInFlightFrame() - frame > STALE_SKIP_BEHIND) {
+          this.scheduler.isResultCurrent(frame);
+          staleSkipped = true;
+          return;
+        }
         t1 = performance.now();
 
-        if (this.workerRunner && this.workerModelUrl) {
-          // Worker path: the whole frame goes out; the runner plans tiles,
-          // runs inference and packs the result. What comes back is tightly
-          // packed RGBA8 with its actual dimensions - runners may box-average
-          // to the presentation target (native host, worker target); the
-          // length check below enforces the actual size either way.
-          inferWasWorker = true;
-          this.workerUsedForFrame = true;
-          const result = await this.runWorkerInference(inputRgb);
-          const expectedLength = this.outputWidth * this.outputHeight * 4;
+        drainStage = 'infer';
+        // Runner dispatch rides the path selector: it owns which input form
+        // each path accepts and hands narrowed buffers back, so drain cannot
+        // mismatch path and input. Both throw sites keep their messages.
+        const runnerPath = selectRunnerPath({
+          runner: this.runner,
+          modelUrl: this.modelAssets?.dynamicUrl ?? null,
+          rgba: inferRgba,
+          planar: inferPlanar,
+        });
+        if (runnerPath.kind === 'runner-rgba' || runnerPath.kind === 'runner-planar') {
+          // Runner path: the frame (or its content crop) goes out; the runner
+          // plans tiles, runs inference and packs the result. What comes back
+          // is tightly packed RGBA8 with its actual dimensions - runners may
+          // box-average to the presentation target (native host, worker
+          // target); the length check below enforces the actual size either
+          // way.
+          inferUsedRunner = true;
+          // Modell-Auswahl: static model on exact-shape match, dynamic
+          // otherwise. The binding couples runner and assets, so reaching
+          // the runner path without assets is an invariant break.
+          const modelAssets = this.modelAssets;
+          if (!modelAssets) {
+            throw new Error('RealESRGAN runner binding has no model assets.');
+          }
+          const frameModelUrl = modelAssets.urlForShape(inferW, inferH);
+          let result: RealEsrganFrameResult;
+          if (runnerPath.kind === 'runner-rgba') {
+            result = await this.runNativeRgbaFrame(frameModelUrl, runnerPath.rgba, inferW, inferH, targetW, targetH);
+          } else {
+            // The worker only probes its fp16 model when the user selected
+            // fp16: handing it the URL otherwise burns a session attempt
+            // plus a timed-out frame per shape on RDNA2 (Clip-WGSL bug).
+            // INT8 never reaches the worker — QDQ has no WebGPU kernels in
+            // ORT-web 1.29, so the worker lane stays FP32 and int8 serves
+            // through the main-thread WASM session below.
+            const fp16Url = this.precision === 'fp16' ? modelAssets.fp16Url : null;
+            result = await this.runWorkerInference(frameModelUrl, fp16Url, runnerPath.planar, inferW, inferH, targetW, targetH);
+          }
+          const targeted = targetW > 0 && targetH > 0;
+          const expW = targeted ? targetW : inferW * 4;
+          const expH = targeted ? targetH : inferH * 4;
+          const expectedLength = expW * expH * 4;
           if (result.data.length !== expectedLength
-              || result.width !== this.outputWidth || result.height !== this.outputHeight) {
+              || result.width !== expW || result.height !== expH) {
             throw new Error(`RealESRGAN runner returned ${result.width}x${result.height} `
-              + `(${result.data.length} bytes); expected ${this.outputWidth}x${this.outputHeight} (${expectedLength}).`);
+              + `(${result.data.length} bytes); expected ${expW}x${expH} (${expectedLength}).`);
           }
           tKernel = performance.now() - t1;
           if (this.destroyed) return;
           // Always present the result, even if newer frames arrived while inferring.
           // The old "drop stale if newer frame seen" froze the output to the first
           // frame when inference (70ms) is slower than video interval (16ms) - every
-          // result was considered stale and dropped. Count for stats but still show.
-          this.scheduler.isResultCurrent(frame);
+          // result was considered stale and dropped. (Stale-result accounting
+          // lives in the frame-job runner's publish gate; calling
+          // isResultCurrent here as well would double-count every presented
+          // frame as dropped.)
           t1 = performance.now();
-          this.writeRgbaResult(result.data, result.width, result.height);
-          this.firstResultLanded = true;
+          // Hebel 2.4: at depth 2 a newer frame may already have presented
+          // while this one was in flight — then its bytes stay off the
+          // canvas (monotonic presentation), but timings still record. The
+          // watermark is the frame-job runner's claimPresentation.
+          drainStage = 'present';
+          if (this.frameJobs.claimPresentation(frame)) {
+            if (cropActive) {
+              this.presentCroppedResult(result.data, expW, expH, crop, targetW, targetH);
+            } else {
+              this.writeRgbaResult(result.data, result.width, result.height);
+            }
+            servedNative = inferRgba !== null;
+            servedWorkerFp16 = result.precision === 'fp16';
+            this.lastServedNative = servedNative;
+            this.firstResultLanded = true;
+          } else {
+            // Completed but superseded: a newer frame already presented.
+            // Counted here (not via scheduler.droppedResults, whose "newest
+            // submitted" watermark also fires for frames we DID present).
+            this.presentedDropped += 1;
+          }
           tCompose = performance.now() - t1;
           if (this.colorDiagDone && !this.colorDiagOutputDone) {
             // Second half of the one-shot color diagnostic: channel stats of
             // the runner output. Runs once by consuming the output flag here.
             this.colorDiagOutputDone = true;
             try {
-              const ow = result.width;
-              const oh = result.height;
-              const d = result.data;
-              let or = 0, og = 0, ob = 0, org = 0;
-              const y0 = Math.floor(oh * 0.3);
-              const y1 = Math.floor(oh * 0.7);
-              const x0 = Math.floor(ow * 0.3);
-              const x1 = Math.floor(ow * 0.7);
-              let n = 0;
-              for (let y = y0; y < y1; y += 2) {
-                for (let x = x0; x < x1; x += 2) {
-                  const o = (y * ow + x) * 4;
-                  const cr = d[o] / 255;
-                  const cg = d[o + 1] / 255;
-                  const cb = d[o + 2] / 255;
-                  or += cr; og += cg; ob += cb; org += Math.abs(cr - cg); n += 1;
-                }
-              }
-              console.log(
-                '[RealESRGAN] colordiag out=%dx%d mean=%.3f/%.3f/%.3f rgdiff=%.4f',
-                ow, oh, or / n, og / n, ob / n, org / n,
-              );
+              console.log(formatColorDiag('out', result.width, result.height,
+                colorDiagStatsFromRgba(result.data, result.width, result.height)));
             } catch (e) {
               console.warn('[RealESRGAN] colordiag output failed', e);
             }
           }
-        } else {
-          // Main-thread session path: tiled inference plus GPU/CPU compose,
-          // unchanged from the pre-worker pipeline.
+        } else if (runnerPath.kind === 'session') {
+          // Main-thread session path: tiled inference plus GPU/CPU compose.
+          // Planar-only: the fast path implies a live runner, so reaching
+          // here without planar input means the runner vanished mid-frame
+          // (counted below). Cropped frames infer at crop size and are
+          // pasted back by writeCroppedComposedResult.
           const tiled = await inferTiledResults({
-            inputRgb,
-            width: this.inferenceWidth,
-            height: this.inferenceHeight,
-            ...adaptiveRealEsrganTiling(this.inferenceWidth, this.inferenceHeight, tiling),
+            inputRgb: runnerPath.planar,
+            width: inferW,
+            height: inferH,
+            ...adaptiveRealEsrganTiling(inferW, inferH, DEFAULT_REALESRGAN_TILING),
             infer: (tileRgb, tileWidth, tileHeight) => this.runSessionInference(tileRgb, tileWidth, tileHeight),
           });
           tKernel = performance.now() - t1;
           if (this.destroyed) return;
           // Same fix as worker path: always present, don't drop stale
-          this.scheduler.isResultCurrent(frame);
+          // (see comment above; no isResultCurrent accounting here).
           t1 = performance.now();
-          composeUsedGpu = this.writeComposedResult(tiled);
-          this.firstResultLanded = true;
+          drainStage = 'present';
+          if (this.frameJobs.claimPresentation(frame)) {
+            if (cropActive) {
+              composeUsedGpu = this.writeCroppedComposedResult(tiled, crop);
+            } else {
+              composeUsedGpu = this.writeComposedResult(tiled);
+            }
+            servedNative = false;
+            this.lastServedNative = false;
+            this.firstResultLanded = true;
+          } else {
+            this.presentedDropped += 1;
+          }
           tCompose = performance.now() - t1;
+        } else {
+          throw new Error(runnerPath.hasRunnerBinding
+            ? 'RealESRGAN drain has no inference input for the active path.'
+            : 'RealESRGAN drain has no planar input for the main-thread path.');
         }
       } catch (error) {
         // A lost device or a failed inference must not wedge the frame loop;
         // count it and release the slot so the next frame can retry.
+        // Destroyed pipelines stay silent: teardown races (an in-flight
+        // fetch settling after an auto-cap rebuild) must not count toward
+        // another pipeline's fatal budget or trigger renderer fallback.
+        // The finally below still releases pool buffers and the slot.
+        if (this.destroyed) return;
         this.inferenceErrors += 1;
         const message = errorMessage(error);
         if (!this.contextLostReported && /context lost/i.test(message)) {
@@ -769,7 +1197,9 @@ export function createRealEsrganPipelineClass(
           console.warn('[RealESRGAN] WebGPU context lost; requesting device recovery', error);
           this.onDeviceContextLost?.();
         } else {
-          console.warn('[RealESRGAN] inference failed; retrying on next frame' + errorStack(error), error);
+          console.warn(formatRealEsrganError(REALESRGAN_ERROR_CODES.PIPELINE_INFER_RETRY,
+            'inference failed; retrying on next frame'
+            + ` at drain stage=${drainStage}` + errorStack(error)), error);
         }
         // Chronic-failure guard: if inference keeps failing and not a single
         // result ever landed, the enhancement is invisible - the canvas shows
@@ -785,10 +1215,14 @@ export function createRealEsrganPipelineClass(
           this.onFatalInferenceFailure?.();
         }
       } finally {
-        this.pool.release(readbackBytes);
-        this.pool.release(inputRgbBuffer);
-        this.recordPhaseSample(tCopy, tUnpack, tKernel, tCompose, tUpload, composeUsedGpu, inferWasWorker);
-        this.workerUsedForFrame = false;
+        if (readbackBytes) this.pool.release(readbackBytes);
+        if (inputRgbBuffer) this.pool.release(inputRgbBuffer);
+        if (tightRgbaBuffer) this.pool.release(tightRgbaBuffer);
+        if (cropPlanarBuffer) this.pool.release(cropPlanarBuffer);
+        if (cropRgbaBuffer) this.pool.release(cropRgbaBuffer);
+        // Held still-frames carry no inference: sampling their zeros would
+        // drag inferMs/composeMs toward 0 for the whole overlay window.
+        if (!heldPresented && !staleSkipped) this.recordPhaseSample(tCopy, tUnpack, tKernel, tCompose, tUpload, composeUsedGpu, inferUsedRunner, servedNative, servedWorkerFp16);
         // Release the staging slot AFTER unmap() has run on every path. The
         // buffer is unmapped in the try block above (finally around the
         // mapped-range copy); if we never got there, mapAsync failed and
@@ -797,59 +1231,96 @@ export function createRealEsrganPipelineClass(
       }
     }
 
-    private async runWorkerInference(inputRgb: Float32Array): Promise<RealEsrganFrameResult> {
-      if (!this.workerRunner || !this.workerModelUrl) {
-        throw new Error('RealESRGAN worker binding is unavailable.');
+    /**
+     * Hebel 2.4: pipeline depth follows the active runner. The native host
+     * serves two in-flight requests (upload N+1 overlaps compute N); the
+     * worker path stays at 1 (ORT's global output-buffer cache) as does the
+     * main-thread fallback (shared session). Depth never exceeds the staging
+     * slots: without a free readback slot the frame is skipped before it can
+     * start either way. +1 frame glass-to-glass latency at depth 2 —
+     * irrelevant for video.
+     */
+    private inferenceDepth(): number {
+      const runnerDepth = this.runner?.maxInFlight ?? 1;
+      const depth = Number.isInteger(runnerDepth) ? runnerDepth : 1;
+      return Math.min(this.stagingBufferCount, Math.max(1, depth));
+    }
+
+    private async runWorkerInference(
+      modelUrl: string,
+      modelUrlFp16: string | null,
+      inputRgb: Float32Array,
+      width: number,
+      height: number,
+      targetWidth: number,
+      targetHeight: number,
+    ): Promise<RealEsrganFrameResult> {
+      const runner = this.runner;
+      if (!runner) {
+        throw new Error('RealESRGAN runner binding is unavailable.');
       }
-      try {
-        const result = await this.workerRunner.runFrame(
-          this.workerModelUrl, this.workerModelUrlFp16, this.inferenceWidth, this.inferenceHeight, inputRgb,
-          this.transportTargetWidth, this.transportTargetHeight,
-        );
-        this.workerTimeouts = 0;
-        return result;
-      } catch (error) {
-        // A timeout may be transient (system busy, first-run shader compile
-        // over budget). Give the worker N consecutive chances before falling
-        // back to the main-thread session, which is slower and can hang
-        // without any timeout on the same driver. Permanent errors (worker
-        // gone, protocol) disable the worker immediately.
-        const message = errorMessage(error);
-        const transient = /timed out/i.test(message);
-        this.workerTimeouts = transient ? this.workerTimeouts + 1 : Number.MAX_SAFE_INTEGER;
-        if (this.workerTimeouts < WORKER_TIMEOUT_GIVE_UP_AFTER) {
-          console.warn(
-            '[RealESRGAN] worker inference timed out (%d/%d); retrying worker next frame',
-            this.workerTimeouts, WORKER_TIMEOUT_GIVE_UP_AFTER, error,
-          );
-          throw error;
-        }
-        // A broken worker must not drop the frame: disable it for good and
-        // fall back to the main-thread session on the next frame. The session
-        // may not exist yet (it is only built when the worker was unavailable
-        // at load time) - resolve it lazily here so the fallback works.
-        console.warn('[RealESRGAN] worker inference failed; disabling worker, main-thread session takes over', error);
-        this.workerRunner = null;
-        if (!this.fallbackSession && getSession) {
-          this.fallbackSession = await getSession(this.inferenceWidth, this.inferenceHeight);
-        }
-        throw error;
+      return this.runnerGuard.guard(() => runner.runFrame(
+        modelUrl, modelUrlFp16, width, height, inputRgb,
+        targetWidth, targetHeight,
+      ));
+    }
+
+    /**
+     * Native fast path: tight RGBA8 straight to a runner that accepts it
+     * (see RealEsrganInferenceRunner.runFrameRgba). Same timeout/fallback
+     * accounting as runWorkerInference via the shared guard. Width/height
+     * are the content-crop dims when Hebel 1.1 is active, else full-frame.
+     */
+    private async runNativeRgbaFrame(
+      modelUrl: string,
+      rgba: Uint8Array,
+      width: number,
+      height: number,
+      targetWidth: number,
+      targetHeight: number,
+    ): Promise<RealEsrganFrameResult> {
+      const runner = this.runner;
+      if (!runner || typeof runner.runFrameRgba !== 'function') {
+        throw new Error('RealESRGAN RGBA runner binding is unavailable.');
       }
+      return this.runnerGuard.guard(() => runner.runFrameRgba!(
+        modelUrl, width, height, rgba,
+        targetWidth, targetHeight,
+      ));
     }
 
     private async runSessionInference(tileRgb: Float32Array, tileWidth: number, tileHeight: number): Promise<Float32Array> {
-      if (!this.fallbackSession && getSession) {
-        this.fallbackSession = await getSession(this.inferenceWidth, this.inferenceHeight);
+      // Tiles (and cropped frames) run at their own size; the full-frame
+      // session would reject the input shape. The per-shape memo keeps each
+      // distinct geometry at one build cost.
+      let fallback: InferenceSession;
+      try {
+        fallback = await Promise.race([
+          this.ensureFallbackSessionFor(tileWidth, tileHeight),
+          new Promise<never>((_, reject) => setTimeout(() => reject(withRealEsrganCode(
+            new Error(`RealESRGAN fallback session build timed out after ${SESSION_CREATE_TIMEOUT_MS}ms`),
+            REALESRGAN_ERROR_CODES.PIPELINE_INFER_RETRY,
+          )), SESSION_CREATE_TIMEOUT_MS)),
+        ]);
+      } catch (error) {
+        // A hung build must not poison the memo: drop the key so the next
+        // frame rebuilds instead of awaiting the same stuck promise forever.
+        this.fallbackSessionPromises.delete(`${tileWidth}x${tileHeight}`);
+        throw error;
       }
-      const fallback = this.fallbackSession;
-      if (!fallback) throw new Error('RealESRGAN main-thread fallback session is unavailable.');
       const { Tensor: OrtTensor } = await import(/* webpackChunkName: "ort" */ 'onnxruntime-web');
       const inputName = fallback.inputNames[0] ?? 'input';
       const outputName = fallback.outputNames[0] ?? 'output';
       // FP16 model when registered and preferred; the FP32 model stays the
       // quality reference. Both models expose float32 I/O.
       const input = new OrtTensor('float32', tileRgb, [1, 3, tileHeight, tileWidth]);
-      const outputs = await fallback.run({ [inputName]: input as Tensor });
+      const outputs = await Promise.race([
+        fallback.run({ [inputName]: input as Tensor }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(withRealEsrganCode(
+          new Error(`RealESRGAN session run timed out after ${SESSION_RUN_TIMEOUT_MS}ms`),
+          REALESRGAN_ERROR_CODES.PIPELINE_INFER_RETRY,
+        )), SESSION_RUN_TIMEOUT_MS)),
+      ]);
       const result = outputs[outputName];
       if (!result) throw new Error('RealESRGAN inference returned no output tensor.');
       return result.data as Float32Array;
@@ -858,11 +1329,12 @@ export function createRealEsrganPipelineClass(
     private recordPhaseSample(
       tCopy: number, tUnpack: number, tKernel: number,
       tCompose: number, tUpload: number,
-      composeUsedGpu: boolean, inferWasWorker: boolean,
+      composeUsedGpu: boolean, inferUsedRunner: boolean, servedNative: boolean,
+      servedWorkerFp16: boolean,
     ): void {
       const a = this.phaseAccumulator ?? {
         n: 0, c: 0, r: 0, k: 0, g: 0, m: 0, u: 0,
-        workerCount: 0, gpuComposeCount: 0,
+        runnerCount: 0, nativeCount: 0, workerFp16Count: 0, gpuComposeCount: 0,
       };
       a.n += 1;
       a.c += tCopy;
@@ -876,23 +1348,36 @@ export function createRealEsrganPipelineClass(
         a.m += tCompose;
         a.u += tUpload;
       }
-      if (inferWasWorker) a.workerCount += 1;
+      if (inferUsedRunner) a.runnerCount += 1;
+      if (servedNative) a.nativeCount += 1;
+      if (servedWorkerFp16) a.workerFp16Count += 1;
       if (composeUsedGpu) a.gpuComposeCount += 1;
       this.phaseAccumulator = a;
     }
 
     /**
      * Average phase timings over the window since the last call. The renderer
-     * pulls this once per stats emit (every 500ms) and resets the accumulator.
-     * Returns null when no frames have been measured yet, so the overlay can
-     * fall back to the basic FPS/renderMs line.
+     * pulls this once per stats emit (every 500ms) and resets the accumulator
+     * — this mutation-on-read is owned by the renderer's single poll. Returns
+     * null when no frames were measured in this window, so the overlay falls
+     * back to the basic FPS/renderMs line. `enhancedFps` is deliberately NOT
+     * set here: it is derived by the renderer from its own window.
      */
     public getPhaseStats(): RealEsrganPhaseStats | null {
       const a = this.phaseAccumulator;
-      if (!a || a.n === 0) {
-        if (!this.phaseSnapshot) return null;
-        return { ...this.phaseSnapshot, count: 0, enhancedFps: 0 };
-      }
+      if (!a || a.n === 0) return null;
+      // Precision reflects what actually SERVED this window. Runner frames
+      // carry the worker's own report (fp16 model URL won or the silent
+      // fp16→fp32 fallback did); the native client reports nothing and
+      // counts as fp32 here — its share is tracked separately in
+      // nativePct anyway. Session frames serve this pipeline's selected
+      // precision (effect param, from the stored setting). Majority vote
+      // across the window.
+      const runnerServed = a.runnerCount * 2 >= a.n;
+      const workerFp16Served = a.runnerCount > 0 && a.workerFp16Count * 2 >= a.runnerCount;
+      const precision: RealEsrganPrecision = runnerServed
+        ? (workerFp16Served ? 'fp16' : 'fp32')
+        : this.precision;
       const snapshot: RealEsrganPhaseStats = {
         // Readback = GPU→CPU mapped-range copy + RGBA→planar unpack; both are
         // paid by the readback side of the pipeline, before inference starts.
@@ -901,13 +1386,12 @@ export function createRealEsrganPipelineClass(
         // Compose time on whichever path ran; the overlay treats `composeMs`
         // as "time spent producing the output texture" regardless of GPU/CPU.
         composeMs: (a.g + a.m) / a.n,
-        workerPct: (a.workerCount / a.n) * 100,
+        runnerPct: (a.runnerCount / a.n) * 100,
+        nativePct: (a.nativeCount / a.n) * 100,
         gpuComposePct: (a.gpuComposeCount / a.n) * 100,
-        precision: (isRealEsrganInt8Preferred() ? 'int8' : isRealEsrganFloat16Preferred() ? 'fp16' : 'fp32') as 'fp32' | 'fp16' | 'int8',
+        precision,
         count: a.n,
-        enhancedFps: 0,
       };
-      this.phaseSnapshot = snapshot;
       this.phaseAccumulator = null;
       return snapshot;
     }
@@ -954,41 +1438,204 @@ export function createRealEsrganPipelineClass(
     }
 
     private writeRgbaResult(rgba: Uint8Array, width: number, height: number): void {
+      // A full-frame write paints over the whole texture, including any
+      // previously filled letterbox bars. Forget the bar geometry: returning
+      // to the same crop later must re-fill its bars instead of trusting
+      // stale content pixels the full frame just overwrote.
+      this.cropBarsKey = null;
+      this.writeRgbaSubview(rgba, width, height, 0, 0);
+    }
+
+    /**
+     * writeTexture for a sub-rectangle of the output texture (Hebel 1.1
+     * content paste). Rows are padded to the 256-byte copy alignment when
+     * the tight width is unaligned — cropped pastes usually are; the pooled
+     * pad buffer is stable per geometry so it hits every frame.
+     */
+    private writeRgbaSubview(rgba: Uint8Array, width: number, height: number, ox: number, oy: number): void {
+      const { bytesPerRow } = planUpload(width, height);
       const tightRowBytes = width * 4;
-      const bytesPerRow = Math.ceil(tightRowBytes / COPY_BYTES_PER_ROW_ALIGNMENT)
-        * COPY_BYTES_PER_ROW_ALIGNMENT;
+      const origin = { x: ox, y: oy };
+      if (bytesPerRow === tightRowBytes) {
+        // writeTexture copies the data into the queue synchronously; no
+        // staging buffer needed on the tight path (common case).
+        this.device.queue.writeTexture(
+          { texture: this.outputTexture, origin },
+          rgba,
+          { bytesPerRow, rowsPerImage: height },
+          [width, height, 1],
+        );
+        return;
+      }
       // writeTexture copies the data into the queue synchronously, so the
       // pooled upload buffer is safe to release as soon as the call returns.
       const uploadBuffer = this.pool.acquire(bytesPerRow * height);
       try {
-        if (bytesPerRow === tightRowBytes) {
-          this.device.queue.writeTexture(
-            { texture: this.outputTexture },
-            rgba,
-            { bytesPerRow, rowsPerImage: height },
-            [width, height, 1],
-          );
-        } else {
-          const padded = new Uint8Array(uploadBuffer);
-          for (let row = 0; row < height; row += 1) {
-            padded.set(rgba.subarray(row * tightRowBytes, (row + 1) * tightRowBytes), row * bytesPerRow);
-          }
-          this.device.queue.writeTexture(
-            { texture: this.outputTexture },
-            padded,
-            { bytesPerRow, rowsPerImage: height },
-            [width, height, 1],
-          );
+        const padded = new Uint8Array(uploadBuffer);
+        for (let row = 0; row < height; row += 1) {
+          padded.set(rgba.subarray(row * tightRowBytes, (row + 1) * tightRowBytes), row * bytesPerRow);
         }
+        this.device.queue.writeTexture(
+          { texture: this.outputTexture, origin },
+          padded,
+          { bytesPerRow, rowsPerImage: height },
+          [width, height, 1],
+        );
       } finally {
         this.pool.release(uploadBuffer);
       }
     }
 
+    /**
+     * Hebel 1.1 output: paste a cropped inference result into the full-size
+     * output texture and re-attach opaque-black bars. The content mapping is
+     * integer-exact by construction (×4 on the full path, target-grid-snapped
+     * on the downscaled native path); round() only absorbs float dust and
+     * never moves an edge. Only the ORIGIN is rounded here: the pasted SIZE
+     * is the runner result the caller already validated (expW/expH), never a
+     * second independent rounding of the same rect — round(out*(x+w)/full) −
+     * round(out*x/full) and round(target*infer/full) differ by 1px on odd
+     * widths (e.g. 853→1280 pillarbox), which used to throw on every cropped
+     * frame. A mapping that does not fit is an inference error like any
+     * other size mismatch — it must never shear the presentation.
+     *
+     * `targetW/targetH` are the transport target the caller sent with this
+     * inference (0 = full 4x): the result bytes must match them exactly.
+     */
+    private presentCroppedResult(
+      rgba: Uint8Array,
+      width: number,
+      height: number,
+      crop: ContentRect,
+      targetWidth: number,
+      targetHeight: number,
+    ): void {
+      const outW = this.outputWidth;
+      const outH = this.outputHeight;
+      let ox = Math.round(outW * crop.x / this.inferenceWidth);
+      let oy = Math.round(outH * crop.y / this.inferenceHeight);
+      // Size comes from the validated result, not from re-rounding the rect:
+      // the runner was asked for exactly targetW/targetH (or the full 4x
+      // content) and length-checked against it by the caller.
+      const targeted = targetWidth > 0 && targetHeight > 0;
+      const rw = targeted ? targetWidth : width;
+      const rh = targeted ? targetHeight : height;
+      if (width !== rw || height !== rh) {
+        throw new Error(`RealESRGAN crop result ${width}x${height} does not match `
+          + `its transport target ${rw}x${rh}.`);
+      }
+      // Origin rounding can overshoot the far edge by 1px on odd splits
+      // (round(y)+round(h) vs round(y+h)): shift back inside instead of
+      // dropping the frame — subpixel, invisible, and the bar fill below
+      // uses the same rect so no seam can open. Anything larger is real.
+      if (ox < 0 || oy < 0) {
+        throw new Error(`RealESRGAN crop paste ${ox},${oy} ${rw}x${rh} does not fit `
+          + `in ${outW}x${outH}.`);
+      }
+      const overX = ox + rw - outW;
+      const overY = oy + rh - outH;
+      if (overX > 2 || overY > 2) {
+        throw new Error(`RealESRGAN crop paste ${ox},${oy} ${rw}x${rh} does not fit `
+          + `in ${outW}x${outH}.`);
+      }
+      if (overX > 0) ox -= overX;
+      if (overY > 0) oy -= overY;
+      this.writeRgbaSubview(rgba, width, height, ox, oy);
+      this.ensureCropBarsFilled(crop, ox, oy, rw, rh);
+    }
+
+    /**
+     * Re-attach the cropped-away bars as opaque black. The output texture
+     * persists across frames, so bars are written once per geometry; content
+     * pastes every frame only touch the content rect.
+     */
+    private ensureCropBarsFilled(crop: ContentRect, ox: number, oy: number, rw: number, rh: number): void {
+      const key = `${this.outputWidth}x${this.outputHeight}:${contentRectKey(crop)}`;
+      if (this.cropBarsKey === key) return;
+      const outW = this.outputWidth;
+      const outH = this.outputHeight;
+      const bars: Array<[number, number, number, number]> = [
+        [0, 0, outW, oy],
+        [0, oy + rh, outW, outH - oy - rh],
+        [0, oy, ox, rh],
+        [ox + rw, oy, outW - ox - rw, rh],
+      ];
+      for (const [bx, by, bw, bh] of bars) {
+        if (bw <= 0 || bh <= 0) continue;
+        this.writeBlackRect(bx, by, bw, bh);
+      }
+      this.cropBarsKey = key;
+    }
+
+    /**
+     * Opaque-black writeTexture for one output-space rect. Fresh buffers (not
+     * pooled): bar fills only run on geometry changes, so per-frame pool
+     * pressure stays zero.
+     */
+    private writeBlackRect(x: number, y: number, width: number, height: number): void {
+      const { bytesPerRow } = planUpload(width, height);
+      const black = new Uint8Array(bytesPerRow * height);
+      // Opaque (not transparent) black: alpha 255, matching every writer.
+      for (let row = 0; row < height; row += 1) {
+        const base = row * bytesPerRow;
+        for (let col = 0; col < width; col += 1) black[base + col * 4 + 3] = 255;
+      }
+      this.device.queue.writeTexture(
+        { texture: this.outputTexture, origin: { x, y } },
+        black,
+        { bytesPerRow, rowsPerImage: height },
+        [width, height, 1],
+      );
+    }
+
+    /**
+     * Main-thread fallback for cropped frames: CPU-compose the cropped tiles
+     * (the GPU composer targets the full-size output texture and cannot
+     * offset), then paste like the runner paths. Cropped frames are smaller,
+     * so the CPU feathering pass stays cheap.
+     */
+    private writeCroppedComposedResult(tiled: TiledInferenceResult, crop: ContentRect): boolean {
+      const outPixels = tiled.outWidth * tiled.outHeight;
+      const accumulatorBuffer = this.pool.acquire(3 * outPixels * 4);
+      const weightSumBuffer = this.pool.acquire(outPixels * 4);
+      try {
+        const composed = composeTileResults(
+          tiled,
+          new Float32Array(accumulatorBuffer),
+          new Float32Array(weightSumBuffer),
+        );
+        const tightRowBytes = composed.width * 4;
+        const rgbaBuffer = this.pool.acquire(tightRowBytes * composed.height);
+        try {
+          const rgba = rgbPlanarToPaddedRgba(
+            composed.rgb, composed.width, composed.height, tightRowBytes, new Uint8Array(rgbaBuffer),
+          );
+          // Session path: always full 4x content, never transport-downscaled.
+          this.presentCroppedResult(rgba, composed.width, composed.height, crop, 0, 0);
+        } finally {
+          this.pool.release(rgbaBuffer);
+        }
+        return false;
+      } finally {
+        this.pool.release(accumulatorBuffer);
+        this.pool.release(weightSumBuffer);
+      }
+    }
+
     private writeResult(planarRgb: Float32Array, width: number, height: number): void {
-      const tightRowBytes = width * 4;
-      const bytesPerRow = Math.ceil(tightRowBytes / COPY_BYTES_PER_ROW_ALIGNMENT)
-        * COPY_BYTES_PER_ROW_ALIGNMENT;
+      // Full-frame write (see writeRgbaResult): any previously filled bars
+      // are painted over, so the bar geometry must be forgotten.
+      this.cropBarsKey = null;
+      // The worker can be disabled mid-life (timeout give-up) after the output
+      // texture was allocated target-sized for transport downscaling, while the
+      // main-thread session always produces the full 4x frame. Stretch into the
+      // actual output geometry instead of failing writeTexture validation per
+      // frame until the next rebuild.
+      if (width !== this.outputWidth || height !== this.outputHeight) {
+        this.writePrimeFromPlanar(planarRgb, width, height);
+        return;
+      }
+      const { bytesPerRow } = planUpload(width, height);
       // writeTexture copies the data into the queue synchronously, so the
       // pooled upload buffer is safe to release as soon as the call returns.
       const uploadBuffer = this.pool.acquire(bytesPerRow * height);
@@ -1006,14 +1653,18 @@ export function createRealEsrganPipelineClass(
     }
 
     private writePrimeFromPlanar(planarRgb: Float32Array, width: number, height: number): void {
+      // POLICY NOTE — this helper serves two DIFFERENT callers:
+      //   1. the first-frames black-frame safety net (drain, pre-inference);
+      //   2. a silent nearest-neighbor quality downgrade on mid-life
+      //      geometry mismatch (writeResult: a 4x session result meeting a
+      //      target-sized texture after the runner died). Keep the two
+      //      policies in mind when touching the stretch math.
       // p8: the output texture may be target-sized (host box-averages the
       // transport); the prime must fill exactly that geometry or the first
       // writeTexture would fail validation against a smaller texture.
       const outW = this.outputWidth;
       const outH = this.outputHeight;
-      const tightRowBytes = outW * 4;
-      const bytesPerRow = Math.ceil(tightRowBytes / COPY_BYTES_PER_ROW_ALIGNMENT)
-        * COPY_BYTES_PER_ROW_ALIGNMENT;
+      const { bytesPerRow } = planUpload(outW, outH);
       const uploadBuffer = this.pool.acquire(bytesPerRow * outH);
       try {
         const padded = new Uint8Array(uploadBuffer);
@@ -1061,6 +1712,7 @@ export function createRealEsrganPipelineClass(
       if (this.destroyed) return;
       this.destroyed = true;
       this.frameJobs.reset();
+      this.presentedDropped = 0;
       // The worker client is SHARED across all RealESRGAN pipeline instances
       // (see pipeline-loader.ts). Destroying it here would poison the shared
       // promise: the next pipeline (e.g. after a resolution change rebuild)
@@ -1068,18 +1720,35 @@ export function createRealEsrganPipelineClass(
       // main-thread WASM session. The worker outlives individual pipelines
       // and caches its sessions per model+resolution; it is only terminated
       // when the content script itself tears down.
-      this.gpuComposer?.destroy();
+      //
+      // Each GPU object is released independently: on a lost/destroyed
+      // device any single destroy() can throw, and one throwing release
+      // must not leak the remaining allocations.
+      const releases: Array<() => void> = [
+        () => this.gpuComposer?.destroy(),
+        () => this.downscaleTexture?.destroy(),
+        ...this.stagingBuffers.map(buffer => () => buffer.destroy()),
+        () => this.outputTexture.destroy(),
+      ];
+      for (const release of releases) {
+        try {
+          release();
+        } catch (error) {
+          console.warn('[RealESRGAN] Pipeline cleanup failed:', error);
+        }
+      }
       this.gpuComposer = null;
-      this.downscaleTexture?.destroy();
-      this.stagingBuffers.forEach(buffer => buffer.destroy());
-      this.outputTexture.destroy();
     }
 
     public getSkippedFrames(): number {
-      // Frames the video produced while inference was busy, plus completed
-      // results discarded because a newer frame had already arrived. Both are
-      // "frames the user did not see processed" and belong in the stats.
-      return this.scheduler.skippedFrames + this.scheduler.droppedResults;
+      // Frames the video produced while inference was busy (scheduler gaps),
+      // plus completed results discarded because a newer frame had already
+      // presented (claimPresentation refusals). The scheduler's own
+      // droppedResults is deliberately NOT used: its "newest submitted"
+      // watermark fires for frames this pipeline actually presented whenever
+      // an older job finishes before a newer one (routine at depth 2).
+      return this.scheduler.skippedFrames + this.presentedDropped;
     }
   };
 }
+

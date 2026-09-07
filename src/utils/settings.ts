@@ -5,6 +5,7 @@ import type {
   LocalSettings,
   QualityTier,
   RealEsrganCapHeight,
+  RealEsrganPrecision,
   RenderBackend,
 } from '../types';
 import { ID_TO_MODE, isEnhancementMode, isQualityTier } from '../shared/presets';
@@ -16,11 +17,15 @@ export const DEFAULT_SETTINGS: Anime4KWebExtSettings = {
   mode: 'A',
   quality: 'M',
   output: 'auto',
-  backend: 'webgpu',
+  // Auto prefers WebGPU and falls back to the native host (protected
+  // playback, missing WebGPU). A forced 'webgpu' default would strand those
+  // cases with an error instead of falling back; migration uses the same.
+  backend: 'auto',
   statsEnabled: false,
   autoFullscreenEnabled: true,
   frameGenerationEnabled: false,
   realesrganCapHeight: 480,
+  realesrganPrecision: 'int8',
 };
 
 function isBackend(value: unknown): value is RenderBackend {
@@ -28,7 +33,11 @@ function isBackend(value: unknown): value is RenderBackend {
 }
 
 function isRealEsrganCapHeight(value: unknown): value is RealEsrganCapHeight {
-  return value === 480 || value === 432 || value === 405;
+  return value === 480 || value === 432 || value === 405 || value === 360;
+}
+
+function isRealEsrganPrecision(value: unknown): value is RealEsrganPrecision {
+  return value === 'fp32' || value === 'fp16' || value === 'int8';
 }
 
 export async function getSettings(): Promise<Anime4KWebExtSettings> {
@@ -56,6 +65,9 @@ export async function getSettings(): Promise<Anime4KWebExtSettings> {
     realesrganCapHeight: isRealEsrganCapHeight(data.realesrganCapHeight)
       ? data.realesrganCapHeight
       : DEFAULT_SETTINGS.realesrganCapHeight,
+    realesrganPrecision: isRealEsrganPrecision(data.realesrganPrecision)
+      ? data.realesrganPrecision
+      : DEFAULT_SETTINGS.realesrganPrecision,
   };
   return settings;
 }
@@ -90,7 +102,14 @@ export async function saveSettings(settings: Partial<Anime4KWebExtSettings>): Pr
   if (isRealEsrganCapHeight(settings.realesrganCapHeight)) {
     update.realesrganCapHeight = settings.realesrganCapHeight;
   }
-  update.output = 'auto';
+  if (isRealEsrganPrecision(settings.realesrganPrecision)) {
+    update.realesrganPrecision = settings.realesrganPrecision;
+  }
+  // The output model is fixed to 'auto'; only persist it alongside a real
+  // change so an empty update cannot emit a spurious render-key change that
+  // re-applies every managed enhancer for nothing.
+  if (Object.keys(update).length > 0) update.output = 'auto';
+  if (Object.keys(update).length === 0) return;
   await storageSet(chrome.storage.local, update as Record<string, unknown>);
 }
 
@@ -98,6 +117,7 @@ export function getEffectsForPreset(
   mode: EnhancementMode,
   quality: QualityTier,
   realesrganCapHeight: RealEsrganCapHeight = DEFAULT_SETTINGS.realesrganCapHeight,
+  realesrganPrecision: RealEsrganPrecision = DEFAULT_SETTINGS.realesrganPrecision,
 ): EnhancementEffect[] {
-  return resolveEnhancementGraph(mode, quality, realesrganCapHeight);
+  return resolveEnhancementGraph(mode, quality, realesrganCapHeight, realesrganPrecision);
 }

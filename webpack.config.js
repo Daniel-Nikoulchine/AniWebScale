@@ -195,6 +195,12 @@ module.exports = (env, argv) => {
           // made the client's fetch 404 and silently disabled the whole
           // worker path (every frame fell back to the main-thread session).
           { from: 'src/worker/*.js', to: 'chunks/[name][ext]' },
+          // Hebel E5: the WASM-SIMD compose module the worker fetches at
+          // runtime. Optional like the FP16 models: absence only costs the
+          // SIMD speedup (JS compose fallback), never a frame. Built by
+          // npm run generate:pixels-wasm (cargo-less checkouts keep a stale
+          // copy or ship without).
+          { from: 'wasm/pixels.wasm', to: 'chunks/pixels.wasm', noErrorOnMissing: true },
           { from: 'models', to: 'models', globOptions: { ignore: ['**/*.fp16.onnx'] } },
           // Optional FP16 models are copied only when present in the source
           // tree; the runtime probes the asset and falls back to FP32.

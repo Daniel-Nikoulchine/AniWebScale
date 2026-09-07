@@ -212,11 +212,13 @@ export class RealEsrganNativeVulkanClient implements RealEsrganInferenceRunner {
    * frames arrive in groups of ~10 every ~530 ms (headless rVFC batching),
    * not smoothly: depth 4 admits 4 per group and refuses 6 (~60% no-slot),
    * capping completions at ~10/s against a 45/s serial host. Depth 8
-   * absorbs whole groups; the serial host turns 8 outstanding into ~18/s
-   * completions. Stale group members are dropped by claimPresentation, so
-   * latest-frame-wins stays intact. Browser per-origin connection queuing
-   * (6 for HTTP/1.1 keep-alive) may park the 7th+ fetch briefly; that wait
-   * stays inside the 530 ms group period and does not cost throughput.
+   * absorbs whole groups; the serial host turns 8 outstanding into ~23/s
+   * completions (E2E-verified; depth 12 measured identical — the ceiling
+   * is the arrival rate, not slots). Stale group members are dropped by
+   * claimPresentation/stale-skip, so latest-frame-wins stays intact.
+   * Browser per-origin connection queuing (6 for HTTP/1.1 keep-alive)
+   * may park the 7th+ fetch briefly; that wait stays inside the group
+   * period and does not cost throughput.
    */
   private inFlight = 0;
   /**

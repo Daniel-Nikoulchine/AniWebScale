@@ -241,8 +241,9 @@ export function createRealEsrganPipelineClass(
     private readonly stagingBuffers: GPUBuffer[];
     // Eight staging slots match the native runner's maxInFlight (depth 8):
     // frames arrive in groups of ~10 every ~530 ms (headless rVFC batching)
-    // and depth 4 refused 60% of each group. Worker/main-thread paths stay
-    // at depth 1 via their own maxInFlight (see inferenceDepth).
+    // and depth 4 refused 60% of each group (depth 12 measured identical
+    // to 8 — arrival-bound). Worker/main-thread paths stay at depth 1 via
+    // their own maxInFlight (see inferenceDepth).
     private readonly stagingBufferCount = 8;
     // Slot ownership: true = claimed by pass() (encoded copy pending or
     // mapped in drain()), false = free. Cleared at the end of drain().

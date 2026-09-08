@@ -74,7 +74,7 @@ const results = [];
 for (const { precision, cap } of combos) {
   console.log(`--- combo precision=${precision} cap=${cap} (${collectSeconds}s collect) ---`);
   const started = Date.now();
-  let output = '';
+  let output;
   try {
     output = await new Promise(resolve => {
       const child = execFile('node', [runner], {

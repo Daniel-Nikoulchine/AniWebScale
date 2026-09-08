@@ -62,6 +62,9 @@ struct Options {
     bool compare_cpu_fallback = false; // if true, also run without GPU postproc
     bool fp32_only = false;            // if true, run fp32 instead of fp16
     bool use_int8 = false;             // INT8-Experiment (ncnn-Pin post #6751)
+    int num_threads = 4;               // A/B: CPU thread count for ncnn transforms
+    bool no_winograd = false;          // A/B: disable winograd convolution
+    bool fp16_arith = false;           // A/B: enable fp16 arithmetic (needs quality gate)
     std::string dump_path;             // if set, write last frame RGBA8 of the first case (raw, out_w*out_h*4)
     std::vector<BenchCase> cases;
 };
@@ -92,6 +95,9 @@ static void print_usage(const char* prog) {
         "  --cases WxH[,WxH...]  e.g. 640x360,1280x720 (default all 4)\n"
         "  --compare-cpu         also run CPU fallback A/B for each case\n"
         "  --fp32                force fp32 storage (no fp16)\n"
+        "  --threads N           ncnn CPU threads (default 4)\n"
+        "  --no-winograd         disable winograd convolution\n"
+        "  --fp16-arith          enable fp16 arithmetic (quality gate required)\n"
         "  --int8                enable int8 inference (needs quantized model)\n"
         "  --dump-frame FILE     write last RGBA8 frame of the first case (raw)\n"
         "  --help\n",
@@ -416,6 +422,9 @@ int main(int argc, char** argv) {
         else if (a == "--cases" && i + 1 < argc) opts.cases = parse_cases(argv[++i]);
         else if (a == "--compare-cpu") opts.compare_cpu_fallback = true;
         else if (a == "--fp32") opts.fp32_only = true;
+        else if (a == "--threads" && i + 1 < argc) opts.num_threads = std::atoi(argv[++i]);
+        else if (a == "--no-winograd") opts.no_winograd = true;
+        else if (a == "--fp16-arith") opts.fp16_arith = true;
         else if (a == "--int8") opts.use_int8 = true;
         else if (a == "--dump-frame" && i + 1 < argc) opts.dump_path = argv[++i];
         else if (a == "--help" || a == "-h") { print_usage(argv[0]); return 0; }
@@ -429,8 +438,9 @@ int main(int argc, char** argv) {
 
     fprintf(stderr, "[bench] RealESRGAN ncnn-Vulkan GPU benchmark\n");
     fprintf(stderr, "[bench] param=%s\n[bench] bin=%s\n", opts.param_path.c_str(), opts.bin_path.c_str());
-    fprintf(stderr, "[bench] warmup=%d samples=%d compare_cpu=%d fp16=%d int8=%d\n",
-            opts.warmup, opts.samples, opts.compare_cpu_fallback, !opts.fp32_only, opts.use_int8);
+    fprintf(stderr, "[bench] warmup=%d samples=%d compare_cpu=%d fp16=%d int8=%d threads=%d winograd=%d fp16arith=%d\n",
+            opts.warmup, opts.samples, opts.compare_cpu_fallback, !opts.fp32_only, opts.use_int8,
+            opts.num_threads, !opts.no_winograd, opts.fp16_arith);
 
     if (ncnn::create_gpu_instance() != 0) {
         fprintf(stderr, "failed to create Vulkan instance\n");
@@ -459,11 +469,11 @@ int main(int argc, char** argv) {
     {
         ncnn::Net net;
         net.opt.use_vulkan_compute = true;
-        net.opt.num_threads = 4;
+        net.opt.num_threads = opts.num_threads > 0 ? opts.num_threads : 4;
         net.opt.use_fp16_packed = use_fp16;
         net.opt.use_fp16_storage = use_fp16;
-        net.opt.use_fp16_arithmetic = false;
-        net.opt.use_winograd_convolution = true;
+        net.opt.use_fp16_arithmetic = opts.fp16_arith;
+        net.opt.use_winograd_convolution = !opts.no_winograd;
         net.opt.use_bf16_storage = false;
         net.opt.use_int8_inference = opts.use_int8;
         net.opt.use_int8_storage = opts.use_int8;
@@ -579,6 +589,9 @@ int main(int argc, char** argv) {
             json << "    \"sampleFrames\": " << opts.samples << ",\n";
             json << "    \"useFp16\": " << (use_fp16 ? "true" : "false") << ",\n";
             json << "    \"useInt8\": " << (opts.use_int8 ? "true" : "false") << ",\n";
+            json << "    \"numThreads\": " << opts.num_threads << ",\n";
+            json << "    \"winograd\": " << (!opts.no_winograd ? "true" : "false") << ",\n";
+            json << "    \"fp16Arithmetic\": " << (opts.fp16_arith ? "true" : "false") << ",\n";
             json << "    \"gpuPostproc\": " << (postproc ? "true" : "false") << ",\n";
             json << "    \"compareCpuFallback\": " << (opts.compare_cpu_fallback ? "true" : "false") << "\n";
             json << "  },\n";

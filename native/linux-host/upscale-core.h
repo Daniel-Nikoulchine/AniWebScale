@@ -459,8 +459,13 @@ private:
             ncnn::VkMat in_gpu_pre;
             if (pre_down2) {
                 // Stufe 2: full-res upload, down2 shader halves to iw x ih.
-                tile_rgba_cpu.create(full_w, full_h, (size_t)4, 1u);
-                memcpy(tile_rgba_cpu.data, rgba_src, (size_t)full_w*full_h*4);
+                // Stufe 3 (Zero-Copy-Upload): der Frame-Puffer wird direkt
+                // gewrappt statt alloc+memcpy — record_clone kopiert beim
+                // Recorden synchron ins Staging, der Puffer lebt garantiert
+                // bis submit_and_wait (gleicher Scope). Keine Ownership.
+                tile_rgba_cpu = ncnn::Mat(full_w, full_h,
+                                          const_cast<unsigned char*>(rgba_src),
+                                          (size_t)4, 1);
                 rgba_gpu.create(full_w, full_h, (size_t)4, 1, blob_);
                 cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
                 in_gpu_pre.create(iw, ih, 3, (size_t)2, 1, blob_);
@@ -476,8 +481,10 @@ private:
                 ncnn::VkMat disp; disp.w = iw; disp.h = ih; disp.c = 1;
                 cmd.record_pipeline(preproc_down2_, binds, consts, disp);
             } else {
-            tile_rgba_cpu.create(iw, ih, (size_t)4, 1u);
-            memcpy(tile_rgba_cpu.data, rgba_src, (size_t)iw*ih*4);
+            // Stufe 3 (Zero-Copy-Upload): wie oben, Frame-Puffer wrappen.
+            tile_rgba_cpu = ncnn::Mat(iw, ih,
+                                      const_cast<unsigned char*>(rgba_src),
+                                      (size_t)4, 1);
             rgba_gpu.create(iw, ih, (size_t)4, 1, blob_);
             cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
             in_gpu_pre.create(iw, ih, 3, (size_t)2, 1, blob_);
@@ -544,6 +551,12 @@ private:
                 cmd.record_pipeline(postproc_, binds, consts, disp);
             }
             ncnn::Mat dst;
+            // Stufe 3 (Zero-Copy-Download): Zielvektor vorab auf pw x ph
+            // bringen, der Download landet direkt drin — create_like uebernimmt den
+            // Puffer bei Formgleichheit (dims=2, w=pw, h=ph, e4/u1,
+            // allocator=null==blob_allocator). Fallback unten falls nicht.
+            frame_out.resize((size_t)pw * ph * 4);
+            dst = ncnn::Mat(pw, ph, frame_out.data(), (size_t)4, 1);
             cmd.record_clone(out_rgba_gpu, dst, topt);
             // Never ignore the submit result: a dead submit leaves every
             // buffer untouched (silent black frame with even alpha 0) while
@@ -560,8 +573,14 @@ private:
             ow = dst.w; oh = dst.h;
             size_t need = (size_t)ow*oh*4;
             if (need != (size_t)dst.w*dst.h*4) { emsg = "gpu postproc size mismatch"; return false; }
-            frame_out.resize(need);
-            memcpy(frame_out.data(), dst.data, need);
+            if ((unsigned char*)dst.data != frame_out.data()) {
+                // Stufe-3-Fallback: Puffer wurde nicht uebernommen (unerwartete
+                // Form) — klassisch kopieren, Ergebnis trotzdem korrekt.
+                frame_out.resize(need);
+                memcpy(frame_out.data(), dst.data, need);
+            } else if (need != frame_out.size()) {
+                emsg = "gpu postproc size mismatch"; return false;
+            }
             return true;
         };
 

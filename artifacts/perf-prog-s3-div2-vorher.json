@@ -1,0 +1,32 @@
+{
+ "tool": "host-latency-bench",
+ "host": "/tmp/host-s3-vorher",
+ "warmup": 2,
+ "samples": 10,
+ "cases": [
+  {
+   "width": 640,
+   "height": 360,
+   "targetWidth": 640,
+   "targetHeight": 360,
+   "outWidth": 640,
+   "outHeight": 360,
+   "averageMs": 8.397319299911032,
+   "p50Ms": 7.724210001470055,
+   "p95Ms": 11.557983998500276,
+   "fps": 119.08562295714952,
+   "samplesMs": [
+    11.558,
+    9.8485,
+    8.6186,
+    7.8194,
+    7.7609,
+    7.7039,
+    7.6376,
+    7.6226,
+    7.7242,
+    7.6796
+   ]
+  }
+ ]
+}

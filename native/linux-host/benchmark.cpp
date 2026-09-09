@@ -291,8 +291,11 @@ static bool run_one_case(const BenchCase& bc, const std::vector<unsigned char>& 
         const int up_w = use_gpu_pre_down2 ? case_w : width;
         const int up_h = use_gpu_pre_down2 ? case_h : height;
         const unsigned char* up_src = use_gpu_pre_down2 ? rgba.data() : infer_src;
-        input_rgba_cpu.create(up_w, up_h, (size_t)4, 1u);
-        memcpy(input_rgba_cpu.data, up_src, (size_t)up_w*up_h*4);
+        // Stufe 3 (Zero-Copy-Upload): Frame-Puffer direkt wrappen statt
+        // alloc+memcpy (record_clone kopiert synchron ins Staging).
+        input_rgba_cpu = ncnn::Mat(up_w, up_h,
+                                   const_cast<unsigned char*>(up_src),
+                                   (size_t)4, 1);
         upload_src = nullptr; // signal GPU path
     } else {
         {

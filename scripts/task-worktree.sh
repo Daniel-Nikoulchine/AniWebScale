@@ -37,6 +37,12 @@ cmd_new() {
   git -C "$REPO" rev-parse --verify "$base" >/dev/null 2>&1 || die "Basis unbekannt: $base"
   git -C "$REPO" show-ref --verify --quiet "refs/heads/$branch" && die "Branch existiert schon: $branch"
   git -C "$REPO" worktree add -b "$branch" "$path" "$base"
+  if [ -f "$REPO/wasm/pixels.wasm" ] && [ ! -f "$path/wasm/pixels.wasm" ]; then
+    mkdir -p "$path/wasm"
+    cp "$REPO/wasm/pixels.wasm" "$path/wasm/"
+    touch "$path/wasm/pixels.wasm"
+    echo "wasm/pixels.wasm kopiert (generiert, ohne Rust-Target nicht baubar)"
+  fi
   echo "OK: $path auf Branch $branch (Basis $base)"
   echo "Naechste Schritte im Worktree:"
   echo "  cd $path && npm ci && npm run generate:presets"

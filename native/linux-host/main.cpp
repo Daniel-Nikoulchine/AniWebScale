@@ -518,6 +518,21 @@ int main(int argc, char** argv) {
         const std::string v(e);
         useSrvggEngine = (v == "srvgg" || v == "1");
     }
+    // Stufe 1 (Perf-Programm): infer at ceil(W/D)xceil(H/D), D=1 voll.
+    // Gate-Beleg: div2 30.4 dB PASS, div4 22.9 dB FAIL (bench/target-res-*).
+    // Nur 2 ist freigegeben; andere Werte fallen auf 1 zurueck.
+    int inferDiv = 1;
+    if (const char* e = std::getenv("ANIWEBSCALE_INFER_DIV")) {
+        const int v = std::atoi(e);
+        inferDiv = (v == 2) ? 2 : 1;
+        fprintf(stderr, "[host] ANIWEBSCALE_INFER_DIV=%s -> div=%d\n", e, inferDiv);
+    }
+    // Stufe 5: Session-Warmup an (Opt-out ANIWEBSCALE_NO_WARMUP=1); der
+    // --traffic-test misst bewusst kalt und bleibt ohne Vorwaermung.
+    bool noWarmup = false;
+    if (const char* e = std::getenv("ANIWEBSCALE_NO_WARMUP")) {
+        noWarmup = std::atoi(e) != 0;
+    }
     // Deep-fusion premise probe: --traffic-test W H [ITERS] times one 64ch
     // fp16 layer boundary and exits (no models, no network).
     bool trafficTest = false;
@@ -598,11 +613,16 @@ int main(int argc, char** argv) {
     core_cfg.use_fp16 = use_fp16;
     core_cfg.use_int8 = use_int8;
     core_cfg.use_srvgg_engine = useSrvggEngine;
+    core_cfg.infer_div = inferDiv;
     core_cfg.param_path = param_path;
     core_cfg.bin_path = bin_path;
     core_cfg.int8_param = int8_param;
     core_cfg.int8_bin = int8_bin;
     if (!core.load_models(core_cfg)) return 1;
+
+    // Stufe 5: First-Dispatch-Tax vom ersten Frame an den Startup ziehen.
+    if (!noWarmup && !trafficTest) core.warmup();
+    else fprintf(stderr, "[host] session warmup skipped\n");
 
 #if NCNN_VULKAN
     if (trafficTest) {

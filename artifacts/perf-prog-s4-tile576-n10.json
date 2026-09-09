@@ -1,0 +1,32 @@
+{
+ "tool": "host-latency-bench",
+ "host": "/home/daniel/Projects/anime4kBrowser-perf-programm/bench/../native/linux-host/build/aniwebscale-ncnn-host",
+ "warmup": 3,
+ "samples": 10,
+ "cases": [
+  {
+   "width": 1920,
+   "height": 1080,
+   "targetWidth": 0,
+   "targetHeight": 0,
+   "outWidth": 7680,
+   "outHeight": 4320,
+   "averageMs": 395.9726063993003,
+   "p50Ms": 395.97787499951664,
+   "p95Ms": 400.7035630020255,
+   "fps": 2.5254272235983826,
+   "samplesMs": [
+    391.0593,
+    391.9305,
+    400.7036,
+    395.9779,
+    396.8186,
+    398.0223,
+    395.9006,
+    396.6743,
+    395.9493,
+    396.6897
+   ]
+  }
+ ]
+}

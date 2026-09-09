@@ -58,4 +58,13 @@ while read -r path branch; do
     echo "WARN worktree $path: $dirty uncommittete Dateien und alter Stand"
   fi
 done < <(git -C "$REPO" worktree list --porcelain | awk '/^worktree /{p=$2} /^branch /{print p" "$2}')
+for wt in $(git -C "$REPO" worktree list --porcelain | awk '/^worktree /{print $2}'); do
+  st="$wt/VERIFY-STATUS.md"
+  if [ -f "$st" ] && grep -q "^- \[ \]" "$st" 2>/dev/null; then
+    age=$((NOW - $(stat -c %Y "$st")))
+    if [ "$age" -gt "$STALE_SECS" ]; then
+      echo "WARN $wt: VERIFY-STATUS.md hat offene Boxen seit ueber ${STALE_HOURS}h (Pruefung ohne Urteil?)"
+    fi
+  fi
+done
 echo "# ende: alles ohne WARN = gesund"

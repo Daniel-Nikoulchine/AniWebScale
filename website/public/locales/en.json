@@ -60,7 +60,7 @@
     "message": "All website access removed"
   },
   "cmpCaption": {
-    "message": "Interactive visual preview"
+    "message": "Real model output — drag the slider"
   },
   "cmpItem1": {
     "message": "Cleaner outlines"
@@ -75,7 +75,7 @@
     "message": "02 / SEE THE DIFFERENCE"
   },
   "cmpText": {
-    "message": "Drag the slider to compare the original frame with an Anime4K-enhanced preview."
+    "message": "Drag the slider to compare the original frame with a real AI-upscaled render."
   },
   "cmpTitle": {
     "message": "Soft source,<br><em>crisp render.</em>"
@@ -309,7 +309,7 @@
     "message": "A modern GPU is required."
   },
   "heroArtAria": {
-    "message": "Stylized AniWebScale video player illustration"
+    "message": "AniWebScale video player with real upscaling preview"
   },
   "heroCta": {
     "message": "Add to your browser"
@@ -654,16 +654,16 @@
     "message": "The active renderer rejected the settings."
   },
   "repoCaption": {
-    "message": "Illustrative preview"
+    "message": "Real model output"
   },
   "repoCaptionStrong": {
-    "message": "Original procedural comparison plate"
+    "message": "RealESR-AnimeVideo-v3 x4 upscaled preview"
   },
   "repoKicker": {
     "message": "VISUAL PREVIEW"
   },
   "repoText": {
-    "message": "This side-by-side comparison plate is an original procedural illustration showing the visual difference between a soft source and a crisp enhanced render."
+    "message": "This side-by-side comparison shows a real 450 by 200 source frame upscaled to 1800 by 800 with the RealESR-AnimeVideo-v3 model: soft bilinear original on the left, AI-enhanced render on the right."
   },
   "repoTitle": {
     "message": "Soft on the left,<br><em>crisp on the right.</em>"

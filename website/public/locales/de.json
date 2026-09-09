@@ -60,7 +60,7 @@
     "message": "Alle Website-Zugriffe entfernt"
   },
   "cmpCaption": {
-    "message": "Interaktive visuelle Vorschau"
+    "message": "Echte Modellausgabe — Regler ziehen"
   },
   "cmpItem1": {
     "message": "Sauberere Konturen"
@@ -75,7 +75,7 @@
     "message": "02 / SIEH DEN UNTERSCHIED"
   },
   "cmpText": {
-    "message": "Ziehe den Regler, um das Original-Frame mit einer Anime4K-verbesserten Vorschau zu vergleichen."
+    "message": "Ziehe den Regler, um das Original-Frame mit einem echten KI-hochskalierten Render zu vergleichen."
   },
   "cmpTitle": {
     "message": "Weiche Quelle,<br><em>scharfer Render.</em>"
@@ -309,7 +309,7 @@
     "message": "Eine moderne GPU ist erforderlich."
   },
   "heroArtAria": {
-    "message": "Stilisierter AniWebScale-Videoplayer"
+    "message": "AniWebScale-Videoplayer mit echter Upscaling-Vorschau"
   },
   "heroCta": {
     "message": "Zum Browser hinzufügen"
@@ -654,16 +654,16 @@
     "message": "Der aktive Renderer hat die Einstellungen abgelehnt."
   },
   "repoCaption": {
-    "message": "Illustrative Vorschau"
+    "message": "Echte Modellausgabe"
   },
   "repoCaptionStrong": {
-    "message": "Originäre prozedurale Vergleichsplatte"
+    "message": "RealESR-AnimeVideo-v3 x4-Upscale-Vorschau"
   },
   "repoKicker": {
     "message": "VISUELLE VORSCHAU"
   },
   "repoText": {
-    "message": "Diese Seite-an-Seite-Vergleichsplatte ist eine originäre prozedurale Illustration, die den visuellen Unterschied zwischen einer weichen Quelle und einem scharfen verbesserten Render zeigt."
+    "message": "Dieser Seite-an-Seite-Vergleich zeigt ein echtes 450-mal-200-Quellframe, hochskaliert auf 1800-mal-800 mit dem RealESR-AnimeVideo-v3-Modell: weiches bilineares Original links, KI-verbesserter Render rechts."
   },
   "repoTitle": {
     "message": "Links weich,<br><em>rechts scharf.</em>"

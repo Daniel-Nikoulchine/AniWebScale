@@ -47,6 +47,7 @@
 #if NCNN_VULKAN
 #include "realesrgan_spike_postproc.comp.hex.h"
 #include "realesrgan_spike_preproc.comp.hex.h"
+#include "realesrgan_spike_preproc_down2.comp.hex.h"
 #endif
 
 namespace aniwebscale {
@@ -177,6 +178,21 @@ public:
             } else {
                 fprintf(stderr, "[host] GPU preproc ready\n");
             }
+            // Stufe 2: down2 preproc (div2 box-downscale folded into preproc,
+            // one dispatch, full-res upload). Null => CPU-loop fallback.
+            preproc_down2_ = new ncnn::Pipeline(device_);
+            preproc_down2_->set_optimal_local_size_xyz(32, 32, 1);
+            std::vector<ncnn::vk_specialization_type> down2_specs(1);
+            down2_specs[0].i = 0;
+            if (preproc_down2_->create(realesrgan_spike_preproc_down2_comp_data,
+                                       sizeof(realesrgan_spike_preproc_down2_comp_data),
+                                       down2_specs) != 0) {
+                fprintf(stderr, "[host] failed to create preproc_down2 pipeline, div2 stays on CPU pre\n");
+                delete preproc_down2_;
+                preproc_down2_ = nullptr;
+            } else {
+                fprintf(stderr, "[host] GPU preproc_down2 ready\n");
+            }
         }
 #endif
 
@@ -204,6 +220,8 @@ public:
             postproc_ = nullptr;
             delete preproc_;
             preproc_ = nullptr;
+            delete preproc_down2_;
+            preproc_down2_ = nullptr;
 #endif
             // Same ordering rule as shutdown(): the Net must release its GPU
             // resources BEFORE the instance dies, or ~Net() SIGSEGVs later in
@@ -271,6 +289,8 @@ public:
         postproc_ = nullptr;
         delete preproc_;
         preproc_ = nullptr;
+        delete preproc_down2_;
+        preproc_down2_ = nullptr;
 #endif
         // Lifetime rule from the spike: the Net must release its GPU resources
         // BEFORE the instance dies. net.clear() destroys the layers now, while
@@ -324,8 +344,21 @@ private:
         // Tiled-Schwelle greift auf dem kleinen Input (automatisch seltener).
         // Nur mit Presentation-Target: ohne target gilt weiter voll 4x.
         std::vector<unsigned char> small;
+        // Stufe 2: GPU-pre halves the full frame on the GPU (single-pass
+        // only; the tiled path keeps the exact CPU loop so tile seams stay
+        // bit-identical). Null pipeline => CPU-loop fallback.
+        bool gpu_pre_down2 = false;
+        int full_w = 0, full_h = 0;
         if (infer_div_ == 2 && target_w > 0 && target_h > 0 && width >= 2 && height >= 2) {
             const int sw = (width + 1) / 2, sh = (height + 1) / 2;
+            const bool small_tiled = (long long)sw * sh > (long long)1280 * 720;
+            if (preproc_down2_ != nullptr && !small_tiled) {
+                gpu_pre_down2 = true;
+                full_w = width;
+                full_h = height;
+                width = sw;
+                height = sh;
+            } else {
             small.assign((size_t)sw * sh * 4, 0);
             for (int y = 0; y < sh; ++y) {
                 const float y0f = (float)y * height / sh;
@@ -359,6 +392,7 @@ private:
             rgba = small.data();
             width = sw;
             height = sh;
+            } // else: CPU-loop fallback (tiled or no down2 pipeline)
         }
         const long long px = (long long)width * height;
         const bool tiled = px > (long long)1280 * 720;
@@ -374,7 +408,8 @@ private:
         auto run_gpu_frame = [&](const unsigned char* rgba_src, int iw, int ih,
                                  int fw, int fh, // postproc target for THIS tile/frame
                                  std::vector<unsigned char>& frame_out, int& ow, int& oh,
-                                 std::string& emsg, bool allowSrvgg) -> bool {
+                                 std::string& emsg, bool allowSrvgg,
+                                 bool pre_down2 = false, int full_w = 0, int full_h = 0) -> bool {
             // Spike lifetime rule: ONE VkCompute per inference, destroyed with
             // the frame's VkMats before the allocators are touched again.
             // Reusing a long-lived VkCompute across several submit_and_wait()
@@ -386,12 +421,32 @@ private:
             // been validated with tiles, so use it everywhere.
             ncnn::VkCompute cmd(device_);
             ncnn::Option topt = opt;
-            ncnn::Mat tile_rgba_cpu(iw, ih, (size_t)4, 1u);
-            memcpy(tile_rgba_cpu.data, rgba_src, (size_t)iw*ih*4);
+            ncnn::Mat tile_rgba_cpu;
             ncnn::VkMat rgba_gpu;
+            ncnn::VkMat in_gpu_pre;
+            if (pre_down2) {
+                // Stufe 2: full-res upload, down2 shader halves to iw x ih.
+                tile_rgba_cpu.create(full_w, full_h, (size_t)4, 1u);
+                memcpy(tile_rgba_cpu.data, rgba_src, (size_t)full_w*full_h*4);
+                rgba_gpu.create(full_w, full_h, (size_t)4, 1, blob_);
+                cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
+                in_gpu_pre.create(iw, ih, 3, (size_t)2, 1, blob_);
+                std::vector<ncnn::VkMat> binds(2);
+                binds[0] = rgba_gpu;
+                binds[1] = in_gpu_pre;
+                std::vector<ncnn::vk_constant_type> consts(5);
+                consts[0].i = full_w;
+                consts[1].i = full_h;
+                consts[2].i = iw;
+                consts[3].i = ih;
+                consts[4].i = (int)in_gpu_pre.cstep;
+                ncnn::VkMat disp; disp.w = iw; disp.h = ih; disp.c = 1;
+                cmd.record_pipeline(preproc_down2_, binds, consts, disp);
+            } else {
+            tile_rgba_cpu.create(iw, ih, (size_t)4, 1u);
+            memcpy(tile_rgba_cpu.data, rgba_src, (size_t)iw*ih*4);
             rgba_gpu.create(iw, ih, (size_t)4, 1, blob_);
             cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
-            ncnn::VkMat in_gpu_pre;
             in_gpu_pre.create(iw, ih, 3, (size_t)2, 1, blob_);
             {
                 std::vector<ncnn::VkMat> binds(2);
@@ -403,6 +458,7 @@ private:
                 consts[2].i = (int)in_gpu_pre.cstep; // real padded cstep from the blob
                 ncnn::VkMat disp; disp.w = iw; disp.h = ih; disp.c = 1;
                 cmd.record_pipeline(preproc_, binds, consts, disp);
+            }
             }
             ncnn::VkMat out_gpu;
             // E4 phase 1: hand-written SRVGG kernels instead of the ncnn
@@ -477,7 +533,8 @@ private:
         };
 
         if (!tiled) {
-            return run_gpu_frame(rgba, width, height, target_w, target_h, out, out_w, out_h, err_msg, true);
+            return run_gpu_frame(rgba, width, height, target_w, target_h, out, out_w, out_h, err_msg, true,
+                                 gpu_pre_down2, full_w, full_h);
         }
         // Tile in input pixels. PAD covers model prepadding (10) + conv margin.
         // Hebel 1.2: TILE 640 (was 512) — fewer submits and fewer PAD-halo
@@ -587,6 +644,7 @@ private:
 #if NCNN_VULKAN
     ncnn::Pipeline* postproc_ = nullptr;
     ncnn::Pipeline* preproc_ = nullptr;
+    ncnn::Pipeline* preproc_down2_ = nullptr; // Stufe 2: div2 in-preproc downscale
 #endif
     SrvggVulkan* srvgg_ = nullptr; // lazy, created on the first E4 frame
     std::string srvgg_models_dir_;

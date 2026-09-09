@@ -35,6 +35,7 @@
 #if NCNN_VULKAN
 #include "realesrgan_spike_postproc.comp.hex.h"
 #include "realesrgan_spike_preproc.comp.hex.h"
+#include "realesrgan_spike_preproc_down2.comp.hex.h"
 #endif
 
 namespace {
@@ -191,6 +192,7 @@ struct RunContext {
     ncnn::VulkanDevice* device;
     ncnn::Pipeline* postproc;
     ncnn::Pipeline* preproc;
+    ncnn::Pipeline* preproc_down2; // Stufe 2: div2 box-downscale folded into preproc
     bool use_fp16;
     bool use_int8;
 };
@@ -215,10 +217,28 @@ static bool run_one_case(const BenchCase& bc, const std::vector<unsigned char>& 
     // NOTE: the original case dims (bc) are kept for the postproc target below.
     const int div = infer_div < 1 ? 1 : infer_div;
     const int case_w = bc.width, case_h = bc.height;
+    // Stufe 2 (declared early: the div block below needs the flag): div2
+    // box-downscale folded into the preproc shader when available.
+    bool use_gpu_pre_down2 = false;
+#if NCNN_VULKAN
+    use_gpu_pre_down2 = (ctx.use_fp16 && ctx.preproc != nullptr && gpu_postproc
+                         && div == 2 && ctx.preproc_down2 != nullptr);
+#endif
     int infer_w = width, infer_h = height;
+    if (use_gpu_pre_down2) {
+        // Net input dims are the halved ones; the full-res frame is uploaded
+        // and halved by the down2 shader (width/height follow the infer dims
+        // so all downstream sizes match; case_w/h stay the upload + postproc
+        // target). CPU fallback is unreachable with the flag set (it implies
+        // the GPU preproc path).
+        infer_w = (width + 1) / 2;
+        infer_h = (height + 1) / 2;
+        width = infer_w;
+        height = infer_h;
+    }
     std::vector<unsigned char> small_rgba;
     const unsigned char* infer_src = rgba.data();
-    if (div > 1) {
+    if (div > 1 && !use_gpu_pre_down2) {
         infer_w = (width + div - 1) / div;
         infer_h = (height + div - 1) / div;
         small_rgba.assign((size_t)infer_w * infer_h * 4, 0);
@@ -261,13 +281,18 @@ static bool run_one_case(const BenchCase& bc, const std::vector<unsigned char>& 
 #if NCNN_VULKAN
     use_gpu_preproc = (ctx.use_fp16 && ctx.preproc != nullptr && gpu_postproc);
 #endif
+    // use_gpu_pre_down2 declared above (needed by the div block).
     ncnn::Mat input(width, height, 3, 4u, 1);
     ncnn::Mat input_conv;
     const ncnn::Mat* upload_src = &input;
     ncnn::Mat input_rgba_cpu;
     if (use_gpu_preproc) {
-        input_rgba_cpu.create(width, height, (size_t)4, 1u);
-        memcpy(input_rgba_cpu.data, infer_src, (size_t)width*height*4);
+        // Stufe 2: full-res upload, the down2 shader halves on the GPU.
+        const int up_w = use_gpu_pre_down2 ? case_w : width;
+        const int up_h = use_gpu_pre_down2 ? case_h : height;
+        const unsigned char* up_src = use_gpu_pre_down2 ? rgba.data() : infer_src;
+        input_rgba_cpu.create(up_w, up_h, (size_t)4, 1u);
+        memcpy(input_rgba_cpu.data, up_src, (size_t)up_w*up_h*4);
         upload_src = nullptr; // signal GPU path
     } else {
         {
@@ -327,6 +352,23 @@ static bool run_one_case(const BenchCase& bc, const std::vector<unsigned char>& 
             ncnn::VkMat in_gpu_pre;
             ncnn::VkMat rgba_gpu;
             if (use_gpu_preproc) {
+                if (use_gpu_pre_down2) {
+                    // Stufe 2: full-res upload, down2 shader halves to infer dims.
+                    rgba_gpu.create(case_w, case_h, (size_t)4, 1, blob);
+                    cmd.record_clone(input_rgba_cpu, rgba_gpu, opt);
+                    in_gpu_pre.create(width, height, 3, (size_t)2, 1, blob);
+                    std::vector<ncnn::VkMat> binds(2);
+                    binds[0] = rgba_gpu;
+                    binds[1] = in_gpu_pre;
+                    std::vector<ncnn::vk_constant_type> consts(5);
+                    consts[0].i = case_w;
+                    consts[1].i = case_h;
+                    consts[2].i = width;
+                    consts[3].i = height;
+                    consts[4].i = (int)in_gpu_pre.cstep;
+                    ncnn::VkMat disp; disp.w = width; disp.h = height; disp.c = 1;
+                    cmd.record_pipeline(ctx.preproc_down2, binds, consts, disp);
+                } else {
                 rgba_gpu.create(width, height, (size_t)4, 1, blob);
                 cmd.record_clone(input_rgba_cpu, rgba_gpu, opt);
                 in_gpu_pre.create(width, height, 3, (size_t)2, 1, blob);
@@ -340,6 +382,7 @@ static bool run_one_case(const BenchCase& bc, const std::vector<unsigned char>& 
                     consts[2].i = (int)in_gpu_pre.cstep; // real padded cstep, same as the host
                     ncnn::VkMat disp; disp.w = width; disp.h = height; disp.c = 1;
                     cmd.record_pipeline(ctx.preproc, binds, consts, disp);
+                }
                 }
                 in_gpu = in_gpu_pre;
             } else {
@@ -554,6 +597,7 @@ int main(int argc, char** argv) {
 #if NCNN_VULKAN
             ncnn::Pipeline* postproc = nullptr;
             ncnn::Pipeline* preproc = nullptr;
+            ncnn::Pipeline* preproc_down2 = nullptr; // Stufe 2 (Scope: RunContext)
             if (use_fp16) {
                 postproc = new ncnn::Pipeline(device);
                 postproc->set_optimal_local_size_xyz(32, 32, 1);
@@ -579,13 +623,27 @@ int main(int argc, char** argv) {
                 } else {
                     fprintf(stderr, "[bench] GPU preproc ready\n");
                 }
+                // Stufe 2: down2 preproc (div2 box-downscale folded into preproc).
+                preproc_down2 = new ncnn::Pipeline(device);
+                preproc_down2->set_optimal_local_size_xyz(32, 32, 1);
+                std::vector<ncnn::vk_specialization_type> down2_specs(1);
+                down2_specs[0].i = 0;
+                if (preproc_down2->create(realesrgan_spike_preproc_down2_comp_data,
+                                     sizeof(realesrgan_spike_preproc_down2_comp_data), down2_specs) != 0) {
+                    fprintf(stderr, "[bench] failed to create preproc_down2 pipeline, div2 stays on CPU pre\n");
+                    delete preproc_down2;
+                    preproc_down2 = nullptr;
+                } else {
+                    fprintf(stderr, "[bench] GPU preproc_down2 ready\n");
+                }
             }
 #else
             ncnn::Pipeline* postproc = nullptr;
             ncnn::Pipeline* preproc = nullptr;
+            ncnn::Pipeline* preproc_down2 = nullptr;
 #endif
 
-            RunContext ctx{net, device, postproc, preproc, use_fp16, opts.use_int8};
+            RunContext ctx{net, device, postproc, preproc, preproc_down2, use_fp16, opts.use_int8};
 
             auto bench_start = std::chrono::steady_clock::now();
             std::vector<CaseResult> results;
@@ -658,7 +716,8 @@ int main(int argc, char** argv) {
             json << "    \"gpuPostproc\": " << (postproc ? "true" : "false") << ",\n";
             json << "    \"compareCpuFallback\": " << (opts.compare_cpu_fallback ? "true" : "false") << ",\n";
             json << "    \"inferAtTarget\": " << (opts.infer_at_target ? "true" : "false") << ",\n";
-            json << "    \"inferDiv\": " << opts.infer_div << "\n";
+            json << "    \"inferDiv\": " << opts.infer_div << ",\n";
+            json << "    \"gpuPreDown2\": " << (preproc_down2 ? "true" : "false") << "\n";
             json << "  },\n";
             json << "  \"elapsedSeconds\": " << std::fixed << std::setprecision(6) << elapsed << ",\n";
             json << "  \"cases\": [\n";
@@ -739,6 +798,7 @@ int main(int argc, char** argv) {
 #if NCNN_VULKAN
             delete postproc;
             delete preproc;
+            delete preproc_down2;
 #endif
         }
     }

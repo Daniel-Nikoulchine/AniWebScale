@@ -570,9 +570,10 @@ private:
                                  gpu_pre_down2, full_w, full_h);
         }
         // Tile in input pixels. PAD covers model prepadding (10) + conv margin.
-        // Hebel 1.2: TILE 640 (was 512) — fewer submits and fewer PAD-halo
-        // recomputes per frame on VRAM that fits it easily; PAD is a model
-        // property and stays 32.
+        // Stufe 4 (Overlap-Tuning, Tile-Kurve 1080p-full, host-latency-bench):
+        // n=5: 480:399ms, 512:396ms, 576:395ms, 640:398ms, 960:470ms;
+        // n=10: 576:396.0ms vs 640:396.9ms (Rauschen). 480-640 flach,
+        // 960 +18% (Working-Set). 640 bleibt; PAD=32 ist Model-Eigenschaft.
         const int TILE = 640, PAD = 32, scale = 4;
         // Tiling DESIGN NOTE — this host tiles with a recompute-halo scheme
         // (PAD-halo around each tile, core-region copy, NO feathering), while

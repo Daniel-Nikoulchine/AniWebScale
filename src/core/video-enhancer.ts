@@ -240,7 +240,7 @@ export class VideoEnhancer {
       if (this.destroyed) return;
       this.currentSettings = settings;
       this.applyFullscreenMarker(
-        isProcessingEnabled(settings.mode, settings.frameGenerationEnabled),
+        VideoEnhancer.shouldMarkAutoFullscreen(settings),
       );
       this.scheduleFullscreenReconcile(0);
     }).catch(error => {
@@ -727,7 +727,7 @@ export class VideoEnhancer {
     // the ephemeral override so it can never fight the stored setting.
     if (newSettings.mode === 'REALESRGAN') this.autoCap?.reset(newSettings.realesrganCapHeight, performance.now());
     else this.autoCap = null;
-    this.applyFullscreenMarker(processingEnabled);
+    this.applyFullscreenMarker(VideoEnhancer.shouldMarkAutoFullscreen(newSettings));
 
     if (!processingEnabled) {
       this.automaticSession = false;
@@ -783,8 +783,7 @@ export class VideoEnhancer {
           this.currentSettings = previousSettings;
           this.currentModeId = previousModeId;
           this.applyFullscreenMarker(
-            previousSettings !== null
-              && isProcessingEnabled(previousSettings.mode, previousSettings.frameGenerationEnabled),
+            VideoEnhancer.shouldMarkAutoFullscreen(previousSettings),
           );
           throw error;
         }
@@ -855,8 +854,7 @@ export class VideoEnhancer {
       this.currentSettings = previousSettings;
       this.currentModeId = previousModeId;
       this.applyFullscreenMarker(
-        previousSettings !== null
-          && isProcessingEnabled(previousSettings.mode, previousSettings.frameGenerationEnabled),
+        VideoEnhancer.shouldMarkAutoFullscreen(previousSettings),
       );
       if (this.renderer === renderer && renderer.isDestroyed()) await this.stopEnhancement({ stopNative: false });
       throw error;
@@ -914,8 +912,7 @@ export class VideoEnhancer {
     this.video.dataset.anime4kVideoId = this.videoId;
     this.video.addEventListener('encrypted', this.encryptedHandler);
     this.applyFullscreenMarker(
-      this.currentSettings !== null
-        && isProcessingEnabled(this.currentSettings.mode, this.currentSettings.frameGenerationEnabled),
+      VideoEnhancer.shouldMarkAutoFullscreen(this.currentSettings),
     );
     this.targetResizeObserver.disconnect();
     this.targetResizeObserver.observe(this.video);
@@ -1061,6 +1058,19 @@ export class VideoEnhancer {
     else this.video.removeAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR);
   }
 
+  /**
+   * The auto-fullscreen marker drives the page-bridge redirect
+   * (video.requestFullscreen -> player surface), so it requires opted-in
+   * automation, not just an enabled processing mode. A manual
+   * (popup-started) session with autoFullscreenEnabled=false must not
+   * redirect site fullscreen requests.
+   */
+  private static shouldMarkAutoFullscreen(settings: Anime4KWebExtSettings | null): boolean {
+    return settings !== null
+      && settings.autoFullscreenEnabled
+      && isProcessingEnabled(settings.mode, settings.frameGenerationEnabled);
+  }
+
   private scheduleFullscreenReconcile(delay = 90): void {
     if (this.destroyed) return;
     const revision = ++this.fullscreenRevision;
@@ -1083,7 +1093,7 @@ export class VideoEnhancer {
     if (this.destroyed || revision !== this.fullscreenRevision) return;
     this.currentSettings = settings;
     const processingEnabled = isProcessingEnabled(settings.mode, settings.frameGenerationEnabled);
-    this.applyFullscreenMarker(processingEnabled);
+    this.applyFullscreenMarker(VideoEnhancer.shouldMarkAutoFullscreen(settings));
     const preferredFullscreenVideo = this.isPreferredFullscreenVideo();
     const explicitContext = fullscreenContext.hasContext(this.video);
     const playerFullscreenSignal = hasPlayerFullscreenSignal(this.video);

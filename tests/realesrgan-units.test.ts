@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RealEsrganBufferPool } from '../src/shared/realesrgan-buffer-pool';
 import { adaptiveRealEsrganTiling, defaultSingleTileMaxHeight, planRealEsrganTiles } from '../src/shared/realesrgan-tile-geometry.js';
-import { planReadback, decodeFloat16, unpackReadback, copyMappedRange } from '../src/shared/realesrgan-readback';
+import { planReadback, decodeFloat16, unpackReadback, unpackReadbackToPlanarRgb, copyMappedRange } from '../src/shared/realesrgan-readback';
 import { RealEsrganFrameScheduler } from '../src/shared/realesrgan-pacing';
 import { RealEsrganFrameJobRunner } from '../src/core/realesrgan-frame-job';
 import { buildComposeBuffers } from '../src/core/realesrgan-compose';
@@ -51,6 +51,20 @@ describe('RealEsrganBufferPool', () => {
     expect(a.byteLength).toBe(100);
     expect(b.byteLength).toBe(200);
     expect(a).not.toBe(b);
+  });
+
+  it('ignores a double release instead of aliasing one buffer twice', () => {
+    const pool = new RealEsrganBufferPool(2);
+    const a = pool.acquire(1024);
+    pool.release(a);
+    pool.release(a);
+    const first = pool.acquire(1024);
+    const second = pool.acquire(1024);
+    expect(first).toBe(a);
+    // The duplicate release must not have pooled the same buffer twice:
+    // the second acquire allocates fresh instead of aliasing `a`.
+    expect(second).not.toBe(a);
+    expect(second.byteLength).toBe(1024);
   });
 });
 
@@ -185,6 +199,44 @@ describe('planReadback / decodeFloat16 / unpackReadback', () => {
   it('rejects a wrongly sized out buffer', () => {
     const padded = new Uint8Array(planReadback(2, 2, 'rgba8unorm').byteLength);
     expect(() => unpackReadback(padded, 2, 2, 'rgba8unorm', new Uint8Array(15))).toThrow();
+  });
+
+  it('rejects a truncated padded buffer instead of unpacking zeros', () => {
+    // A short readback must fail loudly on every path: silent zeros would
+    // feed black rows into the model (rgba8 row loop, Uint16 table path)
+    // while only the DataView path used to throw.
+    const plan8 = planReadback(2, 2, 'rgba8unorm');
+    const short8 = new Uint8Array(plan8.byteLength - 1);
+    expect(() => unpackReadback(short8, 2, 2, 'rgba8unorm')).toThrow();
+    expect(() => unpackReadbackToPlanarRgb(short8, 2, 2, 'rgba8unorm')).toThrow();
+    const plan16 = planReadback(2, 2, 'rgba16float');
+    const short16 = new Uint8Array(plan16.byteLength - 2);
+    expect(() => unpackReadback(short16, 2, 2, 'rgba16float')).toThrow();
+    expect(() => unpackReadbackToPlanarRgb(short16, 2, 2, 'rgba16float')).toThrow();
+  });
+
+  it('decodes f16 readbacks through the lookup tables', () => {
+    const width = 2, height = 1;
+    const { bytesPerRow, byteLength } = planReadback(width, height, 'rgba16float');
+    expect(bytesPerRow).toBe(256);
+    const padded = new Uint8Array(byteLength);
+    const view = new DataView(padded.buffer);
+    // R = 1.0, G = 0.5, B = 0.0, A = 1.0 per pixel (0x3c00/0x3800/0x0000).
+    for (let col = 0; col < width; col += 1) {
+      const base = col * 8;
+      view.setUint16(base, 0x3c00, true);
+      view.setUint16(base + 2, 0x3800, true);
+      view.setUint16(base + 4, 0x0000, true);
+      view.setUint16(base + 6, 0x3c00, true);
+    }
+    expect(unpackReadback(padded, width, height, 'rgba16float')).toEqual(
+      new Uint8Array([255, 128, 0, 255, 255, 128, 0, 255]),
+    );
+    const planar = unpackReadbackToPlanarRgb(padded, width, height, 'rgba16float');
+    expect(planar.channels).toBe(3);
+    // Channel-major; the expectation goes through Float32Array so the
+    // comparison is f32-exact (a bare 128/255 literal is float64).
+    expect([...planar.data]).toEqual([...new Float32Array([1, 1, 128 / 255, 128 / 255, 0, 0])]);
   });
 
   it('copyMappedRange copies the fast path byte-identically', () => {

@@ -115,6 +115,7 @@ async function migrateV1ToV2(): Promise<void> {
       'autoFullscreenEnabled',
       'frameGenerationEnabled',
       'realesrganCapHeight',
+      'realesrganPrecision',
       'selectedModeId',
       'theme',
       '_configVersion',
@@ -172,7 +173,7 @@ async function migrateV1ToV2(): Promise<void> {
       'enableCrossOriginFix',
       'enhancementModes',
     ]),
-    chrome.storage.local.remove(['performanceTier', 'gpuBenchmarkResult', '_benchmarkInProgress']),
+    chrome.storage.local.remove(['performanceTier', 'gpuBenchmarkResult', '_benchmarkInProgress', 'selectedModeId']),
   ]);
 }
 

@@ -50,6 +50,17 @@ interface WorkerExports {
   rewriteF16Bitcast: (code: string) => string;
   handleInit: (message: WorkerInitMessage) => Promise<void>;
   handleInfer: (message: WorkerInferMessage) => Promise<void>;
+  getSession: (
+    modelUrl: string,
+    modelUrlFp16: string | null,
+    inputBatch: number,
+    inputHeight: number,
+    inputWidth: number,
+    outputHeight: number,
+    outputWidth: number,
+    wantGpuBuffer?: boolean,
+  ) => Promise<{ session: unknown; url: string }>;
+  purgeModelSessions: (modelUrl: string) => void;
   resetWorkerStateForTests: () => void;
   __setOrtLoaderForTests: (loader: ((url: string) => Promise<unknown>) | null) => void;
   __setPixelsLoaderForTests: (loader: ((url: string) => Promise<unknown>) | null) => void;
@@ -73,7 +84,9 @@ type Reply = {
   height?: number;
   data?: Uint8Array;
   path?: string;
+  fp16?: boolean;
   error?: string;
+  code?: string;
 };
 
 interface OrtStub {
@@ -332,6 +345,30 @@ describe('downscaleRgba8Box', () => {
       expect(out[i * 4 + 3]).toBe(255);
     }
   });
+
+  it('forces opaque alpha like the native host box pass', () => {
+    // Non-opaque input (never occurs in production — every writer sets
+    // alpha 255): RGB still averages, alpha is forced to 255 on both the
+    // integer and the float lane so worker and native agree by
+    // construction instead of by input luck.
+    const src = new Uint8Array(4 * 4 * 4);
+    for (let i = 0; i < src.length; i += 4) {
+      src[i] = 100; src[i + 1] = 150; src[i + 2] = 200; src[i + 3] = 0;
+    }
+    for (const [sw, sh, dw, dh] of [[4, 4, 2, 2], [4, 4, 1, 1], [8, 8, 8, 8]] as const) {
+      const frame = new Uint8Array(sw * sh * 4);
+      for (let i = 0; i < frame.length; i += 4) {
+        frame[i] = 100; frame[i + 1] = 150; frame[i + 2] = 200; frame[i + 3] = 0;
+      }
+      const out = worker.downscaleRgba8Box(frame, sw, sh, dw, dh);
+      for (let i = 0; i < out.length; i += 4) {
+        expect(out[i]).toBe(100);
+        expect(out[i + 1]).toBe(150);
+        expect(out[i + 2]).toBe(200);
+        expect(out[i + 3]).toBe(255);
+      }
+    }
+  });
 });
 
 describe('worker protocol', () => {
@@ -408,6 +445,8 @@ describe('worker protocol', () => {
     expect(replies[1].height).toBe(4);
     const rgba = replies[1].data!;
     expect(rgba.length).toBe(4 * 4 * 4);
+    // The downscale suffix preserves the serving lane (single-tile here).
+    expect(replies[1].path).toBe('cpu-single-gpu-downscaled');
     // Uniform 8x8 white downscaled stays white.
     for (let i = 0; i < rgba.length; i += 4) {
       expect(rgba[i]).toBe(255);
@@ -575,6 +614,153 @@ describe('worker protocol', () => {
     expect(createCount).toBeGreaterThan(1);
     expect(runCalls).toBe(2);
   });
+
+  it('reports fp32 when the shape-pinned rebuild resolves away from fp16', async () => {
+    const replies = getReplies();
+    let runs = 0;
+    const session = {
+      inputNames: ['input'],
+      outputNames: ['output'],
+      async run(feeds: { input: { dims: number[] } }) {
+        runs += 1;
+        if (runs === 1) throw new Error('Shape mismatch attempting to re-use buffer');
+        const [b, , h, w] = feeds.input.dims;
+        const out = new Float32Array(b * 3 * (4 * h) * (4 * w)).fill(0.5);
+        return { output: { type: 'float32', dims: [b, 3, 4 * h, 4 * w], size: out.length, data: out } };
+      },
+    };
+    let creates = 0;
+    const ort = {
+      Tensor: class {
+        type: string;
+        data: Float32Array;
+        dims: number[];
+        constructor(type: string, data: Float32Array, dims: number[]) {
+          this.type = type;
+          this.data = data;
+          this.dims = dims;
+        }
+      },
+      env: { wasm: {}, webgpu: {} },
+      InferenceSession: {
+        create: async (url: string) => {
+          creates += 1;
+          // fp16 serves the first attempt, then flakes: the rebuild must
+          // fall through to fp32 and the reply must say so.
+          if (url === 'fp16-test.onnx' && creates > 1) throw new Error('flaky fp16 device loss');
+          return session;
+        },
+      },
+    };
+    await initWorker(ort as unknown as OrtStub);
+    const frame = new Float32Array(3 * 2 * 2).fill(0.5);
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 41,
+      modelUrl: 'fp32-test.onnx',
+      modelUrlFp16: 'fp16-test.onnx',
+      width: 2, height: 2, data: frame,
+    }));
+    const reply = replies[replies.length - 1];
+    expect(reply.ok).toBe(true);
+    // Stale probe.url (fp16) would mislabel this frame fp16.
+    expect(reply.fp16).toBe(false);
+  });
+});
+
+describe('session cache management (purge boundary, LRU cap)', () => {
+  beforeEach(() => {
+    worker.resetWorkerStateForTests();
+    getReplies().length = 0;
+  });
+
+  async function sessionFor(ort: OrtStub, width: number, modelUrl = 'https://cdn/m/x4.onnx') {
+    worker.__setOrtLoaderForTests(async () => ort);
+    await worker.handleInit({ type: 'init', ortUrl: 'ort.mjs', wasmDir: 'ort/' });
+    return worker.getSession(modelUrl, null, 1, 64, width, 256, width * 4, false);
+  }
+
+  it('purge keeps models whose URL merely extends the purged one', async () => {
+    const ort = makeFakeOrt();
+    await sessionFor(ort, 64, 'https://cdn/m/x4.onnx');
+    await sessionFor(ort, 64, 'https://cdn/m/x4.onnx2');
+    expect(ort.__createCalls()).toBe(2);
+
+    worker.purgeModelSessions('https://cdn/m/x4.onnx');
+
+    // The x4.onnx2 entry survives: same dims hit the cache, no rebuild.
+    await sessionFor(ort, 64, 'https://cdn/m/x4.onnx2');
+    expect(ort.__createCalls()).toBe(2);
+    // The purged entry rebuilds on next use.
+    await sessionFor(ort, 64, 'https://cdn/m/x4.onnx');
+    expect(ort.__createCalls()).toBe(3);
+  });
+
+  it('evicts the stalest session past the cap and keeps hot ones', async () => {
+    const ort = makeFakeOrt();
+    for (let width = 64; width < 64 + 17; width += 1) {
+      await sessionFor(ort, width);
+    }
+    expect(ort.__createCalls()).toBe(17);
+
+    // Width 64 was inserted first: evicted, so it rebuilds.
+    await sessionFor(ort, 64);
+    expect(ort.__createCalls()).toBe(18);
+    // The newest entry survived eviction: cache hit, no rebuild.
+    await sessionFor(ort, 64 + 16);
+    expect(ort.__createCalls()).toBe(18);
+  });
+
+  it('adopts a late session creation for the next frame', async () => {
+    const baseOrt = makeFakeOrt();
+    let creates = 0;
+    let releaseCreate!: (session: SessionStub) => void;
+    const ort: OrtStub = {
+      ...baseOrt,
+      InferenceSession: {
+        create: () => {
+          creates += 1;
+          return new Promise<SessionStub>(resolve => {
+            releaseCreate = resolve;
+          });
+        },
+      },
+    };
+    await initWorker(ort);
+    worker.__setSessionCreateTimeoutForTests(10);
+
+    // First call times out while creation is still pending.
+    await expect(sessionFor(ort, 64)).rejects.toThrow('timed out');
+    expect(creates).toBe(1);
+    // The late creation lands afterwards and is adopted for the key, so the
+    // next frame is served from it without a second creation.
+    releaseCreate({ inputNames: ['input'], outputNames: ['output'], run: async () => ({}) });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await sessionFor(ort, 64);
+    expect(creates).toBe(1);
+  });
+
+  it('disables fp16 worker-wide after a create-time shader failure', async () => {
+    const created: string[] = [];
+    const baseOrt = makeFakeOrt();
+    const ort: OrtStub = {
+      ...baseOrt,
+      InferenceSession: {
+        create: async (url: string) => {
+          created.push(url);
+          if (url === 'fp16.onnx') throw new Error('failed to create compute pipeline: Invalid ShaderModule');
+          return { inputNames: ['input'], outputNames: ['output'], run: async () => ({}) } as unknown as SessionStub;
+        },
+      },
+    };
+    worker.__setOrtLoaderForTests(async () => ort);
+    await worker.handleInit({ type: 'init', ortUrl: 'ort.mjs', wasmDir: 'ort/' });
+
+    await worker.getSession('fp32.onnx', 'fp16.onnx', 1, 64, 64, 256, 256, false);
+    expect(created).toEqual(['fp16.onnx', 'fp32.onnx']);
+    // A new shape must not pay another doomed fp16 create.
+    await worker.getSession('fp32.onnx', 'fp16.onnx', 1, 32, 32, 128, 128, false);
+    expect(created).toEqual(['fp16.onnx', 'fp32.onnx', 'fp32.onnx']);
+  });
 });
 
 describe('batched tile inference (Hebel 2.2)', () => {
@@ -594,6 +780,54 @@ describe('batched tile inference (Hebel 2.2)', () => {
     for (let i = 0; i < frame.length; i += 1) frame[i] = (i % 251) / 251;
     return frame;
   }
+
+  it('keeps batching armed after a single transient batch timeout', async () => {
+    const replies = getReplies();
+    let runs = 0;
+    const runDims: number[][] = [];
+    const session = {
+      inputNames: ['input'],
+      outputNames: ['output'],
+      async run(feeds: { input: { data: Float32Array; dims: number[] } }) {
+        runs += 1;
+        runDims.push([...feeds.input.dims]);
+        if (runs === 1) {
+          const timeout = new Error('simulated batch slowness');
+          (timeout as unknown as Record<string, unknown>).replyCode = 'worker-timeout';
+          throw timeout;
+        }
+        const [b, , h, w] = feeds.input.dims;
+        const out = new Float32Array(b * 3 * (4 * h) * (4 * w)).fill(0.5);
+        return { output: { type: 'float32', dims: [b, 3, 4 * h, 4 * w], size: out.length, data: out } };
+      },
+    };
+    const baseOrt = makeFakeOrt();
+    const ort: OrtStub = {
+      ...baseOrt,
+      Tensor: baseOrt.Tensor,
+      env: baseOrt.env,
+      InferenceSession: { create: async () => session as unknown as SessionStub },
+      __createCalls: baseOrt.__createCalls,
+      __created: baseOrt.__created,
+      __runCalls: baseOrt.__runCalls,
+      __runDims: baseOrt.__runDims,
+    };
+    await initWorker(ort);
+
+    // First frame: batched attempt times out once, served sequentially —
+    // batching must stay armed for the next frame.
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 50, modelUrl: 'fp32.onnx', modelUrlFp16: null, width: W, height: H, data: tiledFrame(),
+    }));
+    expect(replies[replies.length - 1].ok).toBe(true);
+    // Second frame: still batched (batch dim 2 on the first run).
+    await worker.handleInfer(buildWorkerInferMessage({
+      id: 51, modelUrl: 'fp32.onnx', modelUrlFp16: null, width: W, height: H, data: tiledFrame(),
+    }));
+    expect(replies[replies.length - 1].ok).toBe(true);
+    const secondFrameFirstRun = runDims[3];
+    expect(secondFrameFirstRun?.[0]).toBe(2);
+  });
 
   function expectedTiles() {
     return worker.planUniformTiles(W, H, 512, 24, gate);
@@ -676,6 +910,9 @@ describe('batched tile inference (Hebel 2.2)', () => {
     expect(replies[2].ok).toBe(true);
     expect(ort.__runCalls()).toBe(5);
     expect(ort.__runDims().slice(3)).toEqual([[1, 3, 512, 4], [1, 3, 512, 4]]);
+    // Sequential lanes report distinctly from the batched lane.
+    expect(replies[1].path).toBe('cpu-tiles-sequential-gpu');
+    expect(replies[2].path).toBe('cpu-tiles-sequential-gpu');
   });
 });
 
@@ -684,6 +921,97 @@ describe('wasm-simd compose (Hebel E5)', () => {
     worker.resetWorkerStateForTests();
     getReplies().length = 0;
     worker.__setPixelsModuleForTests(null);
+  });
+
+  it('shares one wasm load across concurrent first frames', async () => {
+    const replies = getReplies();
+    const ort = makeFakeOrt();
+    worker.__setOrtLoaderForTests(async () => ort);
+    await worker.handleInit({ type: 'init', ortUrl: 'ort.mjs', wasmDir: 'ort/', pixelsUrl: 'pixels.wasm' });
+    let loads = 0;
+    let releaseLoad!: (mod: unknown) => void;
+    worker.__setPixelsLoaderForTests(() => {
+      loads += 1;
+      return new Promise<unknown>(resolve => { releaseLoad = resolve; });
+    });
+    const frame = new Float32Array(3 * 2 * 2).fill(0.5);
+    const first = worker.handleInfer(buildWorkerInferMessage({
+      id: 60, modelUrl: 'fp32.onnx', modelUrlFp16: null, width: 2, height: 2, data: frame,
+    }));
+    const second = worker.handleInfer(buildWorkerInferMessage({
+      id: 61, modelUrl: 'fp32.onnx', modelUrlFp16: null, width: 2, height: 2, data: frame,
+    }));
+    // Both frames pile onto the same in-flight load (which then fails
+    // export validation and falls back to JS for both). Flush microtasks
+    // first: the frames reach the loader through the session/run chain.
+    for (let i = 0; i < 1000 && loads === 0; i += 1) await Promise.resolve();
+    expect(loads).toBe(1);
+    releaseLoad({});
+    await Promise.all([first, second]);
+    expect(loads).toBe(1);
+    expect(replies.filter(r => r.type === 'infer' && r.ok)).toHaveLength(2);
+  });
+
+  it('serves concurrent first frames from the shared load once it succeeds', async () => {
+    const replies = getReplies();
+    const ort = makeFakeOrt();
+    worker.__setOrtLoaderForTests(async () => ort);
+    await worker.handleInit({ type: 'init', ortUrl: 'ort.mjs', wasmDir: 'ort/', pixelsUrl: 'pixels.wasm' });
+    const pixels = makeFakePixels();
+    // Single-tile 8x8 compose output for the 2x2 frame's 4x result.
+    pixels.setOutput(new Uint8Array(8 * 8 * 4).fill(0xab));
+    let loads = 0;
+    let releaseLoad!: (mod: unknown) => void;
+    worker.__setPixelsLoaderForTests(() => {
+      loads += 1;
+      return new Promise<unknown>(resolve => { releaseLoad = resolve; });
+    });
+    const frame = new Float32Array(3 * 2 * 2).fill(0.5);
+    const first = worker.handleInfer(buildWorkerInferMessage({
+      id: 62, modelUrl: 'fp32.onnx', modelUrlFp16: null, width: 2, height: 2, data: frame,
+    }));
+    const second = worker.handleInfer(buildWorkerInferMessage({
+      id: 63, modelUrl: 'fp32.onnx', modelUrlFp16: null, width: 2, height: 2, data: frame,
+    }));
+    for (let i = 0; i < 1000 && loads === 0; i += 1) await Promise.resolve();
+    releaseLoad(pixels);
+    await Promise.all([first, second]);
+    expect(loads).toBe(1);
+    // Old code served the second frame from JS (it saw the attempted flag
+    // and never awaited the load); shared loading serves wasm to both.
+    expect(replies.filter(r => r.type === 'infer').map(r => r.path))
+      .toEqual(['cpu-single-wasm', 'cpu-single-wasm']);
+  });
+
+  it('retries the wasm load after the cooldown, not on every frame', async () => {
+    vi.useFakeTimers();
+    try {
+      const replies = getReplies();
+      const ort = makeFakeOrt();
+      worker.__setOrtLoaderForTests(async () => ort);
+      await worker.handleInit({ type: 'init', ortUrl: 'ort.mjs', wasmDir: 'ort/', pixelsUrl: 'pixels.wasm' });
+      let loads = 0;
+      worker.__setPixelsLoaderForTests(() => {
+        loads += 1;
+        return Promise.reject(new Error('transient fetch hiccup'));
+      });
+      const frame = new Float32Array(3 * 2 * 2).fill(0.5);
+      const infer = (id: number) => worker.handleInfer(buildWorkerInferMessage({
+        id, modelUrl: 'fp32.onnx', modelUrlFp16: null, width: 2, height: 2, data: frame,
+      }));
+      await infer(62);
+      expect(loads).toBe(1);
+      // Inside the cooldown: no refetch, JS serves.
+      await infer(63);
+      expect(loads).toBe(1);
+      // Past the cooldown: one retry, then quiet again.
+      await vi.advanceTimersByTimeAsync(61_000);
+      await infer(64);
+      expect(loads).toBe(2);
+      expect(replies.filter(r => r.type === 'infer' && r.ok)).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /** Fake pixels module: serves canned bytes from its own memory. */

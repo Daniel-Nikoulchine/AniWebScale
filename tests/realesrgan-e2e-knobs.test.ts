@@ -49,13 +49,16 @@ describe('knob registry shape', () => {
 });
 
 describe('knob roundtrips (legacy rules pinned)', () => {
-  it('backend: native stays native, anything else becomes webgpu', () => {
+  it('backend: native/webgpu round-trip, garbage is rejected', () => {
     expect(roundtrip('native', 'backend')).toEqual({
       query: 'native', bridge: 'native', storage: { backend: 'native' },
     });
     expect(roundtrip('webgpu', 'backend')).toEqual({
       query: 'webgpu', bridge: 'webgpu', storage: { backend: 'webgpu' },
     });
+    // A typo must not silently run the webgpu leg: unknown values drop
+    // out like every other knob's invalid input (capHeight/precision).
+    expect(roundtrip('nativ', 'backend').bridge).toBeUndefined();
     expect(roundtrip(undefined, 'backend').query).toBeUndefined();
   });
 

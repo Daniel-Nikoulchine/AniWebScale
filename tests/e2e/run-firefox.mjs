@@ -96,8 +96,18 @@ try {
         (c.class || '').toLowerCase().includes('firefox') ||
         (c.initialClass || '').toLowerCase().includes('firefox') ||
         (c.class || '').toLowerCase().includes('zen'));
-      // Pick the newest Firefox window (largest address = most recent).
-      const target = firefoxClients.sort((a, b) => a.address.localeCompare(b.address)).at(-1);
+      // Prefer the window owned by this runner's Firefox PID: matching by
+      // launch recency alone can grab the user's own browser window when one
+      // is open during a headed run.
+      const runnerPid = runner.extensionRunners?.find(
+        candidate => candidate.getName?.() === 'Firefox Desktop',
+      )?.runningInfo?.firefox?.pid;
+      const owned = Number.isInteger(runnerPid)
+        ? firefoxClients.filter(c => c.pid === runnerPid)
+        : [];
+      // Pick the newest window (largest address = most recent).
+      const pool = owned.length ? owned : firefoxClients;
+      const target = pool.sort((a, b) => a.address.localeCompare(b.address)).at(-1);
       if (target) {
         await execFileAsync('hyprctl', ['dispatch', 'movetoworkspace', `${TARGET_WORKSPACE},address:${target.address}`]);
         console.log(`moved Firefox E2E window ${target.address} to workspace ${TARGET_WORKSPACE}`);

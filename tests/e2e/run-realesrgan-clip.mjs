@@ -372,8 +372,8 @@ const workerSpawnFailed = /worker spawn failed|worker init handshake timed out/.
 const gpuCompose = workerPaths.some(p => p.includes('gpu-compose'));
 // 'cpu-tiles-batched-gpu' (the default multi-tile lane) does not contain the
 // 'cpu-tiles-gpu' substring — check it explicitly or a healthy worker-only
-// run fails the gate below.
-const cpuTilesGpu = workerPaths.some(p => p.includes('cpu-tiles-gpu') || p.includes('cpu-tiles-batched-gpu'));
+// run fails the gate below. Same for the post-downgrade sequential lane.
+const cpuTilesGpu = workerPaths.some(p => p.includes('cpu-tiles-gpu') || p.includes('cpu-tiles-batched-gpu') || p.includes('cpu-tiles-sequential-gpu'));
 const cpuSingleGpu = workerPaths.some(p => p.includes('cpu-single-gpu'));
 const wasmCompose = workerPaths.some(p => p.includes('-wasm'));
 const mainThreadTookOver = /main-thread session takes over/.test(lines);

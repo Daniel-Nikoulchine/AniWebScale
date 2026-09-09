@@ -112,6 +112,21 @@ describe('RealEsrganWorkerClient', () => {
     client2!.dispose();
   });
 
+  it('settles the frame and keeps pumping when onFramePath throws', async () => {
+    const handle = fakeWorker({
+      respond: message => (message.type === 'init' ? { type: 'init', ok: true } : okFrameReply(message)),
+    });
+    const client = await readyClient(handle);
+    client!.onFramePath = () => { throw new Error('hook boom'); };
+    // The diagnostics hook must not wedge the frame promise (previously it
+    // fired before resolve/pump, hanging this await and the queue behind it).
+    const first = await client!.runFrame('m.onnx', null, 2, 2, new Float32Array(12));
+    expect(first).toMatchObject({ width: 2, height: 2 });
+    const second = await client!.runFrame('m.onnx', null, 2, 2, new Float32Array(12));
+    expect(second).toMatchObject({ width: 2, height: 2 });
+    client!.dispose();
+  });
+
   it('resolves null when the worker script cannot be loaded', async () => {
     const client = await RealEsrganWorkerClient.create({
       loadScript: async () => { throw new Error('404'); },

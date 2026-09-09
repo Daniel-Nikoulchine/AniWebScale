@@ -15,6 +15,17 @@ export interface PlanarRgb {
   channels: 3;
 }
 
+/** Byte -> [0,1] float with the exact `/ 255` rounding of the converters. */
+let byteToF32Table: Float32Array | null = null;
+function ensureByteToF32(): Float32Array {
+  if (!byteToF32Table) {
+    const table = new Float32Array(256);
+    for (let i = 0; i < 256; i += 1) table[i] = i / 255;
+    byteToF32Table = table;
+  }
+  return byteToF32Table;
+}
+
 export function rgbaToPlanarRgb(rgba: Uint8Array, width: number, height: number): PlanarRgb {
   if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
     throw new Error(`rgbaToPlanarRgb: invalid dimensions ${width}x${height}.`);
@@ -27,11 +38,12 @@ export function rgbaToPlanarRgb(rgba: Uint8Array, width: number, height: number)
   const r = data.subarray(0, pixels);
   const g = data.subarray(pixels, 2 * pixels);
   const b = data.subarray(2 * pixels, 3 * pixels);
+  const lut = ensureByteToF32();
   for (let i = 0; i < pixels; i += 1) {
     const o = i * 4;
-    r[i] = rgba[o] / 255;
-    g[i] = rgba[o + 1] / 255;
-    b[i] = rgba[o + 2] / 255;
+    r[i] = lut[rgba[o]!]!;
+    g[i] = lut[rgba[o + 1]!]!;
+    b[i] = lut[rgba[o + 2]!]!;
   }
   return { data, channels: 3 };
 }
@@ -50,9 +62,20 @@ export function rgbPlanarToRgba(planar: Float32Array, width: number, height: num
   const b = planar.subarray(2 * pixels, 3 * pixels);
   for (let i = 0; i < pixels; i += 1) {
     const o = i * 4;
-    out[o] = Math.round(Math.min(1, Math.max(0, r[i])) * 255);
-    out[o + 1] = Math.round(Math.min(1, Math.max(0, g[i])) * 255);
-    out[o + 2] = Math.round(Math.min(1, Math.max(0, b[i])) * 255);
+    // Branchless clamp + truncate-pack: bit-identical to
+    // Math.round(min(1, max(0, v)) * 255) for every float64 input (NaN and
+    // infinities included — NaN fails both comparisons and packs to 0, just
+    // like Math.round(NaN) stored into a Uint8Array), but without three
+    // Math-call round trips per channel.
+    const vr = r[i]!;
+    const vg = g[i]!;
+    const vb = b[i]!;
+    const cr = vr <= 0 ? 0 : vr >= 1 ? 1 : vr;
+    const cg = vg <= 0 ? 0 : vg >= 1 ? 1 : vg;
+    const cb = vb <= 0 ? 0 : vb >= 1 ? 1 : vb;
+    out[o] = (cr * 255 + 0.5) | 0;
+    out[o + 1] = (cg * 255 + 0.5) | 0;
+    out[o + 2] = (cb * 255 + 0.5) | 0;
     out[o + 3] = 255;
   }
   return out;
@@ -87,9 +110,12 @@ export function rgbPlanarToPaddedRgba(
       const b = planar.subarray(2 * pixels, 3 * pixels);
       for (let i = 0; i < pixels; i += 1) {
         const o = i * 4;
-        out[o] = Math.round(Math.min(1, Math.max(0, r[i])) * 255);
-        out[o + 1] = Math.round(Math.min(1, Math.max(0, g[i])) * 255);
-        out[o + 2] = Math.round(Math.min(1, Math.max(0, b[i])) * 255);
+        const vr = r[i]!;
+        const vg = g[i]!;
+        const vb = b[i]!;
+        out[o] = ((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0;
+        out[o + 1] = ((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0;
+        out[o + 2] = ((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0;
         out[o + 3] = 255;
       }
       return out;
@@ -109,9 +135,12 @@ export function rgbPlanarToPaddedRgba(
     for (let col = 0; col < width; col += 1) {
       const p = pixelBase + col;
       const o = rowBase + col * 4;
-      result[o] = Math.round(Math.min(1, Math.max(0, r[p])) * 255);
-      result[o + 1] = Math.round(Math.min(1, Math.max(0, g[p])) * 255);
-      result[o + 2] = Math.round(Math.min(1, Math.max(0, b[p])) * 255);
+      const vr = r[p]!;
+      const vg = g[p]!;
+      const vb = b[p]!;
+      result[o] = ((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0;
+      result[o + 1] = ((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0;
+      result[o + 2] = ((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0;
       result[o + 3] = 255;
     }
   }
@@ -180,11 +209,26 @@ export function extractTileRgb(
  * per-pixel `min(min(dx, dy) + 1, window)` exactly (integer arithmetic), so
  * the blended result is bit-identical while the inner loop does one Math.min.
  */
+const featherRampCache = new Map<number, Float32Array>();
+
 export function featherRamp(length: number, featherWindow: number): Float32Array {
+  // Numeric key (no per-call string alloc): window is always < 4096.
+  const key = length * 4096 + featherWindow;
+  const hit = featherRampCache.get(key);
+  if (hit) return hit;
   const ramp = new Float32Array(length);
   for (let i = 0; i < length; i += 1) {
     ramp[i] = Math.min(Math.min(i, length - 1 - i) + 1, featherWindow);
   }
+  // Geometries per pipeline are few (fixed inference dims + hysteretic
+  // crops); the cap only guards against pathological size churn. Shared
+  // read-only across frames/pipelines: callers must not mutate the
+  // returned array (compose only reads — verified at every call site).
+  // Deliberately NOT Object.freeze'd: freezing a TypedArray with elements
+  // throws a TypeError at runtime, so the guard itself would be the bug
+  // (proven by the compose suite when tried). The comment is the contract.
+  if (featherRampCache.size >= 64) featherRampCache.clear();
+  featherRampCache.set(key, ramp);
   return ramp;
 }
 

@@ -71,12 +71,35 @@ fn composer() -> &'static mut Composer {
 /// `Math.min(Math.min(i, length - 1 - i) + 1, featherWindow)`.
 #[inline(always)]
 fn ramp_value(i: u32, len: u32, feather: u32) -> f32 {
-    debug_assert!(len >= 1);
-    i.min(len - 1 - i).saturating_add(1).min(feather) as f32
+    // Saturating form: identical for len >= 1, defined (instead of
+    // wrapping) for the degenerate len == 0, which no caller passes but a
+    // hostile direct call could. The old `len - 1 - i` underflowed on u32.
+    len.saturating_sub(1).saturating_sub(i).min(i).saturating_add(1).min(feather) as f32
+}
+
+/// Total output pixels from frame dims, validated BEFORE any allocation.
+/// All size math below runs through this: on wasm32 `usize` is 32 bit, so a
+/// naive `(out_w as usize) * (out_h as usize)` wraps for huge dims, the
+/// `resize(3 * out_pixels)` then under-allocates, and the compose loops
+/// panic deep inside on OOB slices. Trap here instead, with a message —
+/// the JS glue already treats a trapping module as "JS fallback" (sticky),
+/// so the failure class is unchanged, only explicit and allocation-free.
+/// The cap keeps `4 * out_pixels` (RGBA bytes) inside u32 for
+/// `compose_output_len` and inside addressable wasm memory.
+fn checked_out_pixels(out_w: u32, out_h: u32) -> usize {
+    const MAX_OUT_PIXELS: u64 = (u32::MAX as u64) / 4;
+    let pixels = (out_w as u64) * (out_h as u64);
+    assert!(
+        pixels <= MAX_OUT_PIXELS,
+        "pixels.wasm compose: {out_w}x{out_h} exceeds the output cap"
+    );
+    pixels as usize
 }
 
 /// Stage `len_bytes` of input in the module memory, return its byte offset.
 /// Contents are undefined until JS writes them (fresh views required).
+/// Only kinds 0 (batch floats) and 1 (tile descriptors) exist: anything
+/// else traps instead of silently aliasing the tile staging.
 #[no_mangle]
 pub extern "C" fn stage_ptr(kind: u32, len_bytes: u32) -> u32 {
     let c = composer();
@@ -86,11 +109,12 @@ pub extern "C" fn stage_ptr(kind: u32, len_bytes: u32) -> u32 {
             c.batch_stage.resize(n, 0.0);
             c.batch_stage.as_ptr() as u32
         }
-        _ => {
+        1 => {
             let n = (len_bytes / 4) as usize;
             c.tiles_stage.resize(n, 0);
             c.tiles_stage.as_ptr() as u32
         }
+        _ => panic!("pixels.wasm stage_ptr: unknown staging kind {kind}"),
     }
 }
 
@@ -149,23 +173,41 @@ pub extern "C" fn compose_exec(
     let c = composer();
     c.out_w = out_w;
     c.out_h = out_h;
-    let out_pixels = (out_w as usize) * (out_h as usize);
+    let out_pixels = checked_out_pixels(out_w, out_h);
     c.acc.resize(3 * out_pixels, 0.0);
     c.acc.fill(0.0);
     c.weights.resize(out_pixels, 0.0);
     c.weights.fill(0.0);
     c.rgba.resize(4 * out_pixels, 0);
-    let tile_pixels = (tile_out_w as usize) * (tile_out_h as usize);
+    let tile_pixels_u64 = (tile_out_w as u64) * (tile_out_h as u64);
     // Bounds validated once here; everything below is safe borrowed slices.
-    assert!(c.batch_stage.len() >= (ntiles as usize) * 3 * tile_pixels);
-    assert!(c.tiles_stage.len() >= (ntiles as usize) * 2);
+    // All products run in u64: on wasm32 even the length check itself could
+    // wrap in usize arithmetic for hostile dims.
+    let need_batch = (ntiles as u64) * 3 * tile_pixels_u64;
+    assert!(
+        tile_pixels_u64 <= usize::MAX as u64,
+        "pixels.wasm compose: tile size overflow"
+    );
+    assert!(
+        (c.batch_stage.len() as u64) >= need_batch,
+        "pixels.wasm compose: batch staging too small"
+    );
+    assert!(
+        (c.tiles_stage.len() as u64) >= (ntiles as u64) * 2,
+        "pixels.wasm compose: tile staging too small"
+    );
+    let tile_pixels = tile_pixels_u64 as usize;
     let max_fx = tile_out_w as usize;
     c.fx.resize(max_fx.max(1), 0.0);
     for b in 0..(ntiles as usize) {
-        let tx = c.tiles_stage[b * 2] as usize;
-        let ty = c.tiles_stage[b * 2 + 1] as usize;
-        assert!(tx + (tile_out_w as usize) <= out_w as usize);
-        assert!(ty + (tile_out_h as usize) <= out_h as usize);
+        let tx = c.tiles_stage[b * 2];
+        let ty = c.tiles_stage[b * 2 + 1];
+        // Checked: a wrapping `tx + tile_out_w` used to pass this assert
+        // via wraparound and panic later inside the tile loops.
+        let end_x = tx.checked_add(tile_out_w).expect("pixels.wasm compose: tile x overflow");
+        let end_y = ty.checked_add(tile_out_h).expect("pixels.wasm compose: tile y overflow");
+        assert!(end_x <= out_w);
+        assert!(end_y <= out_h);
         // Split disjoint borrows up front: borrowck proves the planes apart.
         let (acc_r, rest) = c.acc.split_at_mut(out_pixels);
         let (acc_g, acc_b) = rest.split_at_mut(out_pixels);
@@ -175,8 +217,8 @@ pub extern "C" fn compose_exec(
             &mut c.weights,
             tile_rgb,
             &mut c.fx,
-            tx,
-            ty,
+            tx as usize,
+            ty as usize,
             tile_out_w as usize,
             tile_out_h as usize,
             out_w as usize,
@@ -234,7 +276,11 @@ pub extern "C" fn compose_output_len() -> u32 {
 #[no_mangle]
 pub extern "C" fn compose_single_exec(pixels: u32) {
     let c = composer();
-    let out_pixels = pixels as usize;
+    // Same cap as the multi lane: `4 * out_pixels` (RGBA bytes) must stay
+    // inside u32 for compose_output_len and inside wasm memory. Real calls
+    // pass 4x of ≤4096px frames (≤ 256 MiB); anything larger traps instead
+    // of wrapping the Vec sizes on wasm32.
+    let out_pixels = checked_out_pixels(pixels, 1);
     assert!(c.batch_stage.len() >= 3 * out_pixels);
     c.rgba.resize(4 * out_pixels, 0);
     let (r_plane, rest) = c.batch_stage.split_at(out_pixels);
@@ -371,5 +417,47 @@ mod tests {
         let reference = scalar_compose(&batch, &[(0, 0)], 1, 1, 1, 1, 48);
         // weight = min(min(0,0)+1,48) = 1; out = in.
         assert_eq!(reference, vec![128, 64, 255, 255]);
+    }
+
+    #[test]
+    fn ramp_value_matches_js_on_all_lengths() {
+        // JS: Math.min(Math.min(i, len - 1 - i) + 1, feather).
+        for len in [1u32, 2, 3, 48, 256, 2048] {
+            for i in 0..len {
+                let js = (i.min(len - 1 - i) + 1).min(48) as f32;
+                assert_eq!(ramp_value(i, len, 48), js, "i={i} len={len}");
+            }
+        }
+    }
+
+    #[test]
+    fn ramp_value_degenerate_len_is_defined() {
+        // No caller passes len == 0, but a hostile direct call must not
+        // wrap u32 arithmetic (the old `len - 1 - i` did).
+        assert_eq!(ramp_value(0, 0, 48), 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds the output cap")]
+    fn checked_dims_reject_huge_frames_before_any_alloc() {
+        // Unit under test is the validator itself: panicking inside the
+        // `extern "C"` entry points would abort (not unwind) across the C
+        // ABI, so compose_exec/single are exercised only with valid dims.
+        // Would wrap usize math on wasm32 and under-allocate; must trap
+        // before touching any Vec. No allocation happens (fast, no OOM).
+        checked_out_pixels(u32::MAX, u32::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds the output cap")]
+    fn checked_dims_reject_huge_single_counts() {
+        checked_out_pixels(u32::MAX, 1);
+    }
+
+    #[test]
+    fn checked_dims_accept_real_frames() {
+        // 4x of a 4096px frame (largest the host serves) fits comfortably.
+        assert_eq!(checked_out_pixels(16384, 16384), 16384 * 16384);
+        assert_eq!(checked_out_pixels(640, 360), 640 * 360);
     }
 }

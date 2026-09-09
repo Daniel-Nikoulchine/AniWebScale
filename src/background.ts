@@ -26,6 +26,18 @@ import { createRealEsrganHttpInfoHandler } from './background/realesrgan-http-in
 const serialized = createAsyncSerializer();
 let siteAccessChain: Promise<void> = Promise.resolve();
 
+/**
+ * Fire-and-forget serialized work with a rejection handler. Bare `void
+ * serialized(...)` drops the operation promise: a mid-cleanup failure
+ * (chrome.storage, tab queries, window creation) then surfaces as an
+ * MV3 unhandled rejection instead of a one-line warning.
+ */
+function runBackgroundTask(promise: Promise<unknown>, label: string): void {
+  promise.catch(error => {
+    console.warn(`[Background] ${label} failed:`, error);
+  });
+}
+
 const nativeSession = new NativeSession({
   sendToFrame,
   requestOriginConsent,
@@ -164,14 +176,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'loading' || changeInfo.url) {
-    void serialized(async () => {
+    runBackgroundTask(serialized(async () => {
       const current = await nativeSession.store.loadActiveEnhancement();
       if (current?.tabId === tabId) await nativeSession.store.persistActiveEnhancement(null);
-    });
+    }), 'clearing the enhancement claim on navigation');
   }
   if (nativeSession.activeSession?.tabId === tabId && (changeInfo.status === 'loading' || changeInfo.url)) {
     const sessionId = nativeSession.activeSession.sessionId;
-    void serialized(() => nativeSession.stopNativeSession('The source tab navigated.', true, true, sessionId));
+    runBackgroundTask(serialized(() => nativeSession.stopNativeSession('The source tab navigated.', true, true, sessionId)), 'stopping the session on navigation');
     return;
   }
 
@@ -185,19 +197,19 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener(tabId => {
-  void serialized(async () => {
+  runBackgroundTask(serialized(async () => {
     const current = await nativeSession.store.loadActiveEnhancement();
     if (current?.tabId === tabId) await nativeSession.store.persistActiveEnhancement(null);
-  });
+  }), 'clearing the enhancement claim on tab close');
   const session = nativeSession.activeSession;
   if (session?.tabId === tabId) {
     const sessionId = session.sessionId;
-    void serialized(() => nativeSession.stopNativeSession(
+    runBackgroundTask(serialized(() => nativeSession.stopNativeSession(
       'The source tab was closed.',
       true,
       false,
       sessionId,
-    ));
+    )), 'stopping the session on tab close');
   }
 });
 
@@ -208,23 +220,23 @@ chrome.windows.onRemoved.addListener(windowId => {
     : session?.popupWindowId;
   if (session && captureWindowId === windowId && session.phase !== 'stopping') {
     const sessionId = session.sessionId;
-    void serialized(() => nativeSession.stopNativeSession('The capture browser window was closed.', true, true, sessionId));
+    runBackgroundTask(serialized(() => nativeSession.stopNativeSession('The capture browser window was closed.', true, true, sessionId)), 'stopping the session on window close');
   }
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void serialized(() => nativeSession.recoverPersistedSession());
+  runBackgroundTask(serialized(() => nativeSession.recoverPersistedSession()), 'recovering the persisted session on startup');
   void updateSiteAccess().catch(error => {
     console.warn('[Site access] Startup synchronization failed.', error);
   });
 });
 
 chrome.runtime.onInstalled.addListener(details => {
-  void serialized(async () => {
+  runBackgroundTask(serialized(async () => {
     await ensureLatestConfig();
     await nativeSession.recoverPersistedSession();
     if (details.reason === 'install' || details.reason === 'update') await checkOnboarding();
-  });
+  }), 'recovering the persisted session on install');
   void updateSiteAccess().catch(error => {
     console.warn('[Site access] Installation synchronization failed.', error);
   });
@@ -244,7 +256,7 @@ chrome.permissions.onRemoved.addListener(() => {
 
 // MV3 service workers can restart without onStartup. Reconcile the durable
 // session every time the background module itself is evaluated.
-void serialized(() => nativeSession.recoverPersistedSession());
+runBackgroundTask(serialized(() => nativeSession.recoverPersistedSession()), 'recovering the persisted session on evaluate');
 void updateSiteAccess().catch(error => {
   console.warn('[Site access] Initial synchronization failed.', error);
 });

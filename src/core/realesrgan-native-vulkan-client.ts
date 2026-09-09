@@ -47,15 +47,16 @@ function planarToRgba(planar: Float32Array, width: number, height: number): Uint
   const pixels = width * height;
   const out = new Uint8Array(pixels * 4);
   // planar layout: R plane, G plane, B plane, each cstep = width*height
-  // values in [0,1] -> 0-255
+  // values in [0,1] -> 0-255. Branchless pack, bit-identical to the
+  // Math.round/min/max chain (see realesrgan-tensor.ts).
   for (let i = 0; i < pixels; i++) {
-    const r = Math.max(0, Math.min(255, Math.round(planar[i] * 255)));
-    const g = Math.max(0, Math.min(255, Math.round(planar[i + pixels] * 255)));
-    const b = Math.max(0, Math.min(255, Math.round(planar[i + pixels * 2] * 255)));
+    const vr = planar[i]!;
+    const vg = planar[i + pixels]!;
+    const vb = planar[i + pixels * 2]!;
     const o = i * 4;
-    out[o] = r;
-    out[o + 1] = g;
-    out[o + 2] = b;
+    out[o] = ((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0;
+    out[o + 1] = ((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0;
+    out[o + 2] = ((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0;
     out[o + 3] = 255;
   }
   return out;
@@ -518,11 +519,19 @@ export class RealEsrganNativeVulkanClient implements RealEsrganInferenceRunner {
           runStage = 'done';
           const ms = performance.now() - t0;
           // Engine-attributed path label: the E2E verdict (and the overlay
-          // via nativePct) tells ncnn and srvgg frames apart.
+          // via nativePct) tells ncnn and srvgg frames apart. Guarded: a
+          // throwing subscriber must not fail an otherwise good frame.
           const engineLabel = this.engine === 'srvgg' ? 'native-srvgg' : 'native-vulkan-gpu';
+          const firePath = (label: string): void => {
+            try {
+              this.onFramePath?.(label);
+            } catch (error) {
+              console.warn('[RealESRGAN] onFramePath hook threw; frame already served', error);
+            }
+          };
           if (this.onFramePath && !this.loggedPath) {
             this.loggedPath = true;
-            this.onFramePath(`${engineLabel} (${width}x${height}→${outW}x${outH} ${ms.toFixed(0)}ms http)`);
+            firePath(`${engineLabel} (${width}x${height}→${outW}x${outH} ${ms.toFixed(0)}ms http)`);
           }
           // E2E-gated steady-state telemetry: every 30th frame reports its
           // time so live runs can verify sustained fps (production quiet).
@@ -531,7 +540,7 @@ export class RealEsrganNativeVulkanClient implements RealEsrganInferenceRunner {
               && this.frameCount % 30 === 0) {
             const netMs = Math.round(tBody - t0);
             const postMs = Math.round(tRehome - tBody);
-            this.onFramePath(`${engineLabel} (frame#${this.frameCount} ${width}x${height} ${ms.toFixed(0)}ms http net=${netMs}ms post=${postMs}ms)`);
+            firePath(`${engineLabel} (frame#${this.frameCount} ${width}x${height} ${ms.toFixed(0)}ms http net=${netMs}ms post=${postMs}ms)`);
           }
           return { data, width: outW, height: outH };
         } finally {

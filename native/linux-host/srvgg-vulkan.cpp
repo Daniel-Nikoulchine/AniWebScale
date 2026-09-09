@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
@@ -70,6 +71,13 @@ static bool readWholeFile(const std::string& path, std::vector<unsigned char>& o
         err = "empty file " + path;
         return false;
     }
+    // Weight/manifest files are tens of MB at most; refuse absurd sizes
+    // before the resize below can OOM the host on a corrupt path.
+    constexpr std::streamsize kMaxWeightFileBytes = 64 * 1024 * 1024;
+    if (size > kMaxWeightFileBytes) {
+        err = "file too large " + path;
+        return false;
+    }
     file.seekg(0, std::ios::beg);
     out.resize(static_cast<size_t>(size));
     if (!file.read(reinterpret_cast<char*>(out.data()), size)) {
@@ -100,7 +108,16 @@ bool SrvggVulkan::loadWeights(const std::string& modelsDir, std::string& err) {
         err = "srvgg manifest has no totalFloats";
         return false;
     }
-    const size_t totalFloats = static_cast<size_t>(*totalIt->second.as_number());
+    // Integral and sane before any multiply/alloc below: a fractional value
+    // would truncate, a huge one wrap totalFloats*4 past the bin-size check
+    // and narrow again into the Mat below.
+    const double totalFloatsDouble = *totalIt->second.as_number();
+    if (!(totalFloatsDouble >= 0) || totalFloatsDouble != std::floor(totalFloatsDouble)
+        || totalFloatsDouble > 64 * 1024 * 1024) {
+        err = "srvgg manifest totalFloats out of range";
+        return false;
+    }
+    const size_t totalFloats = static_cast<size_t>(totalFloatsDouble);
     if (binBytes.size() != totalFloats * 4) {
         std::ostringstream message;
         message << "srvgg bin holds " << binBytes.size() << " bytes; manifest needs " << (totalFloats * 4);
@@ -185,6 +202,27 @@ bool SrvggVulkan::loadWeights(const std::string& modelsDir, std::string& err) {
     for (size_t i = 1; i < 17; i++) {
         if (convs[i].inCh != 64 || convs[i].outCh != 64) {
             err = "srvgg manifest body geometry mismatch (want 64->64)";
+            return false;
+        }
+    }
+    // Offset bounds: every layer's weights/bias/slopes must lie inside the
+    // weight buffer, or the shaders read out of bounds (garbage pixels at
+    // best, driver fault at worst). Geometry above pins the channel counts,
+    // so the per-layer footprints are exact.
+    for (size_t i = 0; i < convs.size(); i++) {
+        const long long wFloats = (long long)convs[i].outCh * convs[i].inCh * 9;
+        const long long need = (long long)convs[i].wBase + wFloats;
+        if (convs[i].wBase < 0 || need > (long long)totalFloats) {
+            err = "srvgg manifest weight offset out of range";
+            return false;
+        }
+        if (convs[i].bBase < 0 || (long long)convs[i].bBase + convs[i].outCh > (long long)totalFloats) {
+            err = "srvgg manifest bias offset out of range";
+            return false;
+        }
+        if (convs[i].sBase >= 0
+            && (long long)convs[i].sBase + convs[i].outCh > (long long)totalFloats) {
+            err = "srvgg manifest slope offset out of range";
             return false;
         }
     }

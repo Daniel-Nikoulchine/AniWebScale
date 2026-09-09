@@ -11,5 +11,5 @@
     "lib": ["es2022", "dom"]
   },
   "include": ["**/*.ts", "**/*.mts"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "native/**/build"]
 }

@@ -20,7 +20,16 @@ export function createRenderStatsTap(): {
       };
     },
     emit(stats: RenderStats): void {
-      for (const listener of [...listeners]) listener(stats);
+      // One throwing consumer (overlay, auto-cap, E2E retention) must
+      // neither starve the later subscribers nor unwind into the producer:
+      // emit runs on the inference accounting path.
+      for (const listener of [...listeners]) {
+        try {
+          listener(stats);
+        } catch (error) {
+          console.warn('[AniWebScale] stats listener threw; continuing fan-out.', error);
+        }
+      }
     },
   };
 }

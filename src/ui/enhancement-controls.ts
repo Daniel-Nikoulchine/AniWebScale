@@ -36,10 +36,14 @@ const BACKEND_OPTIONS: readonly SelectOption[] = [
 ];
 
 // RealESRGAN-Cap-Presets, gemessene Leiter vom 2.9. (Cap-Leiter im Report).
+// 360 ist die Auto-Cap-Notfallstufe (REALESRGAN_CAP_LADDER): als Option drin,
+// damit ein gespeicherter 360-Wert (E2E/manuelle Edits validieren ihn) kein
+// leeres Select erzeugt — Init- und Live-Sync-Pfad stimmen dann überein.
 const REALESRGAN_CAP_OPTIONS: readonly SelectOption[] = [
   { value: '480', key: 'realesrganCap480', fallback: '480p · Max detail (~16 fps)' },
   { value: '432', key: 'realesrganCap432', fallback: '432p · Balanced (~21 fps)' },
   { value: '405', key: 'realesrganCap405', fallback: '405p · Max speed (~26 fps)' },
+  { value: '360', key: 'realesrganCap360', fallback: '360p · Emergency (~30 fps)' },
 ];
 
 // RealESRGAN-Precision: steuert nur die Browser-Pfade (Worker/Main-Thread),

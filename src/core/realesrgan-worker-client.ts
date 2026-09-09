@@ -300,6 +300,8 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
     this.pending.delete(value.id);
     this.activeRequests = Math.max(0, this.activeRequests - 1);
     clearTimeout(pending.timer);
+    // Fires after settle and pump below; see the guarded invocation there.
+    let framePath: string | null = null;
     if (value.ok && value.data) {
       const outputWidth = value.width ?? 0;
       const outputHeight = value.height ?? 0;
@@ -311,10 +313,11 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
         return;
       }
       // Surface which composition path served this frame; the pipeline logs
-      // it once per distinct value for live diagnostics.
+      // it once per distinct value for live diagnostics. Assigned here,
+      // fired after settle and pump below (guarded).
       if (value.path && value.path !== this.lastLoggedPath) {
         this.lastLoggedPath = value.path;
-        this.onFramePath?.(value.path);
+        framePath = value.path;
       }
       pending.resolve({
         data: value.data,
@@ -334,6 +337,13 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
           : REALESRGAN_ERROR_CODES.WORKER_FAILED));
     }
     this.pumpRequests();
+    if (framePath !== null) {
+      try {
+        this.onFramePath?.(framePath);
+      } catch (error) {
+        console.warn('[RealESRGAN] onFramePath hook threw; frame already settled', error);
+      }
+    }
   }
 
   private failAll(error: Error): void {

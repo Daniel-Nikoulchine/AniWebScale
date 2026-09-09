@@ -4,7 +4,7 @@ import './onboarding.css';
 import type { EnhancementMode, QualityTier, RenderBackend } from '../../types';
 import { renderEnhancementSelects, refreshEnhancementControlLabels, renderEnhancementToggles } from '../enhancement-controls';
 import { refreshModeUi } from '../mode-ui';
-import { DEFAULT_SETTINGS } from '../../utils/settings';
+import { DEFAULT_SETTINGS, getSettings } from '../../utils/settings';
 import { themeManager } from '../theme-manager';
 import { applySettings } from '../../utils/apply-settings';
 import { localizeDocument, message, initI18n, setUiLanguage, getUiLanguage, type UiLanguage } from '../i18n';
@@ -14,13 +14,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   localizeDocument();
   themeManager.getTheme();
   const finish = document.getElementById('finish') as HTMLButtonElement;
+  // Prefill with the stored settings: onboarding reopens on update for
+  // existing users (site-access-model gate), and rendering bare 'A'/M/auto
+  // defaults would save over their customized mode on Finish.
+  const stored = await getSettings().catch(() => null);
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
-    'A',
+    stored?.mode ?? 'A',
     // Erstlauf: kein RealESRGAN-Detailschalter, Default 480 greift.
     { includeRealEsrganCap: false },
   );
   const { mode, quality, backend } = controls;
+  if (stored) {
+    quality.value = stored.quality;
+    backend.value = stored.backend;
+  }
   const toggles = renderEnhancementToggles(
     document.getElementById('enhancement-toggles') as HTMLDivElement,
     { includeStatistics: false },
@@ -48,11 +56,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     themeManager.setTheme(theme.value as 'light' | 'dark' | 'auto');
   });
 
+  if (stored) {
+    frameGeneration.checked = stored.frameGenerationEnabled;
+  }
+
   const updateModeUi = () => {
     refreshModeUi({ mode, quality, backend, frameGeneration });
     status.textContent = '';
   };
   mode.addEventListener('change', updateModeUi);
+  quality.addEventListener('change', updateModeUi);
   backend.addEventListener('change', updateModeUi);
   frameGeneration.addEventListener('change', updateModeUi);
   updateModeUi();

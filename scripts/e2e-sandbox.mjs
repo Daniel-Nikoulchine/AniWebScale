@@ -121,10 +121,15 @@ function buildBwrapArgs() {
     // the directory bind above covers it, but ensure it exists before we start.
   }
 
-  // Re-bind dri / shm / snd after --dev /dev
+  // Re-bind dri / shm / snd after --dev /dev. NVIDIA (/dev/nvidia*) and
+  // ROCm (/dev/kfd) nodes are bound the same way so E2E on those hosts
+  // exercises the real GPU instead of silently falling back to SwiftShader.
   if (existsSync(driSrc)) args.push('--dev-bind-try', driSrc, driSrc);
   if (existsSync(shmSrc)) args.push('--bind-try', shmSrc, shmSrc);
   if (existsSync(sndSrc)) args.push('--dev-bind-try', sndSrc, sndSrc);
+  for (const node of ['/dev/nvidia0', '/dev/nvidiactl', '/dev/nvidia-modeset', '/dev/nvidia-uvm', '/dev/kfd']) {
+    if (existsSync(node)) args.push('--dev-bind-try', node, node);
+  }
   // /dev/shm permissions: ensure writable
   // XDG runtime dir for Wayland fallback (may contain wayland socket)
   const xdgRt = process.env.XDG_RUNTIME_DIR;

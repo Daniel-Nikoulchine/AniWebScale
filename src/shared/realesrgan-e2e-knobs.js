@@ -51,7 +51,7 @@ export function knobQueryFromEnv(knob, envValue) {
 export function knobBridgeFromQuery(knob, queryValue) {
   if (queryValue === undefined || queryValue === null || queryValue === '') return undefined;
   if (knob.kind === 'flag') return queryValue === '1' ? true : undefined;
-  if (knob.kind === 'backend') return queryValue === 'native' ? 'native' : 'webgpu';
+  if (knob.kind === 'backend') return queryValue === 'native' ? 'native' : queryValue === 'webgpu' ? 'webgpu' : undefined;
   if (knob.kind === 'capHeight') {
     const height = Number(queryValue);
     return height === 360 || height === 405 || height === 432 || height === 480 ? height : undefined;

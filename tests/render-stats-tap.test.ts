@@ -40,4 +40,14 @@ describe('createRenderStatsTap', () => {
     tap.emit(sampleStats(false));
     expect(order).toEqual(['first', 'second']);
   });
+
+  it('a throwing subscriber neither starves later listeners nor unwinds emit', () => {
+    const tap = createRenderStatsTap();
+    const seen: RenderStats[] = [];
+    tap.subscribe(() => { throw new Error('overlay boom'); });
+    tap.subscribe(stats => seen.push(stats));
+    const stats = sampleStats(true);
+    expect(() => tap.emit(stats)).not.toThrow();
+    expect(seen).toEqual([stats]);
+  });
 });

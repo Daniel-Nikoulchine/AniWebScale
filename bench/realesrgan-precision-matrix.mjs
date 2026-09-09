@@ -74,6 +74,9 @@ const results = [];
 for (const { precision, cap } of combos) {
   console.log(`--- combo precision=${precision} cap=${cap} (${collectSeconds}s collect) ---`);
   const started = Date.now();
+  // Assigned on every path below (try resolves always — the execFile
+  // callback resolves even on error — and catch assigns), so no initializer:
+  // the initial '' was dead and tripped no-useless-assignment.
   let output;
   try {
     output = await new Promise(resolve => {

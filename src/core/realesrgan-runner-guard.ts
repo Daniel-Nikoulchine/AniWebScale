@@ -11,7 +11,9 @@
  * re-parsed human text: producers tag, this module decides.
  */
 import {
+  REALESRGAN_ERROR_CODES,
   REALESRGAN_TRANSIENT_ERROR_CODES,
+  formatRealEsrganError,
   realEsrganErrorCodeOf,
 } from '../shared/realesrgan-error-codes';
 
@@ -60,9 +62,16 @@ export class RealEsrganRunnerGuard {
         throw error;
       }
       // A broken runner must not drop the frame: mark it dead so the
-      // caller detaches it, warm the fallback, then propagate.
+      // caller detaches it, warm the fallback, then propagate the ORIGINAL
+      // error. A throwing escalation must neither mask it nor skip the
+      // warmup (the next frame would otherwise pay a cold session build).
       this.dead = true;
-      await this.events.onRunnerDead?.(error);
+      try {
+        await this.events.onRunnerDead?.(error);
+      } catch (escalationError) {
+        console.warn(formatRealEsrganError(REALESRGAN_ERROR_CODES.WORKER_FAILED,
+          'runner-dead escalation failed; continuing with fallback warmup'), escalationError);
+      }
       try {
         await this.events.warmFallback?.();
       } catch {

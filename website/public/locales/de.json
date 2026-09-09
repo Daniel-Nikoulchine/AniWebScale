@@ -934,5 +934,20 @@
   },
   "realesrganCap405": {
     "message": "405p · Max. Tempo (~26 fps)"
+  },
+  "realesrganCap360": {
+    "message": "360p · Notfall (~30 fps)"
+  },
+  "realesrganPrecision": {
+    "message": "Real-ESRGAN-Präzision"
+  },
+  "realesrganPrecisionInt8": {
+    "message": "INT8 · Schnellster CPU-Fallback"
+  },
+  "realesrganPrecisionFp16": {
+    "message": "FP16 · WebGPU, experimentell"
+  },
+  "realesrganPrecisionFp32": {
+    "message": "FP32 · Referenzqualität"
   }
 }

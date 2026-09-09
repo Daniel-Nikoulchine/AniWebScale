@@ -279,6 +279,10 @@ export class Renderer {
   private statsWindowStarted = performance.now();
   private smoothedRenderMs = 0;
   private droppedFrames = 0;
+  // Pipeline rebuilds (auto-cap, source resize) reset per-pipeline skip
+  // counters; the overlay total is lifetime-cumulative like droppedFrames,
+  // so hold the high-water mark instead of letting it go backwards.
+  private realesrganSkippedHighWater = 0;
   private lastStatsEmit = 0;
   private lastCallbackMediaTime: number | null = null;
   private frameBudgetMs = 1000 / 24;
@@ -780,7 +784,18 @@ export class Renderer {
       this.runAfterSubmit();
       return false;
     }
-    const generateIntermediate = this.frameGeneration.prepareFrame(encoder);
+    let generateIntermediate: boolean;
+    try {
+      generateIntermediate = this.frameGeneration.prepareFrame(encoder);
+    } catch (error) {
+      // History encode on torn-down resources (lost device, stale history
+      // size): drop exactly this frame like the pass/presentation guards
+      // above instead of killing the whole frame loop via onError.
+      if (this.isSecurityError(error)) throw error;
+      this.droppedFrames += 1;
+      this.runAfterSubmit();
+      return false;
+    }
     try {
       this.encodePresentation(encoder);
     } catch {
@@ -908,7 +923,8 @@ export class Renderer {
     for (const pipeline of this.pipelines) {
       total += pipeline.getSkippedFrames?.() ?? 0;
     }
-    return total;
+    if (total > this.realesrganSkippedHighWater) this.realesrganSkippedHighWater = total;
+    return this.realesrganSkippedHighWater;
   }
 
   private startFrameCallbacks(): void {

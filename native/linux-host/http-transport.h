@@ -31,6 +31,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -137,6 +138,8 @@ public:
 private:
     static constexpr long long MAX_BODY = 64 * 1024 * 1024; // 4096x4096 RGBA8
     static constexpr int MAX_FRAME_DIM = 4096;
+    // Per-request read budget (request line + headers + body) in ms.
+    static constexpr uint64_t REQUEST_BUDGET_MS = 30'000;
 
     UpscaleHandler handler_;
     int listen_fd_ = -1;
@@ -163,14 +166,27 @@ private:
     }
 
     // Buffered socket reader with line and exact-count primitives.
+    // Every request runs against an absolute steady-clock deadline
+    // (refreshed per request by handle_conn): a client that dribbles
+    // headers or body bytes (slowloris) gets its connection closed
+    // instead of pinning the single accept thread — and with it every
+    // later frame — forever. Loopback-only, but a wedged page must not
+    // wedge the host either.
     struct ConnBuf {
         int fd;
         const std::atomic<bool>* stop;
         std::vector<char> buf;
         size_t pos = 0;
         size_t len = 0;
+        // Absolute steady-clock deadline in ms; UINT64_MAX = none.
+        uint64_t deadline_ms = UINT64_MAX;
 
         explicit ConnBuf(int f, const std::atomic<bool>* stop_flag) : fd(f), stop(stop_flag), buf(64 * 1024) {}
+
+        static uint64_t steady_ms() {
+            return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
 
         bool fill() {
             if (pos > 0 && len > pos) {
@@ -186,12 +202,18 @@ private:
                 // Poll with a timeout instead of blocking in recv(): stop()
                 // tears down the sockets, but only a poll (or the conn
                 // shutdown in stop()) can wake this thread on an idle
-                // keep-alive connection.
+                // keep-alive connection. The per-request deadline bounds
+                // this the same way for dribbled requests.
                 if (stop->load(std::memory_order_relaxed)) return false;
+                const uint64_t now = steady_ms();
+                if (now >= deadline_ms) return false;
+                const uint64_t remain = deadline_ms - now;
                 pollfd pfd{};
                 pfd.fd = fd;
                 pfd.events = POLLIN;
-                const int pr = ::poll(&pfd, 1, 100);
+                // Slice at 100 ms so the stop flag stays responsive even
+                // with a far deadline; remain > 0 holds (checked above).
+                const int pr = ::poll(&pfd, 1, remain > 100 ? 100 : (int)remain);
                 if (pr < 0) {
                     if (errno == EINTR) continue;
                     return false;
@@ -264,6 +286,10 @@ private:
         ConnBuf conn(fd, &stop_);
         // Keep-alive: serve sequential requests on this connection.
         for (;;) {
+            // Fresh read budget per request (covers request line + headers
+            // + body, not the inference itself): 64 MiB cross loopback in
+            // milliseconds, so 30 s only ever fires on a dribbled socket.
+            conn.deadline_ms = ConnBuf::steady_ms() + REQUEST_BUDGET_MS;
             std::string request_line;
             if (!conn.read_line(request_line)) return;
 
@@ -401,7 +427,14 @@ private:
             body != nullptr && body_len > 0 ? body_len : (has_text ? static_cast<long long>(text.size()) : 0),
             out_w, out_h,
             keep_alive ? "keep-alive" : "close");
-        if (n <= 0) return;
+        if (n <= 0 || n >= static_cast<int>(sizeof(head))) {
+            // Over-long reason phrase (deep srvgg model dir on the 500
+            // path): sending n bytes would over-read the stack buffer and
+            // desync the client. Fail closed with a minimal head instead.
+            const char* fallback = "HTTP/1.1 500 Internal Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            send_all(fd, fallback, strlen(fallback));
+            return;
+        }
         if (!send_all(fd, head, static_cast<size_t>(n))) return;
         if (body != nullptr && body_len > 0) send_all(fd, reinterpret_cast<const char*>(body), static_cast<size_t>(body_len));
         else if (has_text) send_all(fd, text.data(), text.size());

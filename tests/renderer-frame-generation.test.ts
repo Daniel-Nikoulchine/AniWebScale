@@ -378,6 +378,44 @@ describe('frame-generation presentation resources', () => {
 
     expect(renderer.releaseResources).toHaveBeenCalledOnce();
   });
+
+  it('drops the frame instead of killing the loop when history encode fails', async () => {
+    const renderer = Object.create(Renderer.prototype) as any;
+    renderer.destroyed = false;
+    renderer.rebuilding = false;
+    renderer.video = {
+      readyState: 2,
+      HAVE_CURRENT_DATA: 2,
+      paused: false,
+      ended: false,
+      videoWidth: 640,
+      videoHeight: 360,
+    };
+    renderer.videoFrameTexture = texture(640, 360);
+    renderer.sourceFormatStale = false;
+    renderer.copyCurrentVideoFrame = vi.fn(async () => undefined);
+    renderer.pipelines = [];
+    renderer.frameGeneration = {
+      prepareFrame: vi.fn(() => { throw new Error('lost device'); }),
+    };
+    renderer.encodePresentation = vi.fn();
+    renderer.runAfterSubmit = vi.fn();
+    renderer.droppedFrames = 0;
+    renderer.onError = vi.fn();
+    renderer.device = {
+      createCommandEncoder: vi.fn(() => ({ finish: vi.fn() })),
+      queue: {},
+    };
+
+    // A throwing prepareFrame used to escape into drainFrames' onError and
+    // stop the whole frame loop; like the pass/presentation guards it must
+    // drop exactly this frame.
+    await expect(renderer.processFrame()).resolves.toBe(false);
+    expect(renderer.droppedFrames).toBe(1);
+    expect(renderer.encodePresentation).not.toHaveBeenCalled();
+    expect(renderer.runAfterSubmit).toHaveBeenCalledOnce();
+    expect(renderer.onError).not.toHaveBeenCalled();
+  });
 });
 
 describe('source texture format detection', () => {

@@ -38,10 +38,13 @@ export function setVerboseLogging(enabled: boolean): void {
  * Accepts printf-style interpolation via the console's own formatting.
  */
 export function debug(message: string, ...args: unknown[]): void {
-  if (!verboseEnabled) return;
   if (!initialized) {
-    // Best-effort: if logging fires before init, surface it rather than drop it.
+    // Best-effort: if logging fires before init, kick off init and surface
+    // the line rather than dropping it. (Checked first: the old
+    // verbose-gate-first order made this branch unreachable, since the
+    // default verboseEnabled=false returned before ever reaching it.)
     void initDebugLogging();
   }
+  if (!verboseEnabled) return;
   console.log(`${PREFIX} ${message}`, ...args);
 }

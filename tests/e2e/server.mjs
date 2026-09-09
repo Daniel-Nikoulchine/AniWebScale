@@ -429,7 +429,7 @@ export async function startFixtureServers() {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           waiters.delete(token);
-          reject(new Error(`Timed out waiting for browser self-test ${token}`));
+          reject(new Error(`Timed out waiting for browser self-test ${token} after ${timeoutMs}ms (completed checks are in the PASS/FAIL lines above)`));
         }, timeoutMs);
         waiters.set(token, value => { clearTimeout(timer); resolve(value); });
       });

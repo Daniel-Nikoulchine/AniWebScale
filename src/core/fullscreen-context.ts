@@ -31,6 +31,9 @@ export function electFullscreenCandidate(
         && !videoFillsOwnViewport(candidate.video)) continue;
     const rect = candidate.video.getBoundingClientRect();
     const area = rect.width * rect.height;
+    // Zero-area videos (display:none inside the fullscreen subtree) are not
+    // enhanceable: without this the first such candidate wins via !winner.
+    if (!(area > 0)) continue;
     if (!winner || area > winnerArea
         || (area === winnerArea && candidate.videoId < winner.videoId)) {
       winner = candidate;

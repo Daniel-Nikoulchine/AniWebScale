@@ -29,6 +29,12 @@ export class RealEsrganBufferPool {
   release(buffer: ArrayBuffer): void {
     const list = this.buffers.get(buffer.byteLength);
     if (list) {
+      // Single-release ownership: the same buffer must never be pooled
+      // twice (two later acquires would alias one ArrayBuffer across two
+      // frames and corrupt both). A second release is a caller bug — drop
+      // it loudly in spirit (no throw: the frame is already on its way out)
+      // by ignoring the duplicate instead of aliasing.
+      if (list.includes(buffer)) return;
       if (list.length < this.maxPerSize) list.push(buffer);
       return;
     }

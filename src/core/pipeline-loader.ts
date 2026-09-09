@@ -4,7 +4,7 @@ import { createExternalGlslPipelineClass } from './external-glsl-pipeline';
 import { REALESRGAN_CLASS_TO_MODEL_FILE } from '../shared/realesrgan-models';
 import { createRealEsrganPipelineClass } from './realesrgan-pipeline';
 import { setupRealEsrganBrowserRuntime } from './realesrgan-browser-setup';
-import { createProductionBroker } from './realesrgan-runner-broker';
+import { createProductionBroker, type RealEsrganInferenceRunner } from './realesrgan-runner-broker';
 import { loadRealEsrganModelAssets, type RealEsrganModelAssets } from './realesrgan-model-assets';
 import type { RealEsrganRunnerBinding } from './realesrgan-pipeline';
 import type { GeneratedKernelSet, PipelineConstructor } from './pipeline-types';
@@ -84,31 +84,56 @@ const modelAssetsCache = new Map<string, Promise<RealEsrganModelAssets>>();
 
 function realEsrganLoader(className: string): ConstructorLoader {
   return async () => {
-    // The Session-Fallback factory carries the config, cache and cascade
-    // level; one instance serves every class and shape for this lifetime.
-    const sessionFactory = await setupRealEsrganBrowserRuntime();
-    let modelAssets = modelAssetsCache.get(className);
-    if (!modelAssets) {
-      modelAssets = loadRealEsrganModelAssets(className, {
-        resolveUrl: path => chrome.runtime.getURL(path),
-        readStorageKey: async (key: string) => {
-          const stored = await chrome.storage.local.get(key) as Record<string, unknown>;
-          return stored[key];
-        },
-      });
-      // A failed load must not poison the cache (mirrors the session cache
-      // behaviour): evict it so the next construction re-attempts.
-      void modelAssets.catch(() => modelAssetsCache.delete(className));
-      modelAssetsCache.set(className, modelAssets);
+    // Degrade stage by stage instead of throwing: a pipeline with no
+    // runner still primes the canvas (bilinear) and rides the fatal
+    // fallback chain, and a runnerless pipeline WITH a session factory
+    // serves frames from the main-thread session. Only a total failure
+    // (no factory either) leaves prime-then-fallback — still better than
+    // a rejected constructor that kills enhancement outright.
+    let sessionFactory: Awaited<ReturnType<typeof setupRealEsrganBrowserRuntime>> | null = null;
+    try {
+      // The Session-Fallback factory carries the config, cache and cascade
+      // level; one instance serves every class and shape for this lifetime.
+      sessionFactory = await setupRealEsrganBrowserRuntime();
+    } catch (error) {
+      console.warn('[RealESRGAN] browser runtime setup failed; pipeline degrades to prime + fallback chain', error);
     }
-    const assets = await modelAssets;
+    let assets: RealEsrganModelAssets | null = null;
+    if (sessionFactory) {
+      try {
+        let modelAssets = modelAssetsCache.get(className);
+        if (!modelAssets) {
+          modelAssets = loadRealEsrganModelAssets(className, {
+            resolveUrl: path => chrome.runtime.getURL(path),
+            readStorageKey: async (key: string) => {
+              const stored = await chrome.storage.local.get(key) as Record<string, unknown>;
+              return stored[key];
+            },
+          });
+          // A failed load must not poison the cache (mirrors the session cache
+          // behaviour): evict it so the next construction re-attempts.
+          void modelAssets.catch(() => modelAssetsCache.delete(className));
+          modelAssetsCache.set(className, modelAssets);
+        }
+        assets = await modelAssets;
+      } catch (error) {
+        console.warn('[RealESRGAN] model assets unavailable; pipeline degrades to the session path', error);
+      }
+    }
     // Try native Vulkan first (Linux), then worker, then main-thread.
     // The native host is persistent and ~10x faster than WASM on NAVI22,
     // so paying its 4s handshake once is worth it. resolveRunner() is cheap
     // here: the broker caches its adapters and re-resolves only after a
     // markRunnerDead escalation or the native retry cooldown.
-    const runner = await runnerBroker.resolveRunner();
-    const binding: RealEsrganRunnerBinding | null = runner
+    let runner: RealEsrganInferenceRunner | null = null;
+    if (assets) {
+      try {
+        runner = await runnerBroker.resolveRunner();
+      } catch (error) {
+        console.warn('[RealESRGAN] runner resolution failed; pipeline degrades to the session path', error);
+      }
+    }
+    const binding: RealEsrganRunnerBinding | null = runner && assets
       ? {
         runner,
         modelAssets: assets,
@@ -122,8 +147,10 @@ function realEsrganLoader(className: string): ConstructorLoader {
     // every later frame at that size reuses it. Precision arrives per call
     // from the pipeline's own effect params (the factory default covers
     // callers without one).
-    const getSession = (width: number, height: number, precision?: RealEsrganPrecision): Promise<InferenceSession> =>
-      sessionFactory.createSession(className, width, height, precision);
+    const getSession = sessionFactory
+      ? (width: number, height: number, precision?: RealEsrganPrecision): Promise<InferenceSession> =>
+        sessionFactory.createSession(className, width, height, precision)
+      : null;
     return createRealEsrganPipelineClass(binding, getSession);
   };
 }

@@ -53,8 +53,19 @@ export function planUpload(width: number, height: number): ReadbackPlan {
 /**
  * Decode an IEEE 754 half-precision bit pattern to a float. Pure decode, no
  * clamping; the caller decides what the video range means for the value.
+ *
+ * Bulk f16 frames (10/12-bit sources: 3.6M channels at 720p) go through the
+ * precomputed tables below instead of this scalar per channel; the tables
+ * are built FROM this function, so single lookups and bulk frames agree
+ * bit for bit. This wrapper serves the table once built (one array load
+ * instead of branches + `2 **` pow), keeping single-call sites fast too.
  */
 export function decodeFloat16(bits: number): number {
+  const table = ensureF16Tables().f32;
+  return table[bits & 0xffff]!;
+}
+
+function decodeFloat16Scalar(bits: number): number {
   const sign = (bits & 0x8000) ? -1 : 1;
   const exponent = (bits & 0x7c00) >> 10;
   const mantissa = bits & 0x03ff;
@@ -65,6 +76,71 @@ export function decodeFloat16(bits: number): number {
     return mantissa === 0 ? sign * Infinity : NaN;
   }
   return sign * (1 + mantissa / 1024) * 2 ** (exponent - 15);
+}
+
+interface F16Tables {
+  /** Raw decode per bit pattern (float64, NaN/Infinity preserved). */
+  f32: Float64Array;
+  /** Byte-quantised with the unpack saturation rule (NaN -> 1, clamp). */
+  u8: Uint8Array;
+  /** 8-bit-quantised float for the planar path (round(v*255)/255). */
+  qf32: Float32Array;
+}
+
+let f16Tables: F16Tables | null = null;
+
+/** Build-once 64k tables from the scalar decoder (bit-identical by construction). */
+function ensureF16Tables(): F16Tables {
+  if (!f16Tables) {
+    const f32 = new Float64Array(65536);
+    const u8 = new Uint8Array(65536);
+    const qf32 = new Float32Array(65536);
+    for (let bits = 0; bits < 65536; bits += 1) {
+      const value = decodeFloat16Scalar(bits);
+      f32[bits] = value;
+      const clamped = Number.isNaN(value) ? 1 : Math.min(1, Math.max(0, value));
+      u8[bits] = Math.round(clamped * 255);
+      qf32[bits] = Math.round(clamped * 255) / 255;
+    }
+    f16Tables = { f32, u8, qf32 };
+  }
+  return f16Tables;
+}
+
+/** Byte -> [0,1] float with the exact `/ 255` rounding of the converters. */
+let byteToF32Table: Float32Array | null = null;
+function ensureByteToF32(): Float32Array {
+  if (!byteToF32Table) {
+    const table = new Float32Array(256);
+    for (let i = 0; i < 256; i += 1) table[i] = i / 255;
+    byteToF32Table = table;
+  }
+  return byteToF32Table;
+}
+
+/**
+ * Uint16 fast view over the padded bytes when the compartment and alignment
+ * allow it (little-endian host, even byteOffset/length). Falls back to null
+ * and the caller uses the DataView path — same values, slower.
+ */
+const IS_LITTLE_ENDIAN: boolean = (() => {
+  try {
+    const probe = new ArrayBuffer(2);
+    new DataView(probe).setUint16(0, 1, true);
+    return new Uint16Array(probe)[0] === 1;
+  } catch {
+    return false;
+  }
+})();
+
+function uint16ViewOf(padded: Uint8Array): Uint16Array | null {
+  try {
+    if (!IS_LITTLE_ENDIAN) return null;
+    if (padded.byteOffset % 2 !== 0 || padded.byteLength % 2 !== 0) return null;
+    return new Uint16Array(padded.buffer, padded.byteOffset, padded.byteLength / 2);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -86,6 +162,13 @@ export function unpackReadback(
   if (out !== undefined && out.length !== width * height * 4) {
     throw new Error(`unpackReadback: out buffer must hold ${width * height * 4} bytes, got ${out.length}.`);
   }
+  // A short padded buffer would otherwise unpack silently: the rgba8 row
+  // loop copies short subarrays (trailing zeros), the Uint16 path stores
+  // table misses as 0, and only the DataView path throws — identical
+  // corruption surfacing (or not) by code path. Fail uniformly instead.
+  if (padded.byteLength < bytesPerRow * height) {
+    throw new Error(`unpackReadback: padded buffer holds ${padded.byteLength} bytes; need ${bytesPerRow * height}.`);
+  }
   const result = out ?? new Uint8Array(width * height * 4);
   if (format === 'rgba8unorm') {
     for (let row = 0; row < height; row += 1) {
@@ -95,19 +178,36 @@ export function unpackReadback(
     }
     return result;
   }
+  // rgba16float: table-driven (see ensureF16Tables). The Uint16 fast path
+  // avoids per-channel DataView bounds/endian overhead; the fallback decodes
+  // through the same table so both agree bit for bit.
+  const lut = ensureF16Tables().u8;
+  const u16 = uint16ViewOf(padded);
+  if (u16) {
+    const strideU16 = bytesPerRow / 2;
+    for (let row = 0; row < height; row += 1) {
+      const srcRow = row * strideU16;
+      const dstRow = (row * width) * 4;
+      for (let col = 0; col < width; col += 1) {
+        const srcU = srcRow + col * 4;
+        const dstByte = dstRow + col * 4;
+        result[dstByte] = lut[u16[srcU]!]!;
+        result[dstByte + 1] = lut[u16[srcU + 1]!]!;
+        result[dstByte + 2] = lut[u16[srcU + 2]!]!;
+        result[dstByte + 3] = lut[u16[srcU + 3]!]!;
+      }
+    }
+    return result;
+  }
   const view = new DataView(padded.buffer, padded.byteOffset, padded.byteLength);
   for (let row = 0; row < height; row += 1) {
     for (let col = 0; col < width; col += 1) {
       const srcByte = row * bytesPerRow + col * 8;
       const dstByte = (row * width + col) * 4;
-      for (let channel = 0; channel < 4; channel += 1) {
-        const bits = view.getUint16(srcByte + channel * 2, true);
-        const value = decodeFloat16(bits);
-        // Video pixels never legitimately sit outside [0,1]; saturate so
-        // inf/NaN from a corrupt texture can't poison the model input.
-        const clamped = Number.isNaN(value) ? 1 : Math.min(1, Math.max(0, value));
-        result[dstByte + channel] = Math.round(clamped * 255);
-      }
+      result[dstByte] = lut[view.getUint16(srcByte, true)]!;
+      result[dstByte + 1] = lut[view.getUint16(srcByte + 2, true)]!;
+      result[dstByte + 2] = lut[view.getUint16(srcByte + 4, true)]!;
+      result[dstByte + 3] = lut[view.getUint16(srcByte + 6, true)]!;
     }
   }
   return result;
@@ -174,6 +274,9 @@ export function unpackReadbackToPlanarRgb(
 ): PlanarRgbReadback {
   const { bytesPerRow } = planReadback(width, height, format);
   const pixels = width * height;
+  if (padded.byteLength < bytesPerRow * height) {
+    throw new Error(`unpackReadbackToPlanarRgb: padded buffer holds ${padded.byteLength} bytes; need ${bytesPerRow * height}.`);
+  }
   const data = out ?? new Float32Array(3 * pixels);
   if (data.length !== 3 * pixels) {
     throw new Error(`unpackReadbackToPlanarRgb: out buffer must hold ${3 * pixels} floats, got ${data.length}.`);
@@ -183,15 +286,37 @@ export function unpackReadbackToPlanarRgb(
   const b = data.subarray(2 * pixels, 3 * pixels);
 
   if (format === 'rgba8unorm') {
+    const byteToF32 = ensureByteToF32();
     for (let row = 0; row < height; row += 1) {
       const srcBase = row * bytesPerRow;
       const dstBase = row * width;
       for (let col = 0; col < width; col += 1) {
         const o = srcBase + col * 4;
         const p = dstBase + col;
-        r[p] = padded[o] / 255;
-        g[p] = padded[o + 1] / 255;
-        b[p] = padded[o + 2] / 255;
+        r[p] = byteToF32[padded[o]!]!;
+        g[p] = byteToF32[padded[o + 1]!]!;
+        b[p] = byteToF32[padded[o + 2]!]!;
+      }
+    }
+    return { data, channels: 3 };
+  }
+
+  // f16 planar: quantised table + Uint16 fast path (same saturation rule as
+  // unpackReadback: NaN -> 1, clamp to [0,1], quantised through 8-bit first
+  // so the result stays bit-identical to the two-step chain).
+  const qlut = ensureF16Tables().qf32;
+  const u16 = uint16ViewOf(padded);
+  if (u16) {
+    const strideU16 = bytesPerRow / 2;
+    for (let row = 0; row < height; row += 1) {
+      const srcRow = row * strideU16;
+      const dstBase = row * width;
+      for (let col = 0; col < width; col += 1) {
+        const srcU = srcRow + col * 4;
+        const p = dstBase + col;
+        r[p] = qlut[u16[srcU]!]!;
+        g[p] = qlut[u16[srcU + 1]!]!;
+        b[p] = qlut[u16[srcU + 2]!]!;
       }
     }
     return { data, channels: 3 };
@@ -204,18 +329,9 @@ export function unpackReadbackToPlanarRgb(
     for (let col = 0; col < width; col += 1) {
       const o = srcBase + col * 8;
       const p = dstBase + col;
-      // Same saturation rule as unpackReadback: NaN -> 1, clamp to [0,1].
-      // Quantising through 8-bit first keeps the result bit-identical to the
-      // two-step chain (round(v*255)/255), which the tests pin down.
-      for (let channel = 0; channel < 3; channel += 1) {
-        const bits = view.getUint16(o + channel * 2, true);
-        const value = decodeFloat16(bits);
-        const clamped = Number.isNaN(value) ? 1 : Math.min(1, Math.max(0, value));
-        const quantised = Math.round(clamped * 255) / 255;
-        if (channel === 0) r[p] = quantised;
-        else if (channel === 1) g[p] = quantised;
-        else b[p] = quantised;
-      }
+      r[p] = qlut[view.getUint16(o, true)]!;
+      g[p] = qlut[view.getUint16(o + 2, true)]!;
+      b[p] = qlut[view.getUint16(o + 4, true)]!;
     }
   }
   return { data, channels: 3 };

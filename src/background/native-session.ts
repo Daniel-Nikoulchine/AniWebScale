@@ -96,7 +96,11 @@ export class NativeSession {
   constructor(deps: SessionDependencies) {
     this.store = new NativeSessionStore();
     this.bridge = new NativeBridge();
-    this.transport = new NativeSessionTransport(this.bridge, (event, client) => this.routeNativeEvent(event, client));
+    // The transport drops the handler return, so a rejection here would be
+    // an MV3 unhandled rejection — catch it into a warning instead.
+    this.transport = new NativeSessionTransport(this.bridge, (event, client) => this.routeNativeEvent(event, client).catch(error => {
+      console.warn('[NativeSession] host event handling failed:', error);
+    }));
     this.deps = deps;
   }
 
@@ -151,6 +155,17 @@ export class NativeSession {
   /** Run a state transition without overlapping another. */
   private runSerialized<T>(operation: () => Promise<T>): Promise<T> {
     return this.deps.serialized(operation);
+  }
+
+  /**
+   * Fire-and-forget serialized stop with a rejection handler. Bare `void
+   * runSerialized(...)` drops the operation promise and turns a mid-cleanup
+   * failure into an MV3 unhandled rejection.
+   */
+  private runStopTask(promise: Promise<unknown>, label: string): void {
+    promise.catch(error => {
+      console.warn(`[NativeSession] ${label} failed:`, error);
+    });
   }
 
   /** Claim a video enhancement (serialized). */
@@ -441,7 +456,7 @@ export class NativeSession {
       };
       if (!event.requestId?.startsWith('playback-')) await this.sendSessionEvent(session, event);
       if (event.state === 'failed' || event.state === 'stopped') {
-        void this.runSerialized(() => this.stopNativeSession(event.message ?? event.state, false, true, session.sessionId));
+        this.runStopTask(this.runSerialized(() => this.stopNativeSession(event.message ?? event.state, false, true, session.sessionId)), 'stopping the session on host status');
       }
       return;
     }
@@ -453,14 +468,14 @@ export class NativeSession {
         // A renderer error invalidates the capture surface even when the host
         // classifies it as theoretically recoverable. Use the same idempotent
         // restore path for device loss, capture loss, and fatal protocol errors.
-        void this.runSerialized(() => this.stopNativeSession(event.message, false, true, session.sessionId));
+        this.runStopTask(this.runSerialized(() => this.stopNativeSession(event.message, false, true, session.sessionId)), 'stopping the session on host error');
       }
       return;
     }
 
     if (event.type === 'stopped' && session && event.sessionId === session.sessionId) {
       await this.sendSessionEvent(session, event);
-      void this.runSerialized(() => this.stopNativeSession(event.reason, false, true, session.sessionId));
+      this.runStopTask(this.runSerialized(() => this.stopNativeSession(event.reason, false, true, session.sessionId)), 'stopping the session on host stop');
     }
   }
 

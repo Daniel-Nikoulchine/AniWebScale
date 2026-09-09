@@ -32,8 +32,11 @@ const inputBridge = new NativeInputBridge(isolation);
  */
 // Ring buffer of recent content-script log lines; E2E runners pull it via
 // the bridge 'get-logs' command (CustomEvents do NOT cross worlds on
-// Firefox, so push-based forwarding silently fails there).
+// Firefox, so push-based forwarding silently fails there). Sized so a full
+// verbose run (build stamp first, verdict last) survives until the pull:
+// at 200 the stamp was evicted before GET_LOGS on long runs.
 const E2E_LOG_BUFFER: string[] = [];
+const E2E_LOG_BUFFER_CAP = 2000;
 
 /**
  * Compartment-safe single-arg formatting for the E2E log ring: Firefox
@@ -70,7 +73,7 @@ function installLogForwarder(): void {
             text = '<unreadable log args>';
           }
           E2E_LOG_BUFFER.push(`[${level}] ${text}`);
-          if (E2E_LOG_BUFFER.length > 200) E2E_LOG_BUFFER.shift();
+          if (E2E_LOG_BUFFER.length > E2E_LOG_BUFFER_CAP) E2E_LOG_BUFFER.shift();
           original(...args);
         },
         writable: true,
@@ -94,10 +97,28 @@ function installLocalE2ETestBridge(): void {
     void (async () => {
       if (data.action === E2E_BRIDGE_ACTIONS.CONFIGURE) {
         if (data.forceNoAdapter === true && navigator.gpu) {
+          // Stash the original so a later case can restore the real adapter:
+          // a permanent null would pollute every subsequent case in this page.
+          const gpu = navigator.gpu as unknown as Record<string, unknown>;
+          if (gpu.__aniwebscale_origRequestAdapter === undefined) {
+            // .bind() keeps the adapter as `this`: a bare method reference
+            // would later run with undefined `this` when restored.
+            gpu.__aniwebscale_origRequestAdapter = navigator.gpu.requestAdapter.bind(navigator.gpu);
+          }
           Object.defineProperty(navigator.gpu, 'requestAdapter', {
             configurable: true,
             value: async () => null,
           });
+        } else if (data.forceNoAdapter !== true && navigator.gpu) {
+          const gpu = navigator.gpu as unknown as Record<string, unknown>;
+          const original = gpu.__aniwebscale_origRequestAdapter;
+          if (typeof original === 'function') {
+            Object.defineProperty(navigator.gpu, 'requestAdapter', {
+              configurable: true,
+              value: original,
+            });
+            delete gpu.__aniwebscale_origRequestAdapter;
+          }
         }
         await chrome.storage.local.set({
           mode: 'A', quality: 'M', output: 'auto', backend: 'webgpu', statsEnabled: true,

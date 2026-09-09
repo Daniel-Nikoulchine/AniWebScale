@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  decideCropPaste,
   decideFrameContent,
   planCropGeometry,
   shouldHoldPresentedResult,
@@ -152,5 +153,34 @@ describe('still-frame hold gate', () => {
   it('distinguishes inference shapes in the geometry key', () => {
     const crop = { x: 0, y: 0, width: 64, height: 64 };
     expect(stillframeGeometryKey(64, 64, crop)).not.toBe(stillframeGeometryKey(60, 64, crop));
+  });
+});
+
+describe('decideCropPaste', () => {
+  it('pastes exactly fitting results at the rounded origin', () => {
+    // 853-wide pillarbox content onto a 1280 target: the odd-width rounding
+    // used to throw on every cropped frame.
+    expect(decideCropPaste({ x: 107, y: 0, width: 640, height: 480 }, 853, 480, 1280, 720, 960, 720))
+      .toEqual({ kind: 'paste', paste: { ox: 161, oy: 0 } });
+  });
+
+  it('shifts a 1px rounding overshoot back inside', () => {
+    expect(decideCropPaste({ x: 10, y: 0, width: 90, height: 10 }, 100, 10, 1000, 100, 902, 100))
+      .toEqual({ kind: 'paste', paste: { ox: 98, oy: 0 } });
+  });
+
+  it('skips unpresentable bytes instead of throwing', () => {
+    // Main-thread crop result (full 4x of the crop) meeting a target-sized
+    // texture after the runner died: inference succeeded, the bytes just
+    // cannot be presented here.
+    expect(decideCropPaste({ x: 0, y: 0, width: 853, height: 480 }, 853, 480, 1280, 720, 3412, 1920))
+      .toEqual({ kind: 'skip' });
+    expect(decideCropPaste({ x: 10, y: 0, width: 90, height: 10 }, 100, 10, 1000, 100, 903, 100))
+      .toEqual({ kind: 'skip' });
+  });
+
+  it('throws on impossible negative origins', () => {
+    expect(() => decideCropPaste({ x: -5, y: 0, width: 90, height: 10 }, 100, 10, 1000, 100, 360, 40))
+      .toThrow();
   });
 });

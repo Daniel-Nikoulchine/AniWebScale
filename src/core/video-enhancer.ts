@@ -1029,6 +1029,12 @@ export class VideoEnhancer {
 
   private async reconcileFullscreen(revision: number): Promise<void> {
     if (this.destroyed || revision !== this.fullscreenRevision) return;
+    // A detached video (stashed across a node swap) must neither start nor
+    // stop here: the election below already excludes disconnected videos, so
+    // without this guard every timeupdate/scroll during the stash TTL would
+    // take the stop branch and tear down the backend the stash preserves.
+    // reattach() reschedules a reconcile once the new node is connected.
+    if (!this.video.isConnected) return;
     let settings: Anime4KWebExtSettings;
     try {
       settings = this.currentSettings ?? await getSettings();

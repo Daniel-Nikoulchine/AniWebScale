@@ -13,6 +13,10 @@ export function migrateNativeSessionMetadata(session: {
   version?: unknown;
   captureKind?: unknown;
 }): { version: typeof NATIVE_SESSION_VERSION; captureKind: NativeCaptureKind } | null {
+  // Callers feed parsed storage JSON: a corrupt entry can be null or a
+  // primitive, which must migrate to null (no restore) instead of throwing
+  // a TypeError on the property read below.
+  if (!session || typeof session !== 'object') return null;
   if (session.version !== 1 && session.version !== 2 && session.version !== NATIVE_SESSION_VERSION) {
     return null;
   }

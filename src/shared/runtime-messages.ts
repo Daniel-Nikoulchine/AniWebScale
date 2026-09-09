@@ -1,5 +1,6 @@
 import {
   isNativeConfiguration,
+  isNativeEvent,
   isNativeMediaCommandName,
   isNativePointerEventPayload,
   type NativeConfiguration,
@@ -428,8 +429,11 @@ export function parseFrameMessage(value: unknown): FrameMessageParseResult {
   const type = value.type;
 
   switch (type) {
-    case 'ANIME4K_FORCE_STOP':
-      return { kind: 'message', message: { type, videoId: asString(value.videoId) ?? '' } };
+    case 'ANIME4K_FORCE_STOP': {
+      const videoId = asString(value.videoId);
+      if (videoId === undefined) return frameInvalid(type, 'Force-stop without a video id.');
+      return { kind: 'message', message: { type, videoId } };
+    }
     case 'URL_UPDATED':
       return { kind: 'message', message: { type, url: asString(value.url) } };
     case 'NATIVE_CONSENT_REQUEST':
@@ -476,33 +480,41 @@ export function parseFrameMessage(value: unknown): FrameMessageParseResult {
         },
       };
     case 'NATIVE_POINTER_EVENT':
+      // Mirrors the runtime-direction NATIVE_POINTER gate above: coordinates
+      // must be finite and normalized, otherwise NaN would flow into the
+      // input bridge (whose clamp maps NaN to the video origin — a phantom
+      // click) instead of an explicit invalid verdict.
+      return isNativePointerEventPayload(value)
+        ? {
+            kind: 'message',
+            message: {
+              type,
+              event: value.event,
+              x: value.x,
+              y: value.y,
+              button: asFiniteNumber(value.button),
+              buttons: asFiniteNumber(value.buttons),
+              deltaX: asFiniteNumber(value.deltaX),
+              deltaY: asFiniteNumber(value.deltaY),
+              shiftKey: typeof value.shiftKey === 'boolean' ? value.shiftKey : undefined,
+              ctrlKey: typeof value.ctrlKey === 'boolean' ? value.ctrlKey : undefined,
+              altKey: typeof value.altKey === 'boolean' ? value.altKey : undefined,
+            },
+          }
+        : frameInvalid(type, 'Invalid native pointer event.');
+    case 'NATIVE_MEDIA_COMMAND_EVENT': {
+      if (!isNativeMediaCommandName(value.command)) return frameInvalid(type, 'Invalid media command.');
       return {
         kind: 'message',
         message: {
           type,
-          event: String(value.event ?? ''),
-          x: Number(value.x),
-          y: Number(value.y),
-          button: asFiniteNumber(value.button),
-          buttons: asFiniteNumber(value.buttons),
-          deltaX: asFiniteNumber(value.deltaX),
-          deltaY: asFiniteNumber(value.deltaY),
-          shiftKey: typeof value.shiftKey === 'boolean' ? value.shiftKey : undefined,
-          ctrlKey: typeof value.ctrlKey === 'boolean' ? value.ctrlKey : undefined,
-          altKey: typeof value.altKey === 'boolean' ? value.altKey : undefined,
-        },
-      };
-    case 'NATIVE_MEDIA_COMMAND_EVENT':
-      return {
-        kind: 'message',
-        message: {
-          type,
-          command: String(value.command ?? ''),
+          command: value.command,
           value: asFiniteNumber(value.value),
         },
       };
+    }
     case 'NATIVE_SESSION_EVENT':
-      return { kind: 'message', message: { type, event: value.event as NativeEvent | undefined } };
+      return { kind: 'message', message: { type, event: isNativeEvent(value.event) ? value.event : undefined } };
     case 'SITE_ACCESS_RESULT': {
       const outcome = value.outcome === 'granted' || value.outcome === 'denied' ? value.outcome : 'failed';
       return {
@@ -594,9 +606,14 @@ export interface NativeFallbackResponseValue {
 export function parseNativeFallbackResponse(value: unknown): NativeFallbackResponseValue {
   if (!value || typeof value !== 'object') return { ok: false };
   const record = value as Record<string, unknown>;
+  // Whitelist like parseSiteAccessIframeResponse above: an unknown status
+  // must not masquerade as a known outcome downstream.
+  const status = record.status === 'started' || record.status === 'unavailable' || record.status === 'denied'
+    ? record.status
+    : undefined;
   return {
     ok: record.ok === true,
-    ...(typeof record.status === 'string' ? { status: record.status as NativeFallbackResponseValue['status'] } : {}),
+    ...(status !== undefined ? { status } : {}),
     ...(typeof record.message === 'string' ? { message: record.message } : {}),
     ...(typeof record.sessionId === 'string' ? { sessionId: record.sessionId } : {}),
   };

@@ -227,11 +227,23 @@ export function stackTilesToBatch(inputRgb, sourceWidth, sourceHeight, tiles) {
   const tile = tiles[0];
   const tilePixels = tile.width * tile.height;
   const batch = new Float32Array(tiles.length * 3 * tilePixels);
+  const sourcePixels = sourceWidth * sourceHeight;
+  // Direct row copies into the batch backing (no per-tile intermediate
+  // allocation + second copy: extractTilePlanar + batch.set touched every
+  // tile pixel twice and GC'd a 3MB buffer per tile at 720p). Dimensions
+  // stay the first tile's (uniform batches by construction), exactly like
+  // the extractTilePlanar call this replaces.
   for (let b = 0; b < tiles.length; b += 1) {
-    batch.set(
-      extractTilePlanar(inputRgb, sourceWidth, sourceHeight, tiles[b].x, tiles[b].y, tile.width, tile.height),
-      b * 3 * tilePixels,
-    );
+    const t = tiles[b];
+    const base = b * 3 * tilePixels;
+    for (let c = 0; c < 3; c += 1) {
+      const srcPlaneOffset = c * sourcePixels;
+      const dstPlaneOffset = base + c * tilePixels;
+      for (let row = 0; row < tile.height; row += 1) {
+        const srcOffset = srcPlaneOffset + (t.y + row) * sourceWidth + t.x;
+        batch.set(inputRgb.subarray(srcOffset, srcOffset + tile.width), dstPlaneOffset + row * tile.width);
+      }
+    }
   }
   return batch;
 }
@@ -249,13 +261,7 @@ export function composeTilesToRgba8(tiles, outWidth, outHeight, featherWindow) {
   const acc = new Float32Array(3 * outPixels);
   const weights = new Float32Array(outPixels);
   const rgba = new Uint8Array(4 * outPixels);
-  const ramp = (length) => {
-    const r = new Float32Array(length);
-    for (let i = 0; i < length; i += 1) {
-      r[i] = Math.min(Math.min(i, length - 1 - i) + 1, featherWindow);
-    }
-    return r;
-  };
+  const ramp = (length) => cachedFeatherRamp(length, featherWindow);
   for (const tile of tiles) {
     const upW = tile.width * 4;
     const upH = tile.height * 4;
@@ -282,12 +288,36 @@ export function composeTilesToRgba8(tiles, outWidth, outHeight, featherWindow) {
   }
   for (let i = 0; i < outPixels; i += 1) {
     const w = weights[i] || 1;
-    rgba[i * 4] = Math.round(Math.min(1, Math.max(0, acc[i] / w)) * 255);
-    rgba[i * 4 + 1] = Math.round(Math.min(1, Math.max(0, acc[outPixels + i] / w)) * 255);
-    rgba[i * 4 + 2] = Math.round(Math.min(1, Math.max(0, acc[2 * outPixels + i] / w)) * 255);
+    // Branchless clamp + truncate-pack, bit-identical to the Math.round /
+    // Math.min / Math.max chain (see realesrgan-tensor.ts).
+    const vr = acc[i] / w;
+    const vg = acc[outPixels + i] / w;
+    const vb = acc[2 * outPixels + i] / w;
+    rgba[i * 4] = ((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0;
+    rgba[i * 4 + 1] = ((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0;
+    rgba[i * 4 + 2] = ((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0;
     rgba[i * 4 + 3] = 255;
   }
   return rgba;
+}
+
+// Per-(length, window) feather ramps for the CPU compose above: tile
+// geometries repeat every frame, so rebuilding the same ramps per tile per
+// frame is pure GC churn. Read-only shares (compose only reads them).
+const featherRampCache = new Map();
+function cachedFeatherRamp(length, featherWindow) {
+  const key = length * 4096 + featherWindow;
+  const hit = featherRampCache.get(key);
+  if (hit) return hit;
+  const r = new Float32Array(length);
+  for (let i = 0; i < length; i += 1) {
+    r[i] = Math.min(Math.min(i, length - 1 - i) + 1, featherWindow);
+  }
+  if (featherRampCache.size >= 64) featherRampCache.clear();
+  // Shared read-only (see realesrgan-tensor.ts): no Object.freeze, it
+  // throws on TypedArrays with elements — the guard would be the bug.
+  featherRampCache.set(key, r);
+  return r;
 }
 
 /** Slice a batched [B,3,4h,4w] planar float array into per-tile views. */
@@ -313,9 +343,12 @@ export function composeSingleTileToRgba8(rgb, width, height) {
   }
   const rgba = new Uint8Array(4 * pixels);
   for (let i = 0; i < pixels; i += 1) {
-    rgba[i * 4] = Math.round(Math.min(1, Math.max(0, rgb[i])) * 255);
-    rgba[i * 4 + 1] = Math.round(Math.min(1, Math.max(0, rgb[i + pixels])) * 255);
-    rgba[i * 4 + 2] = Math.round(Math.min(1, Math.max(0, rgb[i + 2 * pixels])) * 255);
+    const vr = rgb[i];
+    const vg = rgb[i + pixels];
+    const vb = rgb[i + 2 * pixels];
+    rgba[i * 4] = ((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0;
+    rgba[i * 4 + 1] = ((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0;
+    rgba[i * 4 + 2] = ((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0;
     rgba[i * 4 + 3] = 255;
   }
   return rgba;
@@ -326,10 +359,48 @@ export function composeSingleTileToRgba8(rgb, width, height) {
  * averages the source pixels overlapped by its box, with fractional edge
  * coverage weighted in. Uniform regions stay exactly uniform; identity
  * dimensions return a copy. Mirrors the native host's transport-sized
- * output so worker and native frames match pixel for pixel.
+ * output so worker and native frames match pixel for pixel — including the
+ * alpha rule: output is always opaque (255), like the host's box pass.
+ * Every production input is opaque already (all writers set alpha 255),
+ * so this is bit-identical on real frames while keeping the two engines
+ * aligned by construction instead of by input luck.
  */
 export function downscaleRgba8Box(rgba, srcWidth, srcHeight, dstWidth, dstHeight) {
   const out = new Uint8Array(dstWidth * dstHeight * 4);
+  // Integer fast lane for exact power-of-two factors (mirrors the native
+  // host's tiled transport-downscale): every weight is exactly 1.0 over a
+  // power-of-two area, so integer averaging is bit-identical to the float
+  // box below while skipping per-pixel fractional math.
+  const isPow2 = (v) => v > 0 && (v & (v - 1)) === 0;
+  if (srcWidth % dstWidth === 0 && srcHeight % dstHeight === 0
+      && isPow2(srcWidth / dstWidth) && isPow2(srcHeight / dstHeight)) {
+    const fx = srcWidth / dstWidth;
+    const fy = srcHeight / dstHeight;
+    const area = fx * fy;
+    const half = area / 2;
+    for (let dy = 0; dy < dstHeight; dy += 1) {
+      for (let dx = 0; dx < dstWidth; dx += 1) {
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        for (let sy = 0; sy < fy; sy += 1) {
+          const srcRow = ((dy * fy + sy) * srcWidth + dx * fx) * 4;
+          for (let sx = 0; sx < fx; sx += 1) {
+            const srcOffset = srcRow + sx * 4;
+            r += rgba[srcOffset];
+            g += rgba[srcOffset + 1];
+            b += rgba[srcOffset + 2];
+          }
+        }
+        const dstOffset = (dy * dstWidth + dx) * 4;
+        out[dstOffset] = (r + half) / area | 0;
+        out[dstOffset + 1] = (g + half) / area | 0;
+        out[dstOffset + 2] = (b + half) / area | 0;
+        out[dstOffset + 3] = 255;
+      }
+    }
+    return out;
+  }
   for (let dy = 0; dy < dstHeight; dy += 1) {
     const yStart = (dy * srcHeight) / dstHeight;
     const yEnd = ((dy + 1) * srcHeight) / dstHeight;
@@ -339,7 +410,6 @@ export function downscaleRgba8Box(rgba, srcWidth, srcHeight, dstWidth, dstHeight
       let r = 0;
       let g = 0;
       let b = 0;
-      let a = 0;
       let area = 0;
       for (let sy = Math.floor(yStart); sy < yEnd && sy < srcHeight; sy += 1) {
         const yOverlap = Math.min(sy + 1, yEnd) - Math.max(sy, yStart);
@@ -350,7 +420,6 @@ export function downscaleRgba8Box(rgba, srcWidth, srcHeight, dstWidth, dstHeight
           r += rgba[srcOffset] * weight;
           g += rgba[srcOffset + 1] * weight;
           b += rgba[srcOffset + 2] * weight;
-          a += rgba[srcOffset + 3] * weight;
           area += weight;
         }
       }
@@ -358,7 +427,7 @@ export function downscaleRgba8Box(rgba, srcWidth, srcHeight, dstWidth, dstHeight
       out[dstOffset] = Math.round(r / area);
       out[dstOffset + 1] = Math.round(g / area);
       out[dstOffset + 2] = Math.round(b / area);
-      out[dstOffset + 3] = Math.round(a / area);
+      out[dstOffset + 3] = 255;
     }
   }
   return out;
@@ -375,8 +444,21 @@ async function tensorFloats(tensor) {
 // --- ORT session management -------------------------------------------------
 
 let ort = null;
-// cacheKey -> { session, ep, preferGpuOutputs, url }
+// cacheKey -> { session, ep, preferGpuOutputs, url }. Geometries per video
+// are few (fixed frame size + hysteretic crops), but the worker outlives
+// pipelines across SPA navigations, so cap the map: evict the stalest entry
+// past the cap (a revisit just rebuilds it — cost, never incorrectness).
 const sessions = new Map();
+const MAX_CACHED_SESSIONS = 16;
+function cacheSession(cacheKey, entry) {
+  if (sessions.has(cacheKey)) sessions.delete(cacheKey);
+  sessions.set(cacheKey, entry);
+  while (sessions.size > MAX_CACHED_SESSIONS) {
+    const oldest = sessions.keys().next();
+    if (oldest.done) break;
+    sessions.delete(oldest.value);
+  }
+}
 
 /**
  * Drop every cached session whose cache key pins this base model URL. The
@@ -384,10 +466,16 @@ const sessions = new Map();
  * gpu-buffer flag), so a prefix match covers all shape/gpu-buffer variants
  * created from that model. This is the ONLY sanctioned way to invalidate the
  * session cache; nothing type-checks the key format, so keep purges here.
+ * Exported for unit tests (boundary matching); production callers are the
+ * shape-pinned rebuild closures below.
  */
-function purgeModelSessions(modelUrl) {
+export function purgeModelSessions(modelUrl) {
+  // Boundary-anchored match: the key is `modelUrl|fp16|shapes|flag`, so a
+  // bare prefix would also evict a future model whose URL merely extends
+  // this one (e.g. `…/x4.onnx` vs `…/x4.onnx2`).
+  const prefix = `${modelUrl}|`;
   for (const key of [...sessions.keys()]) {
-    if (key.startsWith(modelUrl)) sessions.delete(key);
+    if (key === modelUrl || key.startsWith(prefix)) sessions.delete(key);
   }
 }
 
@@ -459,7 +547,12 @@ export async function getSession(modelUrl, modelUrlFp16, inputBatch, inputHeight
     wantGpuBuffer ? 'gpu-buffer' : 'gpu',
   ].join('|');
   const cached = sessions.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    // Refresh recency so the steady-state session is never the eviction pick.
+    sessions.delete(cacheKey);
+    sessions.set(cacheKey, cached);
+    return cached;
+  }
   if (!ort) throw new Error('worker not initialised');
 
   const attempts = [];
@@ -479,6 +572,10 @@ export async function getSession(modelUrl, modelUrlFp16, inputBatch, inputHeight
 
   let lastError = null;
   for (const attempt of attempts) {
+    // Skip fp16 attempts the moment an earlier one proved the model
+    // unrunnable (set just below); the second fp16 variant would fail the
+    // same shader compile.
+    if (fp16Disabled && modelUrlFp16 && attempt.url === modelUrlFp16) continue;
     try {
       const pendingCreate = ort.InferenceSession.create(attempt.url, {
         executionProviders: ['webgpu'],
@@ -493,25 +590,56 @@ export async function getSession(modelUrl, modelUrlFp16, inputBatch, inputHeight
           outWidth: outputWidth,
         }),
       });
-      // A late success after the timeout below dies uncached instead of
-      // surfacing as an unhandled rejection.
-      void pendingCreate.catch(() => {});
-      const session = await Promise.race([
-        pendingCreate,
-        new Promise((_, reject) => setTimeout(
-          () => reject(workerError(WORKER_REPLY_TIMEOUT, `RealESRGAN session creation timed out after ${sessionCreateTimeoutMs}ms (${attempt.url})`)),
-          sessionCreateTimeoutMs,
-        )),
-      ]);
+      // A late success after the timeout below is adopted when the key is
+      // still unserved and policy still allows the URL (an fp16 attempt
+      // that meanwhile proved unrunnable stays dropped); otherwise it is
+      // released with the race instead of lingering uncached.
+      let timedOut = false;
+      void pendingCreate.then(
+        late => {
+          if (!timedOut || sessions.has(cacheKey)) return;
+          if (fp16Disabled && attempt.url === modelUrlFp16) return;
+          cacheSession(cacheKey, {
+            session: late,
+            ep: 'webgpu',
+            preferGpuOutputs: attempt.useGpuBuffer,
+            url: attempt.url,
+          });
+        },
+        () => {},
+      );
+      let timer;
+      let session;
+      try {
+        session = await Promise.race([
+          pendingCreate,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              reject(workerError(WORKER_REPLY_TIMEOUT, `RealESRGAN session creation timed out after ${sessionCreateTimeoutMs}ms (${attempt.url})`));
+            }, sessionCreateTimeoutMs);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
       const entry = {
         session,
         ep: 'webgpu',
         preferGpuOutputs: attempt.useGpuBuffer,
         url: attempt.url,
       };
-      sessions.set(cacheKey, entry);
+      cacheSession(cacheKey, entry);
       return entry;
     } catch (error) {
+      // A create-time shader failure proves the fp16 model unrunnable here,
+      // exactly like the run-time failure the outer cascade handles: disable
+      // it worker-wide now instead of paying a doomed fp16 create per shape.
+      if (!fp16Disabled && modelUrlFp16 && modelUrlFp16 !== modelUrl
+        && attempt.url === modelUrlFp16 && isShaderCompileError(error)) {
+        fp16Disabled = true;
+        purgeSessionsResolvedTo(modelUrlFp16);
+      }
       lastError = error;
     }
   }
@@ -561,11 +689,19 @@ function isShapePinnedBufferError(error) {
 async function runShapePinned(session, inputName, tensor, outputName, rebuildSession) {
   // Timeout guard: ORT WebGPU can hang after a poisoned gpu-buffer shape.
   // Don't wedge the worker for 30s; fail fast so pipeline can retry.
+  // The timer is cleared on settle so successful runs don't retain its
+  // closure for the full 8 s each.
   const RUN_TIMEOUT_MS = 8000;
-  const runWithTimeout = (sess) => Promise.race([
-    sess.run({ [inputName]: tensor }),
-    new Promise((_, reject) => setTimeout(() => reject(workerError(WORKER_REPLY_TIMEOUT, 'RealESRGAN session.run timed out after 8s')), RUN_TIMEOUT_MS)),
-  ]);
+  const runWithTimeout = (sess) => {
+    let timer;
+    const result = Promise.race([
+      sess.run({ [inputName]: tensor }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(workerError(WORKER_REPLY_TIMEOUT, 'RealESRGAN session.run timed out after 8s')), RUN_TIMEOUT_MS);
+      }),
+    ]);
+    return result.finally(() => clearTimeout(timer));
+  };
   try {
     return await runWithTimeout(session);
   } catch (error) {
@@ -586,8 +722,18 @@ function isShaderCompileError(error) {
 // Sticky batch downgrade (Hebel 2.2): one failed batched run (OOM/shape on
 // an untested device) must not cost a failed attempt on every frame; the
 // sequential loop below is proven and takes over for this worker's life.
+// Timeouts are NOT sticky evidence (transient slowness): they downgrade
+// only after repeated strikes, so one slow frame cannot retire batching.
 let batchedTilesDisabled = false;
 let batchedDowngradeLogged = false;
+let batchedTimeoutStreak = 0;
+const BATCHED_TIMEOUT_STRIKES = 3;
+
+/** Timeout-coded failures (transient slowness) vs batch-breaking ones. */
+function isBatchTimeout(error) {
+  return !!error && (error.replyCode === WORKER_REPLY_TIMEOUT
+    || (typeof error.message === 'string' && /timed out after \d+s/i.test(error.message)));
+}
 
 // --- WASM-SIMD compose (Hebel E5) --------------------------------------------
 // pixels.wasm (built from native/wasm-pixels) accelerates the feathered
@@ -597,9 +743,15 @@ let batchedDowngradeLogged = false;
 
 let pixelsWasmUrl = null;
 let pixelsModule = null;
-let pixelsLoadAttempted = false;
 let pixelsDowngradeLogged = false;
 let pixelsLoader = null;
+// In-flight load shared by concurrent first frames (single-flight), plus a
+// retry cooldown: one transient fetch hiccup must not disable wasm for the
+// worker's life, but a persistently broken URL must not cost a fetch per
+// frame either.
+let pixelsLoadPromise = null;
+let pixelsNextRetryAt = 0;
+const PIXELS_LOAD_RETRY_COOLDOWN_MS = 60_000;
 
 /** Injectable so tests can supply a fake module without WebAssembly. */
 export function __setPixelsLoaderForTests(loader) {
@@ -609,7 +761,6 @@ export function __setPixelsLoaderForTests(loader) {
 /** Injectable so tests can arm a fake module directly (bypasses fetch). */
 export function __setPixelsModuleForTests(mod) {
   pixelsModule = mod;
-  pixelsLoadAttempted = mod === null ? pixelsLoadAttempted : true;
 }
 
 const PIXELS_EXPORTS = ['memory', 'stage_ptr', 'compose_exec', 'compose_single_exec', 'compose_output_ptr', 'compose_output_len'];
@@ -623,8 +774,16 @@ async function defaultPixelsLoader(url) {
 }
 
 async function ensurePixelsModule() {
-  if (pixelsModule || pixelsLoadAttempted) return pixelsModule;
-  pixelsLoadAttempted = true;
+  if (pixelsModule) return pixelsModule;
+  if (pixelsLoadPromise) return pixelsLoadPromise;
+  if (Date.now() < pixelsNextRetryAt) return null;
+  pixelsLoadPromise = loadPixelsModule().finally(() => {
+    pixelsLoadPromise = null;
+  });
+  return pixelsLoadPromise;
+}
+
+async function loadPixelsModule() {
   try {
     if (!pixelsWasmUrl) return null;
     const load = pixelsLoader ?? defaultPixelsLoader;
@@ -636,6 +795,7 @@ async function ensurePixelsModule() {
   } catch (error) {
     console.warn('[RealESRGAN worker] pixels.wasm unavailable; JS compose fallback', error);
     pixelsModule = null;
+    pixelsNextRetryAt = Date.now() + PIXELS_LOAD_RETRY_COOLDOWN_MS;
   }
   return pixelsModule;
 }
@@ -724,7 +884,13 @@ async function composeFrameOutput(inferred, planTiles, tileW, tileH, outWidth, o
   }
   return {
     rgba: composeTilesToRgba8(inferred.tiles, outWidth, outHeight, featherWindow),
-    path: planTiles.length > 1 ? 'cpu-tiles-batched-gpu' : 'cpu-tiles-gpu',
+    // `batched: null` marks the post-downgrade sequential lane: same
+    // arithmetic, but one session.run per tile instead of one batched
+    // launch. Label it distinctly — the old shared 'cpu-tiles-batched-gpu'
+    // blinded E2E/log diagnostics to the downgrade.
+    path: planTiles.length > 1
+      ? (inferred.batched ? 'cpu-tiles-batched-gpu' : 'cpu-tiles-sequential-gpu')
+      : 'cpu-tiles-gpu',
   };
 }
 
@@ -748,9 +914,14 @@ async function runBatchedTiles(message, tiles, tileW, tileH, probe) {
   const tensor = new ort.Tensor('float32', batch, [batchCount, 3, tileH, tileW]);
   const result = await runShapePinned(session, inputName, tensor, outputName, async () => {
     purgeModelSessions(message.modelUrl);
-    return await getSession(
+    const fresh = await getSession(
       message.modelUrl, message.modelUrlFp16, batchCount, tileH, tileW, tileH * 4, tileW * 4, false,
     );
+    // The rebuild may resolve to a different precision than the poisoned
+    // session (fp16 create flaky on retry, fp32 fallback): the caller's
+    // served-precision report must see the session that actually served.
+    probe.url = fresh.url;
+    return fresh;
   });
   const output = result[outputName];
   if (!output) throw new Error('RealESRGAN inference returned no output tensor.');
@@ -776,9 +947,11 @@ async function runSequentialTiles(message, tiles, tileW, tileH, probe) {
     const tensor = new ort.Tensor('float32', tileRgb, [1, 3, tile.height, tile.width]);
     const result = await runShapePinned(session, inputName, tensor, outputName, async () => {
       purgeModelSessions(message.modelUrl);
-      return await getSession(
+      const fresh = await getSession(
         message.modelUrl, message.modelUrlFp16, 1, tileH, tileW, tileH * 4, tileW * 4, false,
       );
+      probe.url = fresh.url;
+      return fresh;
     });
     const output = result[outputName];
     if (!output) throw new Error('RealESRGAN inference returned no output tensor.');
@@ -828,19 +1001,29 @@ export async function handleInfer(message) {
         if (!batchedTilesDisabled) {
           try {
             inferred = await runBatchedTiles(message, tiles, tileW, tileH, probe);
+            batchedTimeoutStreak = 0;
           } catch (batchError) {
             // Shader failures belong to the fp16 cascade below, not to
             // batching: rethrow so the attempt is retried on fp32 with
             // batching still enabled.
             if (isShaderCompileError(batchError)) throw batchError;
-            // Sticky sequential downgrade for anything else (OOM/shape):
-            // the same frame is served sequentially right away, later frames
-            // skip the doomed batch attempt entirely.
-            if (!batchedDowngradeLogged) {
-              batchedDowngradeLogged = true;
-              console.warn('[RealESRGAN worker] batched tiles failed; sequential fallback for this worker life', batchError);
+            if (isBatchTimeout(batchError) && batchedTimeoutStreak + 1 < BATCHED_TIMEOUT_STRIKES) {
+              // One slow frame is transient slowness, not proof batching is
+              // broken: serve this frame sequentially but keep batching
+              // armed for the next frame.
+              batchedTimeoutStreak += 1;
+            } else {
+              // Sticky sequential downgrade for anything else (OOM/shape, or
+              // repeated timeouts): the same frame is served sequentially
+              // right away, later frames skip the doomed batch attempt
+              // entirely.
+              if (!batchedDowngradeLogged) {
+                batchedDowngradeLogged = true;
+                console.warn('[RealESRGAN worker] batched tiles failed; sequential fallback for this worker life', batchError);
+              }
+              batchedTilesDisabled = true;
+              batchedTimeoutStreak = 0;
             }
-            batchedTilesDisabled = true;
             inferred = {
               tiles: await runSequentialTiles(message, tiles, tileW, tileH, probe),
               batched: null,
@@ -892,7 +1075,9 @@ export async function handleInfer(message) {
       rgba = downscaleRgba8Box(rgba, outWidth, outHeight, targetWidth, targetHeight);
       finalWidth = targetWidth;
       finalHeight = targetHeight;
-      lastFramePath = 'cpu-tiles-gpu-downscaled';
+      // Suffix, not a rename: keep which lane served (wasm/single/batched/
+      // sequential) visible on downscaled frames too.
+      lastFramePath = `${lastFramePath}-downscaled`;
     }
 
     self.postMessage(
@@ -923,9 +1108,11 @@ export function resetWorkerStateForTests() {
   fp16Disabled = false;
   batchedTilesDisabled = false;
   batchedDowngradeLogged = false;
+  batchedTimeoutStreak = 0;
   pixelsWasmUrl = null;
   pixelsModule = null;
-  pixelsLoadAttempted = false;
+  pixelsLoadPromise = null;
+  pixelsNextRetryAt = 0;
   pixelsDowngradeLogged = false;
   sessionCreateTimeoutMs = 30000;
 }

@@ -62,4 +62,19 @@ describe('runner guard', () => {
     expect(guard.dead).toBe(true);
     expect(onRunnerDead).toHaveBeenCalledOnce();
   });
+
+  it('propagates the runner error and still warms the fallback when escalation throws', async () => {
+    const warmFallback = vi.fn(async () => undefined);
+    const guard = new RealEsrganRunnerGuard({
+      maxTimeouts: 1,
+      onRunnerDead: () => { throw new Error('broker boom'); },
+      warmFallback,
+    });
+    const error = permanentError();
+    // The broker's error must not mask the runner's, and the fallback
+    // warmup must still run for the next frame.
+    await expect(guard.guard(async () => { throw error; })).rejects.toBe(error);
+    expect(guard.dead).toBe(true);
+    expect(warmFallback).toHaveBeenCalledOnce();
+  });
 });

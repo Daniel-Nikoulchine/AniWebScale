@@ -46,6 +46,7 @@ import {
 } from '../shared/realesrgan-letterbox';
 import { StillframeTracker } from '../shared/realesrgan-stillframe';
 import {
+  decideCropPaste,
   decideFrameContent,
   planCropGeometry,
   shouldHoldPresentedResult,
@@ -309,8 +310,13 @@ export function createRealEsrganPipelineClass(
     private firstResultLanded = false;
     // GPU tile composer for the MAIN-THREAD fallback path; null when compute
     // is unavailable. The CPU feathering pass remains the correctness
-    // reference. Mutable so a broken composer can be disabled at runtime.
+    // reference. Per-frame compose failures fall back to CPU for that frame
+    // only — the composer stays alive (an oversize frame must not retire it
+    // for later small frames); device recovery rebuilds it with the pipeline.
     private gpuComposer: RealEsrganGpuComposer | null;
+    // Consecutive GPU-compose throws; retires the composer at 3 so a
+    // permanently broken composer warns once instead of every frame.
+    private gpuComposeFailures = 0;
     // Runner offload (native Vulkan host or ORT worker); null on Firefox
     // when the worker file is missing or no runner could start. Mutable so
     // a broken runner can be disabled at runtime, falling back to the
@@ -378,6 +384,14 @@ export function createRealEsrganPipelineClass(
     // (the publish gate), which counts frames this pipeline actually presented
     // as dropped whenever an older job finishes before a newer one.
     private presentedDropped = 0;
+    // Consecutive unpresentable crop results (see presentCroppedResult):
+    // escalates into the fatal budget so a persistent geometry mismatch
+    // still fails over instead of skipping forever.
+    private consecutiveCropSkips = 0;
+    // Backlog veterans bailed before inference (both stale-skip exits call
+    // isResultCurrent, which only feeds the scheduler's unused droppedResults
+    // counter): counted here so getSkippedFrames sees every skipped arrival.
+    private staleSkippedFrames = 0;
     // Hebel 1.4: still-frame gate over the exact runner-input bytes.
     private readonly stillTracker = new StillframeTracker();
     // Provenance of the presented result for overlay stats and the
@@ -741,6 +755,26 @@ export function createRealEsrganPipelineClass(
       }
       this.slotStates[slot] = true;
       this.readbackSlot = (slot + 1) % slotCount;
+      try {
+        this.encodeReadbackCopy(encoder, slot, frame);
+      } catch (error) {
+        // A throwing encode (lost device, validation, still-mapped buffer)
+        // must not leak the claimed slot: afterSubmit() only releases slots
+        // with a pending entry, so without this the pipeline wedges into
+        // "no free slot" after stagingBufferCount such failures. The
+        // renderer counts the dropped frame; rethrow to keep that accounting.
+        this.slotStates[slot] = false;
+        this.scheduler.noteSkipped(frame);
+        this.noteSkip('queue');
+        throw error;
+      }
+    }
+
+    /**
+     * Encode the optional inference downscale plus the readback copy for a
+     * claimed slot, recording the pending entry for afterSubmit().
+     */
+    private encodeReadbackCopy(encoder: GPUCommandEncoder, slot: number, frame: number): void {
       const stagingBuffer = this.stagingBuffers[slot];
       let readbackSource = this.inputTexture;
       if (this.downscaleTexture && this.downscalePipeline && this.downscaleBindGroup) {
@@ -850,6 +884,7 @@ export function createRealEsrganPipelineClass(
       if (this.firstResultLanded && !this.destroyed
           && this.scheduler.newestInFlightFrame() - frame > STALE_SKIP_BEHIND) {
         this.scheduler.isResultCurrent(frame);
+        this.staleSkippedFrames += 1;
         // This return sits BEFORE the try/finally below, so release the
         // staging slot here — otherwise the skip itself leaks it.
         if (slotIndex >= 0) this.slotStates[slotIndex] = false;
@@ -1046,6 +1081,7 @@ export function createRealEsrganPipelineClass(
         if (this.firstResultLanded && !this.destroyed
             && this.scheduler.newestInFlightFrame() - frame > STALE_SKIP_BEHIND) {
           this.scheduler.isResultCurrent(frame);
+          this.staleSkippedFrames += 1;
           staleSkipped = true;
           return;
         }
@@ -1411,14 +1447,29 @@ export function createRealEsrganPipelineClass(
       if (this.gpuComposer) {
         try {
           if (this.gpuComposer.compose(tiled.tiles, tiled.outWidth, tiled.outHeight, tiled.featherWindow)) {
+            this.gpuComposeFailures = 0;
             return true;
           }
         } catch (error) {
-          // A broken composer (lost device, validation) must not drop the
-          // frame: disable it for good and fall through to the CPU path.
-          console.warn('[RealESRGAN] GPU compose failed; using CPU composer', error);
-          this.gpuComposer.destroy();
-          this.gpuComposer = null;
+          // Per-frame failure (oversize allocation beyond the binding
+          // limit, lost device): fall back to CPU for THIS frame but keep
+          // the composer alive — retiring it on one huge frame would
+          // permanently downgrade every later (small) frame. A permanently
+          // broken composer (lost device) retires after consecutive
+          // failures instead of warning on every frame forever; device
+          // recovery rebuilds the whole pipeline (composer included) anyway.
+          this.gpuComposeFailures += 1;
+          if (this.gpuComposeFailures >= 3) {
+            console.warn('[RealESRGAN] GPU compose failed repeatedly; retiring the composer', error);
+            try {
+              this.gpuComposer.destroy();
+            } catch {
+              // Release best-effort (see destroy()).
+            }
+            this.gpuComposer = null;
+          } else {
+            console.warn('[RealESRGAN] GPU compose failed for this frame; using CPU composer', error);
+          }
         }
       }
       const outPixels = tiled.outWidth * tiled.outHeight;
@@ -1444,6 +1495,8 @@ export function createRealEsrganPipelineClass(
       // to the same crop later must re-fill its bars instead of trusting
       // stale content pixels the full frame just overwrote.
       this.cropBarsKey = null;
+      // A presented full frame proves the geometry is healthy again.
+      this.consecutiveCropSkips = 0;
       this.writeRgbaSubview(rgba, width, height, 0, 0);
     }
 
@@ -1497,8 +1550,10 @@ export function createRealEsrganPipelineClass(
      * second independent rounding of the same rect — round(out*(x+w)/full) −
      * round(out*x/full) and round(target*infer/full) differ by 1px on odd
      * widths (e.g. 853→1280 pillarbox), which used to throw on every cropped
-     * frame. A mapping that does not fit is an inference error like any
-     * other size mismatch — it must never shear the presentation.
+     * frame. A mapping that does not fit at all (e.g. a main-thread crop
+     * result meeting a target-sized texture after the runner died) skips
+     * like a superseded result instead of burning the fatal budget on
+     * successfully inferred frames — it must never shear the presentation.
      *
      * `targetW/targetH` are the transport target the caller sent with this
      * inference (0 = full 4x): the result bytes must match them exactly.
@@ -1513,8 +1568,6 @@ export function createRealEsrganPipelineClass(
     ): void {
       const outW = this.outputWidth;
       const outH = this.outputHeight;
-      let ox = Math.round(outW * crop.x / this.inferenceWidth);
-      let oy = Math.round(outH * crop.y / this.inferenceHeight);
       // Size comes from the validated result, not from re-rounding the rect:
       // the runner was asked for exactly targetW/targetH (or the full 4x
       // content) and length-checked against it by the caller.
@@ -1525,22 +1578,25 @@ export function createRealEsrganPipelineClass(
         throw new Error(`RealESRGAN crop result ${width}x${height} does not match `
           + `its transport target ${rw}x${rh}.`);
       }
-      // Origin rounding can overshoot the far edge by 1px on odd splits
-      // (round(y)+round(h) vs round(y+h)): shift back inside instead of
-      // dropping the frame — subpixel, invisible, and the bar fill below
-      // uses the same rect so no seam can open. Anything larger is real.
-      if (ox < 0 || oy < 0) {
-        throw new Error(`RealESRGAN crop paste ${ox},${oy} ${rw}x${rh} does not fit `
-          + `in ${outW}x${outH}.`);
+      // Origin/size fit rides the pure geometry decision (unit-tested):
+      // ~1px rounding overshoot shifts back inside, unpresentable bytes
+      // skip like a superseded result instead of burning the fatal budget
+      // on a transient mismatch. A PERSISTENT mismatch (stale dims after a
+      // runner death: every frame unpresentable) escalates after the same
+      // budget as inference failures, so enhancement still fails over to
+      // the native path instead of skipping silently forever.
+      const decision = decideCropPaste(crop, this.inferenceWidth, this.inferenceHeight, outW, outH, rw, rh);
+      if (decision.kind === 'skip') {
+        this.presentedDropped += 1;
+        this.consecutiveCropSkips += 1;
+        if (this.consecutiveCropSkips >= FATAL_INFERENCE_FAILURES) {
+          throw new Error(`RealESRGAN crop result ${rw}x${rh} cannot be presented `
+            + `in ${outW}x${outH} (${this.consecutiveCropSkips} consecutive skips).`);
+        }
+        return;
       }
-      const overX = ox + rw - outW;
-      const overY = oy + rh - outH;
-      if (overX > 2 || overY > 2) {
-        throw new Error(`RealESRGAN crop paste ${ox},${oy} ${rw}x${rh} does not fit `
-          + `in ${outW}x${outH}.`);
-      }
-      if (overX > 0) ox -= overX;
-      if (overY > 0) oy -= overY;
+      this.consecutiveCropSkips = 0;
+      const { ox, oy } = decision.paste;
       this.writeRgbaSubview(rgba, width, height, ox, oy);
       this.ensureCropBarsFilled(crop, ox, oy, rw, rh);
     }
@@ -1743,12 +1799,13 @@ export function createRealEsrganPipelineClass(
 
     public getSkippedFrames(): number {
       // Frames the video produced while inference was busy (scheduler gaps),
-      // plus completed results discarded because a newer frame had already
-      // presented (claimPresentation refusals). The scheduler's own
-      // droppedResults is deliberately NOT used: its "newest submitted"
-      // watermark fires for frames this pipeline actually presented whenever
-      // an older job finishes before a newer one (routine at depth 2).
-      return this.scheduler.skippedFrames + this.presentedDropped;
+      // completed results discarded because a newer frame had already
+      // presented (claimPresentation refusals), plus backlog veterans bailed
+      // before inference (stale-skips). The scheduler's own droppedResults
+      // is deliberately NOT used: its "newest submitted" watermark fires for
+      // frames this pipeline actually presented whenever an older job
+      // finishes before a newer one (routine at depth 2).
+      return this.scheduler.skippedFrames + this.presentedDropped + this.staleSkippedFrames;
     }
   };
 }

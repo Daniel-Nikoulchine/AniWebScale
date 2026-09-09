@@ -29,6 +29,9 @@ function createBareEnhancer() {
     readyState: 1,
     videoWidth: 640,
     videoHeight: 360,
+    // Attached by default (production managed videos are connected except
+    // across the stash window); detached is set explicitly per test.
+    isConnected: true,
     mediaKeys: null,
     paused: false,
     ended: false,
@@ -360,6 +363,22 @@ describe('VideoEnhancer lifecycle transitions', () => {
     enhancer.destroy();
 
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('does not stop a detached (stashed) video on fullscreen reconcile', async () => {
+    // Stash window: the node is disconnected but the backend is deliberately
+    // alive. Without the isConnected guard the election excludes the video,
+    // the stop branch sees the live renderer and tears the session down.
+    const { enhancer, video } = createBareEnhancer();
+    enhancer.renderer = { destroy: vi.fn() } as unknown as Renderer;
+    enhancer.currentSettings = { ...DEFAULT_SETTINGS };
+    (video as unknown as Record<string, unknown>).isConnected = false;
+    const stop = vi.spyOn(enhancer, 'stopEnhancement').mockResolvedValue(undefined);
+
+    await (enhancer as unknown as { reconcileFullscreen(revision: number): Promise<void> })
+      .reconcileFullscreen(enhancer.fullscreenRevision);
+
+    expect(stop).not.toHaveBeenCalled();
   });
 
   it('cancels a pending fullscreen reconcile on explicit stop', async () => {

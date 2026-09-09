@@ -136,6 +136,49 @@ export function stillframeGeometryKey(inferWidth: number, inferHeight: number, c
   return `${inferWidth}x${inferHeight}:${contentRectKey(crop)}`;
 }
 
+export interface CropPaste {
+  ox: number;
+  oy: number;
+}
+
+export type CropPasteDecision =
+  /** Paste the validated result bytes at the (possibly shifted) origin. */
+  | { kind: 'paste'; paste: CropPaste }
+  /** The bytes cannot be presented here: skip like a superseded result. */
+  | { kind: 'skip' };
+
+/**
+ * Where a cropped result lands on the output texture. Origin rounding can
+ * overshoot the far edge by ~1px on odd splits (round(y)+round(h) vs
+ * round(y+h)): shift back inside instead of dropping the frame — subpixel,
+ * invisible, and the bar fill uses the same rect so no seam can open.
+ * Anything larger means the bytes genuinely do not fit (e.g. a main-thread
+ * crop result meeting a target-sized texture after the runner died): skip
+ * instead of throwing successful inferences into the fatal budget.
+ */
+export function decideCropPaste(
+  crop: ContentRect,
+  inferWidth: number,
+  inferHeight: number,
+  outWidth: number,
+  outHeight: number,
+  resultWidth: number,
+  resultHeight: number,
+): CropPasteDecision {
+  let ox = Math.round(outWidth * crop.x / inferWidth);
+  let oy = Math.round(outHeight * crop.y / inferHeight);
+  if (ox < 0 || oy < 0) {
+    throw new Error(`RealESRGAN crop paste ${ox},${oy} ${resultWidth}x${resultHeight} does not fit `
+      + `in ${outWidth}x${outHeight}.`);
+  }
+  const overX = ox + resultWidth - outWidth;
+  const overY = oy + resultHeight - outHeight;
+  if (overX > 2 || overY > 2) return { kind: 'skip' };
+  if (overX > 0) ox -= overX;
+  if (overY > 0) oy -= overY;
+  return { kind: 'paste', paste: { ox, oy } };
+}
+
 export interface StillframeHoldState {
   stillTracker: StillframeTracker;
   /** The exact runner input bytes (post-crop, either form). */

@@ -19,21 +19,25 @@ export async function describeNativeConsents(): Promise<Array<{ origin: string; 
 }
 
 export async function recordNativeConsent(origin: string, allowed: boolean): Promise<void> {
-  const consentByOrigin = await loadConsents();
-  consentByOrigin[origin] = allowed;
-  await chrome.storage.local.set({ [CONSENT_STORAGE_KEY]: consentByOrigin });
+  await serializeConsentWrite(async () => {
+    const consentByOrigin = await loadConsents();
+    consentByOrigin[origin] = allowed;
+    await chrome.storage.local.set({ [CONSENT_STORAGE_KEY]: consentByOrigin });
+  });
 }
 
 /** Drop one origin's consent, or every consent when no origin is given. */
 export async function resetNativeConsent(origin?: string): Promise<void> {
-  if (origin === undefined) {
-    await chrome.storage.local.remove(CONSENT_STORAGE_KEY);
-    return;
-  }
-  const consentByOrigin = await loadConsents();
-  if (!(origin in consentByOrigin)) return;
-  delete consentByOrigin[origin];
-  await chrome.storage.local.set({ [CONSENT_STORAGE_KEY]: consentByOrigin });
+  await serializeConsentWrite(async () => {
+    if (origin === undefined) {
+      await chrome.storage.local.remove(CONSENT_STORAGE_KEY);
+      return;
+    }
+    const consentByOrigin = await loadConsents();
+    if (!(origin in consentByOrigin)) return;
+    delete consentByOrigin[origin];
+    await chrome.storage.local.set({ [CONSENT_STORAGE_KEY]: consentByOrigin });
+  });
 }
 
 /**
@@ -67,5 +71,27 @@ export async function requestNativeConsent(
 async function loadConsents(): Promise<Record<string, boolean>> {
   const stored = await chrome.storage.local.get(CONSENT_STORAGE_KEY);
   const value = stored[CONSENT_STORAGE_KEY];
-  return value && typeof value === 'object' ? value as Record<string, boolean> : {};
+  if (!value || typeof value !== 'object') return {};
+  // Corrupt entries (non-boolean values) are dropped instead of flowing
+  // into describeNativeConsents() mistyped; requestNativeConsent re-asks
+  // for origins without a valid recorded answer.
+  const clean: Record<string, boolean> = {};
+  for (const [origin, allowed] of Object.entries(value)) {
+    if (typeof allowed === 'boolean') clean[origin] = allowed;
+  }
+  return clean;
+}
+
+/**
+ * Serialize consent writes: record/reset are load → mutate → set, so two
+ * concurrent writes would both read the pre-write state and the second
+ * would clobber the first. The chain preserves call order; the chain
+ * itself never rejects (callers still see their own write's error).
+ */
+let consentWriteChain: Promise<void> = Promise.resolve();
+
+function serializeConsentWrite(write: () => Promise<void>): Promise<void> {
+  const next = consentWriteChain.then(write, write);
+  consentWriteChain = next.catch(() => undefined);
+  return next;
 }

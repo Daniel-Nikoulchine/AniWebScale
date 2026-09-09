@@ -53,8 +53,13 @@ class VideoPopulation {
     const stashed = allowStash
       && video.hasAttribute(ANIME4K_APPLIED_ATTR)
       && stashEnhancer(enhancer);
-    if (!stashed) enhancer.destroy();
-    EnhancerMap.dissociateEnhancer(video);
+    // Dissociate even when teardown throws: a dead map entry would keep
+    // serving the zombie to election and the test bridge.
+    try {
+      if (!stashed) enhancer.destroy();
+    } finally {
+      EnhancerMap.dissociateEnhancer(video);
+    }
   }
 
   private processVideoElement(video: HTMLVideoElement, source: string): void {
@@ -215,8 +220,18 @@ class VideoPopulation {
 
 const population = new VideoPopulation();
 
+/**
+ * Initialize the page's video population. Never rejects by contract: a
+ * failure (e.g. storage hiccup in getSettings) logs and resolves, and the
+ * next scan/pageshow retries initialization. Call sites are fire-and-forget.
+ */
 export function initializeOnPage(): Promise<void> {
-  return population.initialize();
+  // Fire-and-forget at both call sites: a rejection (e.g. storage hiccup
+  // in getSettings) must not surface as an unhandled rejection, and the
+  // next scan/pageshow retries initialization anyway.
+  return population.initialize().catch((error: unknown) => {
+    console.info('[AniWebScale] Page initialization failed; will retry on the next scan.', error);
+  });
 }
 
 export type SettingsReapplyResult = { status: 'SUCCESS' | 'NO_ACTION' | 'ERROR'; message: string };

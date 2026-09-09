@@ -118,4 +118,12 @@ describe('electFullscreenCandidate', () => {
     const earlier = videoCandidate('video-a', { left: 0, top: 0, width: 870, height: 490 });
     expect(electFullscreenCandidate([later, earlier])).toBe(earlier);
   });
+
+  it('ignores zero-area candidates even when they are the only ones', () => {
+    installCrossOriginHosterFrame();
+    // display:none video inside the fullscreen subtree: in-context but not
+    // enhanceable. Without the area guard it wins via !winner.
+    const invisible = videoCandidate('video-1', { left: 0, top: 0, width: 0, height: 0 });
+    expect(electFullscreenCandidate([invisible])).toBeNull();
+  });
 });

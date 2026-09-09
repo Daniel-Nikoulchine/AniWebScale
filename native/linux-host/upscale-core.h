@@ -34,6 +34,7 @@
 #include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -191,10 +192,6 @@ public:
         staging_ = device_->acquire_staging_allocator();
         if (!blob_ || !staging_) {
             fprintf(stderr, "[host] failed to acquire Vulkan allocators\n");
-            if (blob_) device_->reclaim_blob_allocator(blob_);
-            if (staging_) device_->reclaim_staging_allocator(staging_);
-            blob_ = nullptr;
-            staging_ = nullptr;
 #if NCNN_VULKAN
             delete postproc_;
             postproc_ = nullptr;
@@ -204,7 +201,12 @@ public:
             // Same ordering rule as shutdown(): the Net must release its GPU
             // resources BEFORE the instance dies, or ~Net() SIGSEGVs later in
             // the driver. (Latent since HEAD — the failure path skipped it.)
+            // Reclaim only after every user is gone (see shutdown()).
             net_.clear();
+            if (blob_) device_->reclaim_blob_allocator(blob_);
+            if (staging_) device_->reclaim_staging_allocator(staging_);
+            blob_ = nullptr;
+            staging_ = nullptr;
             ncnn::destroy_gpu_instance();
             device_ = nullptr;
             return false;
@@ -229,8 +231,19 @@ public:
                      std::vector<unsigned char>& out, int& out_w, int& out_h,
                      std::string& err_msg, const std::string& engine = "") {
         std::lock_guard<std::mutex> lock(upscale_mutex_);
-        const bool ok = run_upscale_impl(rgba, width, height, target_w, target_h,
-                                         out, out_w, out_h, err_msg, engine);
+        // A giant frame (up to 4096px per side) can exhaust RAM in a staging
+        // resize (a 4096^2 tiled compose is 1 GiB): fail the frame loudly so
+        // the client falls back instead of dying on an uncaught bad_alloc.
+        // (ncnn itself reports via return codes, so this cannot mask GPU
+        // errors — it only converts OOM termination into inference_failed.)
+        bool ok = false;
+        try {
+            ok = run_upscale_impl(rgba, width, height, target_w, target_h,
+                                  out, out_w, out_h, err_msg, engine);
+        } catch (const std::bad_alloc&) {
+            err_msg = "out of memory for frame staging";
+            ok = false;
+        }
         if (ok) frames_served_.fetch_add(1, std::memory_order_relaxed);
         return ok;
     }
@@ -258,8 +271,11 @@ public:
     }
 
     void shutdown() {
-        if (blob_) { device_->reclaim_blob_allocator(blob_); blob_ = nullptr; }
-        if (staging_) { device_->reclaim_staging_allocator(staging_); staging_ = nullptr; }
+        // Order matters (same rule as net_.clear() vs destroy_gpu_instance
+        // below): every GPU-resource owner dies BEFORE its allocators are
+        // reclaimed. Reclaiming first and then deleting srvgg_ (VkMats
+        // backed by the blob pool) or clearing the Net frees memory back
+        // into a reclaimed pool.
 #if NCNN_VULKAN
         delete srvgg_;
         srvgg_ = nullptr;
@@ -273,6 +289,8 @@ public:
         // the instance is still alive; the empty Net destructor afterwards is
         // a no-op.
         net_.clear();
+        if (blob_) { device_->reclaim_blob_allocator(blob_); blob_ = nullptr; }
+        if (staging_) { device_->reclaim_staging_allocator(staging_); staging_ = nullptr; }
         ncnn::destroy_gpu_instance();
         device_ = nullptr;
     }
@@ -340,13 +358,22 @@ private:
             // been validated with tiles, so use it everywhere.
             ncnn::VkCompute cmd(device_);
             ncnn::Option topt = opt;
-            ncnn::Mat tile_rgba_cpu(iw, ih, (size_t)4, 1u);
-            memcpy(tile_rgba_cpu.data, rgba_src, (size_t)iw*ih*4);
+            // Persistent upload staging: same dims every frame for one video,
+            // and Mat::create() is a no-op on matching dims — no per-frame
+            // multi-MB malloc/free after the first frame (mutex-held).
+            upload_mat_.create(iw, ih, (size_t)4, 1);
+            if (!upload_mat_.data) { emsg = "cpu upload alloc failed"; return false; }
+            memcpy(upload_mat_.data, rgba_src, (size_t)iw*ih*4);
             ncnn::VkMat rgba_gpu;
             rgba_gpu.create(iw, ih, (size_t)4, 1, blob_);
-            cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
+            if (!rgba_gpu.data) { emsg = "gpu upload alloc failed"; return false; }
+            cmd.record_clone(upload_mat_, rgba_gpu, topt);
             ncnn::VkMat in_gpu_pre;
             in_gpu_pre.create(iw, ih, 3, (size_t)2, 1, blob_);
+            if (!in_gpu_pre.data) { emsg = "gpu input alloc failed"; return false; }
+            // A failed preproc pipeline creation (logged at load) must fail
+            // the frame, not dereference a null pipeline below.
+            if (!preproc_ || !postproc_) { emsg = "gpu pre/postproc pipeline unavailable"; return false; }
             {
                 std::vector<ncnn::VkMat> binds(2);
                 binds[0] = rgba_gpu;
@@ -364,7 +391,9 @@ private:
             // back to ncnn for the same frame). Postproc/download below are
             // shared: tailOut is fp16 planar exactly like extractor output.
             bool srvggServed = false;
+            bool srvggAttempted = false;
             if (allowSrvgg && wantSrvgg) {
+                srvggAttempted = true;
                 if (!srvgg_) srvgg_ = new SrvggVulkan(device_, blob_, staging_);
                 std::string srvggErr;
                 if (srvgg_->ensure(srvgg_models_dir_, srvggErr)
@@ -388,13 +417,13 @@ private:
                 int ret = ex.extract("output", out_gpu, cmd);
                 if (ret != 0) { emsg = "extractor extract failed"; return false; }
             }
-            if (!postproc_) { emsg = "gpu postproc pipeline unavailable"; return false; }
             // Clamp the presentation target to the network output; the shader
             // falls back to identity taps on any axis it does not shrink.
             const int pw = std::min(fw > 0 ? fw : out_gpu.w, out_gpu.w);
             const int ph = std::min(fh > 0 ? fh : out_gpu.h, out_gpu.h);
             ncnn::VkMat out_rgba_gpu;
             out_rgba_gpu.create(pw, ph, (size_t)4, 1, blob_);
+            if (!out_rgba_gpu.data) { emsg = "gpu output alloc failed"; return false; }
             {
                 std::vector<ncnn::VkMat> binds(2);
                 binds[0] = out_gpu;
@@ -413,18 +442,26 @@ private:
             // Never ignore the submit result: a dead submit leaves every
             // buffer untouched (silent black frame with even alpha 0) while
             // the HTTP layer reports success. Fail loudly so the client
-            // retries or falls back instead of presenting black. When srvgg
-            // served this frame, re-arm its weight upload: the latch is set
-            // when the clone is recorded, and this submit (carrying it)
-            // failed — the next frame must re-transfer the weights.
+            // retries or falls back instead of presenting black. A failed
+            // submit also voids any weight clone srvgg recorded into this
+            // command: re-arm the upload whenever srvgg was involved, not
+            // only when it served — a run() failure after the clone plus a
+            // failed fallback submit would otherwise leave later frames
+            // convolving against never-written blob memory.
             if (cmd.submit_and_wait() != 0) {
-                if (srvggServed) srvgg_->invalidateGpuWeights();
+                if (srvggAttempted) srvgg_->invalidateGpuWeights();
                 emsg = "gpu submit failed";
                 return false;
             }
             ow = dst.w; oh = dst.h;
+            // The download must have produced the target-sized frame: dst
+            // without data (OOM on the clone) or a size the postproc never
+            // promised means the bytes below would be garbage.
+            if (!dst.data || ow <= 0 || oh <= 0 || ow != pw || oh != ph) {
+                emsg = !dst.data ? "gpu download failed" : "gpu postproc size mismatch";
+                return false;
+            }
             size_t need = (size_t)ow*oh*4;
-            if (need != (size_t)dst.w*dst.h*4) { emsg = "gpu postproc size mismatch"; return false; }
             frame_out.resize(need);
             memcpy(frame_out.data(), dst.data, need);
             return true;
@@ -457,7 +494,14 @@ private:
         const bool downscale = target_w > 0 && target_h > 0
             && (target_w < out_w || target_h < out_h);
         const int comp_w = out_w, comp_h = out_h; // compose size
-        out.assign((size_t)out_w * out_h * 4, 0);
+        // Persistent compose/tile buffers (mutex-held, single in-flight
+        // upscale): the core regions partition the full frame, so every byte
+        // is overwritten below — no per-frame zero-fill (1080p: 132 MB
+        // memset saved) and no per-tile malloc/free churn. swap() hands the
+        // filled buffer to the caller and keeps their old one for next frame.
+        const size_t comp_bytes = (size_t)out_w * out_h * 4;
+        if (tiled_output_.size() != comp_bytes) tiled_output_.resize(comp_bytes);
+        unsigned char* comp = tiled_output_.data();
         for (int ty = 0; ty < height; ty += TILE) {
             for (int tx = 0; tx < width; tx += TILE) {
                 int cx0 = tx, cy0 = ty;
@@ -465,16 +509,17 @@ private:
                 int ex0 = std::max(0, cx0 - PAD), ey0 = std::max(0, cy0 - PAD);
                 int ex1 = std::min(width, cx1 + PAD), ey1 = std::min(height, cy1 + PAD);
                 int ew = ex1 - ex0, eh = ey1 - ey0;
-                std::vector<unsigned char> tile((size_t)ew * eh * 4);
+                const size_t tile_need = (size_t)ew * eh * 4;
+                if (tile_input_.size() < tile_need) tile_input_.resize(tile_need);
+                unsigned char* tile = tile_input_.data();
                 for (int y = 0; y < eh; ++y) {
-                    memcpy(tile.data() + (size_t)y * ew * 4,
+                    memcpy(tile + (size_t)y * ew * 4,
                            rgba + ((size_t)(ey0 + y) * width + ex0) * 4,
                            (size_t)ew * 4);
                 }
-                std::vector<unsigned char> tout;
                 int tw = 0, th = 0;
                 std::string terr;
-                if (!run_gpu_frame(tile.data(), ew, eh, 0, 0, tout, tw, th, terr, false)) {
+                if (!run_gpu_frame(tile, ew, eh, 0, 0, tile_output_, tw, th, terr, false)) {
                     err_msg = terr.empty() ? "tile failed" : terr;
                     return false;
                 }
@@ -482,9 +527,10 @@ private:
                 int owx0 = (cx0 - ex0) * scale, owy0 = (cy0 - ey0) * scale;
                 int core_w = (cx1 - cx0) * scale, core_h = (cy1 - cy0) * scale;
                 int ox = cx0 * scale, oy = cy0 * scale;
+                const unsigned char* tiled_out = tile_output_.data();
                 for (int y = 0; y < core_h; ++y) {
-                    memcpy(out.data() + (((size_t)(oy + y) * out_w) + ox) * 4,
-                           tout.data() + ((size_t)(owy0 + y) * tw + owx0) * 4,
+                    memcpy(comp + (((size_t)(oy + y) * out_w) + ox) * 4,
+                           tiled_out + ((size_t)(owy0 + y) * tw + owx0) * 4,
                            (size_t)core_w * 4);
                 }
             }
@@ -494,6 +540,37 @@ private:
             const int nw = std::min(target_w, comp_w);
             const int nh = std::min(target_h, comp_h);
             std::vector<unsigned char> small((size_t)nw * nh * 4);
+            // Integer fast lane: exact per-axis division by a power of two
+            // (the common 4x transport-downscale case) makes every weight
+            // exactly 1.0 with a power-of-two area, so integer averaging is
+            // bit-identical to the float formula below (1/area exact, all
+            // partial sums < 2^24 exact) while skipping floorf/ceilf/min/max
+            // per output pixel. Other geometries keep the float path.
+            const bool exactX = (comp_w % nw == 0), exactY = (comp_h % nh == 0);
+            const int fx = exactX ? comp_w / nw : 0, fy = exactY ? comp_h / nh : 0;
+            const auto isPow2 = [](int v) { return v > 0 && (v & (v - 1)) == 0; };
+            if (exactX && exactY && isPow2(fx) && isPow2(fy)) {
+                const int area = fx * fy, half = area / 2;
+                for (int y = 0; y < nh; ++y) {
+                    const unsigned char* srcRows = comp + (size_t)(y * fy) * comp_w * 4;
+                    unsigned char* dstRow = small.data() + (size_t)y * nw * 4;
+                    for (int x = 0; x < nw; ++x) {
+                        uint32_t sr = 0, sg = 0, sb = 0;
+                        for (int sy = 0; sy < fy; ++sy) {
+                            const unsigned char* row = srcRows + (size_t)sy * comp_w * 4 + (size_t)(x * fx) * 4;
+                            for (int sx = 0; sx < fx; ++sx) {
+                                const unsigned char* px4 = row + (size_t)sx * 4;
+                                sr += px4[0]; sg += px4[1]; sb += px4[2];
+                            }
+                        }
+                        unsigned char* d = dstRow + (size_t)x * 4;
+                        d[0] = (unsigned char)((sr + half) / area);
+                        d[1] = (unsigned char)((sg + half) / area);
+                        d[2] = (unsigned char)((sb + half) / area);
+                        d[3] = 255;
+                    }
+                }
+            } else {
             for (int y = 0; y < nh; ++y) {
                 const float y0f = (float)y * comp_h / nh;
                 const float y1f = (float)(y + 1) * comp_h / nh;
@@ -510,7 +587,7 @@ private:
                             const float wx = std::min(x1f, (float)sx + 1) - std::max(x0f, (float)sx);
                             if (wx <= 0) continue;
                             const float wgt = wx * wy;
-                            const unsigned char* px4 = out.data() + (((size_t)sy * comp_w) + sx) * 4;
+                            const unsigned char* px4 = comp + (((size_t)sy * comp_w) + sx) * 4;
                             ar += px4[0] * wgt; ag += px4[1] * wgt; ab += px4[2] * wgt;
                             wsum += wgt;
                         }
@@ -523,8 +600,11 @@ private:
                     d[3] = 255;
                 }
             }
+            }
             out.swap(small);
             out_w = nw; out_h = nh;
+        } else {
+            out.swap(tiled_output_);
         }
         return true;
 #else
@@ -545,6 +625,15 @@ private:
     SrvggVulkan* srvgg_ = nullptr; // lazy, created on the first E4 frame
     std::string srvgg_models_dir_;
     bool use_srvgg_engine_ = false;
+    // Persistent tiled-path staging (mutex-held, see the tiled branch):
+    // compose output, tile input gathering and per-tile network output.
+    // Reused across frames to avoid per-frame big mallocs + the full-frame
+    // memset; the tile cores partition the frame so no fill is needed.
+    std::vector<unsigned char> tiled_output_;
+    std::vector<unsigned char> tile_input_;
+    std::vector<unsigned char> tile_output_;
+    // Persistent CPU upload staging for run_gpu_frame (see above).
+    ncnn::Mat upload_mat_;
 
     std::mutex upscale_mutex_;
     std::atomic<uint64_t> last_activity_ms_{now_ms()};

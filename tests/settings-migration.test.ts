@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { normalizeLegacySettings } from '../src/utils/migration';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ensureLatestConfig, normalizeLegacySettings } from '../src/utils/migration';
 
 describe('settings migration', () => {
   it('preserves canonical v1 settings', () => {
@@ -123,6 +123,58 @@ describe('settings migration', () => {
       { realesrganCapHeight: 432 },
       { realesrganCapHeight: 405 },
     )).toMatchObject({ realesrganCapHeight: 405 });
+  });
+
+  describe('ensureLatestConfig end-to-end', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function installStorage(syncData: Record<string, unknown>, localData: Record<string, unknown>) {
+      const syncStore: Record<string, unknown> = { ...syncData };
+      const localStore: Record<string, unknown> = { ...localData };
+      const removed: { area: string; keys: string[] }[] = [];
+      const getArea = (store: Record<string, unknown>) => async (keys?: string[] | string) => {
+        if (keys === undefined) return { ...store };
+        const list = Array.isArray(keys) ? keys : [keys];
+        return Object.fromEntries(list.filter(key => key in store).map(key => [key, store[key]]));
+      };
+      vi.stubGlobal('chrome', {
+        storage: {
+          sync: {
+            get: vi.fn(getArea(syncStore)),
+            set: vi.fn(async (record: Record<string, unknown>) => { Object.assign(syncStore, record); }),
+            remove: vi.fn(async (keys: string[]) => {
+              removed.push({ area: 'sync', keys });
+              for (const key of keys) delete syncStore[key];
+            }),
+          },
+          local: {
+            get: vi.fn(getArea(localStore)),
+            set: vi.fn(async (record: Record<string, unknown>) => { Object.assign(localStore, record); }),
+            remove: vi.fn(async (keys: string[]) => {
+              removed.push({ area: 'local', keys });
+              for (const key of keys) delete localStore[key];
+            }),
+          },
+        },
+      });
+      return { syncStore, localStore, removed };
+    }
+
+    it('preserves a sync-only RealESRGAN precision across migration', async () => {
+      // Second-device profile: precision lived only in chrome.storage.sync.
+      const { localStore } = installStorage({ realesrganPrecision: 'fp16' }, {});
+      await ensureLatestConfig();
+      expect(localStore.realesrganPrecision).toBe('fp16');
+    });
+
+    it('clears the legacy local selectedModeId after migration', async () => {
+      const { localStore, removed } = installStorage({}, { selectedModeId: 'old-mode' });
+      await ensureLatestConfig();
+      expect(localStore.selectedModeId).toBeUndefined();
+      expect(removed.some(entry => entry.area === 'local' && entry.keys.includes('selectedModeId'))).toBe(true);
+    });
   });
 
 });

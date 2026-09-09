@@ -111,8 +111,15 @@ export class RealEsrganHttpInfoBroker {
   private ensureEndpoint(): Promise<RealEsrganHttpEndpoint> {
     if (this.port) {
       // Host process is alive; re-handshake over the same port to pick up
-      // its (stable) HTTP endpoint. Cheaper than a host restart.
-      return this.handshake(this.port);
+      // its (stable) HTTP endpoint. Cheaper than a host restart. A failed
+      // re-handshake drops the cached port: a hung host (live port, no
+      // ready reply) must not pin it, or every later get() would burn
+      // another full handshake timeout against the same dead port.
+      const port = this.port;
+      return this.handshake(port).then(outcome => {
+        if (!outcome.ok && this.port === port) this.invalidate();
+        return outcome;
+      });
     }
     return new Promise<RealEsrganHttpEndpoint>(resolve => {
       let port: PortLike;

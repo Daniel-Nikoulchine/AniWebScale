@@ -126,7 +126,9 @@ static std::vector<BenchCase> parse_cases(const std::string& s) {
     std::string tok;
     while (std::getline(ss, tok, ',')) {
         int w = 0, h = 0;
-        if (sscanf(tok.c_str(), "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+        // Clamp to the host's frame limit: larger cases would OOM the
+        // synthetic input (40 GB vector) or truncate GPU strides.
+        if (sscanf(tok.c_str(), "%dx%d", &w, &h) == 2 && w > 0 && h > 0 && w <= 4096 && h <= 4096) {
             out.push_back({w, h, nullptr});
         }
     }
@@ -244,6 +246,7 @@ static bool run_one_case(const BenchCase& bc, const std::vector<unsigned char>& 
     ncnn::VkAllocator* blob = ctx.device->acquire_blob_allocator();
     ncnn::VkAllocator* staging = ctx.device->acquire_staging_allocator();
     if (!blob || !staging) {
+        if (blob) ctx.device->reclaim_blob_allocator(blob);
         out.status = "error";
         out.error = "allocator_failed";
         return false;

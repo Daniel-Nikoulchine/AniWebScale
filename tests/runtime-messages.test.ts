@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseFrameMessage,
+  parseNativeFallbackResponse,
   parseRuntimeRequest,
 } from '../src/shared/runtime-messages';
 
@@ -121,13 +122,45 @@ describe('parseFrameMessage', () => {
     }
   });
 
-  it('parses a media command event with a missing command as empty string', () => {
+  it('rejects a media command event with a missing command', () => {
     expect(parseFrameMessage({ type: 'NATIVE_MEDIA_COMMAND_EVENT' }))
-      .toEqual({ kind: 'message', message: { type: 'NATIVE_MEDIA_COMMAND_EVENT', command: '', value: undefined } });
+      .toEqual({ kind: 'invalid', type: 'NATIVE_MEDIA_COMMAND_EVENT', message: 'Invalid media command.' });
+  });
+
+  it('rejects a pointer event with non-finite coordinates', () => {
+    expect(parseFrameMessage({ type: 'NATIVE_POINTER_EVENT', event: 'move' }))
+      .toEqual({ kind: 'invalid', type: 'NATIVE_POINTER_EVENT', message: 'Invalid native pointer event.' });
+    expect(parseFrameMessage({ type: 'NATIVE_POINTER_EVENT', event: 'move', x: NaN, y: 0.5 }))
+      .toEqual({ kind: 'invalid', type: 'NATIVE_POINTER_EVENT', message: 'Invalid native pointer event.' });
+  });
+
+  it('rejects a force-stop without a video id', () => {
+    expect(parseFrameMessage({ type: 'ANIME4K_FORCE_STOP' }))
+      .toEqual({ kind: 'invalid', type: 'ANIME4K_FORCE_STOP', message: 'Force-stop without a video id.' });
+  });
+
+  it('drops a malformed session event payload instead of forwarding it', () => {
+    const parsed = parseFrameMessage({ type: 'NATIVE_SESSION_EVENT', event: 'garbage' });
+    expect(parsed).toEqual({
+      kind: 'message',
+      message: { type: 'NATIVE_SESSION_EVENT', event: undefined },
+    });
   });
 
   it('reports unknown types as unknown', () => {
     expect(parseFrameMessage({ type: 'NOT_A_FRAME_MESSAGE' })).toEqual({ kind: 'unknown' });
     expect(parseFrameMessage(undefined)).toEqual({ kind: 'unknown' });
+  });
+});
+
+describe('parseNativeFallbackResponse', () => {
+  it('keeps a known status', () => {
+    expect(parseNativeFallbackResponse({ ok: true, status: 'started', sessionId: 's1' }))
+      .toEqual({ ok: true, status: 'started', sessionId: 's1' });
+  });
+
+  it('drops an unknown status instead of forwarding it', () => {
+    expect(parseNativeFallbackResponse({ ok: true, status: 'bogus' }))
+      .toEqual({ ok: true });
   });
 });

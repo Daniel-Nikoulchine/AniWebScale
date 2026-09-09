@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <csignal>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -113,84 +114,102 @@ static std::string base64_encode(const unsigned char* data, size_t len) {
 static bool base64_decode(const std::string& in, std::vector<unsigned char>& out) {
     out.clear();
     out.reserve(in.size() * 3 / 4);
-    size_t len = in.size();
-    // Fast path: process 4 chars at a time using table
+    const size_t len = in.size();
     size_t i = 0;
-    // Skip leading whitespace (rare for our JSON)
-    // Main loop — 4 chars -> 3 bytes
-    for (; i + 3 < len; ) {
-        // Skip whitespace inline
-        int8_t d0 = b64_dec_table[(unsigned char)in[i]];
-        int8_t d1 = b64_dec_table[(unsigned char)in[i+1]];
-        int8_t d2 = b64_dec_table[(unsigned char)in[i+2]];
-        int8_t d3 = b64_dec_table[(unsigned char)in[i+3]];
-        // Handle padding / whitespace
-        if (d0 < 0 || d1 < 0) {
-            // whitespace or invalid
-            if (in[i] == '=' ) break;
-            if (in[i]=='\n' || in[i]=='\r' || in[i]==' ' || in[i]=='\t') { ++i; continue; }
-            if (d0 < 0 || d1 < 0) return false;
+    auto is_ws = [](char c) {
+        return c == '\n' || c == '\r' || c == ' ' || c == '\t';
+    };
+    // Quantum loop: collect exactly 4 non-whitespace symbols before decoding.
+    // Whitespace is skipped WITHOUT consuming a quantum slot, so interior
+    // whitespace can never realign the 4-char window (the old ++i skip did).
+    // Padding ('=') is only legal in the final quantum; after it only
+    // whitespace may follow — trailing garbage fails instead of being
+    // silently ignored. Legit senders (btoa output) contain neither, so this
+    // is strictly more correct with identical results on valid input.
+    for (;;) {
+        char q[4];
+        int qn = 0;
+        while (qn < 4 && i < len) {
+            const char c = in[i++];
+            if (is_ws(c)) continue;
+            q[qn++] = c;
         }
-        if (d2 < 0) {
-            if (in[i+2] == '=') {
-                // 1 byte left: 2 chars + ==
-                if (d0 <0 || d1 <0) return false;
-                uint32_t triple = (uint32_t(d0) << 18) | (uint32_t(d1) << 12);
-                out.push_back((triple >> 16) & 0xFF);
-                return true;
+        if (qn == 0) return true; // clean end (whitespace tail ok)
+        if (qn < 4) return false; // truncated quantum
+        int8_t d[4];
+        for (int k = 0; k < 4; k++) {
+            if (q[k] == '=') {
+                d[k] = -2;
+            } else {
+                d[k] = b64_dec_table[(unsigned char)q[k]];
+                if (d[k] < 0) return false; // non-alphabet symbol
             }
-            if (in[i+2]=='\n' || in[i+2]=='\r' || in[i+2]==' ' || in[i+2]=='\t') { ++i; continue; }
-            return false;
         }
-        if (d3 < 0) {
-            if (in[i+3] == '=') {
-                // 2 bytes left: 3 chars + =
-                uint32_t triple = (uint32_t(d0) << 18) | (uint32_t(d1) << 12) | (uint32_t(d2) << 6);
-                out.push_back((triple >> 16) & 0xFF);
-                out.push_back((triple >> 8) & 0xFF);
-                return true;
+        if (d[0] == -2 || d[1] == -2) return false; // padding in slots 0-1
+        if (d[2] == -2) {
+            if (d[3] != -2) return false; // "xx=y" is malformed
+            const uint32_t triple = (uint32_t(d[0]) << 18) | (uint32_t(d[1]) << 12);
+            out.push_back((triple >> 16) & 0xFF);
+            while (i < len) {
+                if (!is_ws(in[i++])) return false;
             }
-            if (in[i+3]=='\n' || in[i+3]=='\r' || in[i+3]==' ' || in[i+3]=='\t') { ++i; continue; }
-            return false;
+            return true;
         }
-        uint32_t triple = (uint32_t(d0) << 18) | (uint32_t(d1) << 12) | (uint32_t(d2) << 6) | uint32_t(d3);
+        if (d[3] == -2) {
+            const uint32_t triple = (uint32_t(d[0]) << 18) | (uint32_t(d[1]) << 12) | (uint32_t(d[2]) << 6);
+            out.push_back((triple >> 16) & 0xFF);
+            out.push_back((triple >> 8) & 0xFF);
+            while (i < len) {
+                if (!is_ws(in[i++])) return false;
+            }
+            return true;
+        }
+        const uint32_t triple = (uint32_t(d[0]) << 18) | (uint32_t(d[1]) << 12)
+            | (uint32_t(d[2]) << 6) | uint32_t(d[3]);
         out.push_back((triple >> 16) & 0xFF);
         out.push_back((triple >> 8) & 0xFF);
         out.push_back(triple & 0xFF);
-        i += 4;
     }
-    // Tail (remaining <4 chars) — use bitstream method
-    int val = 0, valb = -8;
-    for (; i < len; ++i) {
-        unsigned char c = (unsigned char)in[i];
-        if (c == '=') break;
-        int8_t d = b64_dec_table[c];
-        if (d == -1) {
-            if (c=='\n' || c=='\r' || c==' ' || c=='\t') continue;
-            return false;
-        }
-        val = (val << 6) | d;
-        valb += 6;
-        if (valb >= 0) {
-            out.push_back((val >> valb) & 0xFF);
-            valb -= 8;
-        }
-    }
-    return true;
 }
 
 // ---------- framed I/O ----------
-static bool read_exact(int fd, void* buf, size_t n) {
+static uint64_t steady_ms() {
+    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Deadline-bounded exact read. Without it a peer that trickles one byte at
+// a time (or a spurious poll wakeup with revents==0) parks the host in a
+// blocking read forever: GPU stays pinned and the idle reaper never fires.
+// deadline_ms is an absolute steady-clock timestamp (UINT64_MAX = none);
+// expiry sets timed_out instead of failing like EOF so the caller can log
+// the reaper exit rather than a disconnect.
+static bool read_exact(int fd, void* buf, size_t n, uint64_t deadline_ms, bool& timed_out) {
+    timed_out = false;
     auto* p = static_cast<char*>(buf);
     size_t off = 0;
     while (off < n) {
+        const uint64_t now = steady_ms();
+        if (now >= deadline_ms) {
+            timed_out = true;
+            return false;
+        }
+        const uint64_t remain = deadline_ms - now;
+        struct pollfd pfd{fd, POLLIN, 0};
+        const int pr = poll(&pfd, 1, remain > 60000ULL ? 60000 : (int)remain);
+        if (pr == 0) continue; // slice elapsed, deadline re-checked above
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (!(pfd.revents & POLLIN)) return false; // POLLERR/POLLHUP/POLLNVAL
         ssize_t r = ::read(fd, p + off, n - off);
         if (r == 0) return false; // EOF
         if (r < 0) {
             if (errno == EINTR) continue;
             return false;
         }
-        off += r;
+        off += (size_t)r;
     }
     return true;
 }
@@ -207,20 +226,33 @@ static bool write_exact(int fd, const void* buf, size_t n) {
     }
     return true;
 }
-static bool read_framed(std::string& payload) {
+static bool read_framed(std::string& payload, bool& oversize, bool& timed_out, uint64_t deadline_ms) {
+    oversize = false;
+    timed_out = false;
     uint32_t len = 0;
-    if (!read_exact(STDIN_FILENO, &len, 4)) return false;
+    if (!read_exact(STDIN_FILENO, &len, 4, deadline_ms, timed_out)) return false;
     // little endian
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
     len = __builtin_bswap32(len);
 #endif
     if (len > 100 * 1024 * 1024) {
-        fprintf(stderr, "[host] framed message too large: %u\n", len);
-        return false;
+        // One malicious length word must not DoS the host until respawn:
+        // drain and discard the body so the next read starts at a frame
+        // boundary, then nack below. EOF while draining still exits.
+        fprintf(stderr, "[host] framed message too large: %u, discarding\n", len);
+        char sink[65536];
+        uint32_t left = len;
+        while (left > 0) {
+            const size_t want = left > sizeof(sink) ? sizeof(sink) : left;
+            if (!read_exact(STDIN_FILENO, sink, want, deadline_ms, timed_out)) return false;
+            left -= static_cast<uint32_t>(want);
+        }
+        oversize = true;
+        return true;
     }
     payload.resize(len);
     if (len == 0) return true;
-    return read_exact(STDIN_FILENO, payload.data(), len);
+    return read_exact(STDIN_FILENO, payload.data(), len, deadline_ms, timed_out);
 }
 static bool write_framed(const std::string& payload) {
     uint32_t len = payload.size();
@@ -266,12 +298,27 @@ static std::string error_json(const std::string& requestId, const char* code, co
 }
 
 // ---------- shm file I/O ----------
+// The shm transport moves throwaway frame files; it must never become a
+// file-overwrite primitive: confine both directions to the shared-memory
+// filesystem, reject traversal, and never follow symlinks (a planted
+// /dev/shm link must fail closed, not redirect the frame into it).
+static bool is_safe_shm_path(const std::string& path) {
+    if (path.compare(0, 9, "/dev/shm/") != 0) return false;
+    if (path.find("..") != std::string::npos) return false;
+    if (path.size() >= 1024) return false;
+    return true;
+}
 // Read w*h*4 bytes of RGBA8 from a shm file path. On failure fills err_code /
 // err_msg with the wire-level error identity.
 static bool read_shm_rgba(const std::string& path, size_t need,
-                          std::vector<unsigned char>& rgba,
-                          const char*& err_code, std::string& err_msg) {
-    int fd = ::open(path.c_str(), O_RDONLY);
+                           std::vector<unsigned char>& rgba,
+                           const char*& err_code, std::string& err_msg) {
+    if (!is_safe_shm_path(path)) {
+        err_code = "shm_path_rejected";
+        err_msg = "shmIn must live under /dev/shm/";
+        return false;
+    }
+    int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW);
     if (fd < 0) {
         err_code = "shm_open_failed";
         err_msg = std::string("failed to open shmIn: ") + strerror(errno);
@@ -299,7 +346,12 @@ static bool read_shm_rgba(const std::string& path, size_t need,
 // Write a result frame to a shm file path. On failure fills err_code / err_msg.
 static bool write_shm_rgba(const std::string& path, const std::vector<unsigned char>& rgba,
                            const char*& err_code, std::string& err_msg) {
-    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (!is_safe_shm_path(path)) {
+        err_code = "shm_path_rejected";
+        err_msg = "shmOut must live under /dev/shm/";
+        return false;
+    }
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     if (fd < 0) {
         err_code = "shm_write_failed";
         err_msg = std::string("failed to open shmOut: ") + strerror(errno);
@@ -342,9 +394,13 @@ static void apply_cpu_affinity_and_nice() {
 }
 
 // Takt-Check (Hygiene, 2.9.): ein gedrosselter Governor erklärt die
-// +7 % beim 1080p-Lauf. Reine Diagnose, ändert nichts.
+// +7 % beim 1080p-Lauf. Reine Diagnose, ändert nichts — und darf nie fatal
+// sein (headless/Container ohne /sys/class/drm).
 static void log_gpu_governor_levels() {
-    for (const auto& entry : std::filesystem::directory_iterator("/sys/class/drm")) {
+    std::error_code ec;
+    if (!std::filesystem::exists("/sys/class/drm", ec) || ec) return;
+    for (const auto& entry : std::filesystem::directory_iterator("/sys/class/drm", ec)) {
+        if (ec) return;
         if (!entry.is_directory()) continue;
         const std::string name = entry.path().filename().string();
         if (name.rfind("card", 0) != 0 || name.find('-') != std::string::npos) continue;
@@ -491,6 +547,11 @@ static int run_traffic_test(ncnn::VulkanDevice* device, ncnn::VkAllocator* blob,
 #endif
 
 int main(int argc, char** argv) {
+    // A browser disconnect mid-reply must fail the write (EPIPE via the
+    // existing false-returns), never kill the host: framed stdout replies
+    // carry multi-MB base64 bodies, and the HTTP path already uses
+    // MSG_NOSIGNAL for the same reason.
+    std::signal(SIGPIPE, SIG_IGN);
     bool use_fp16 = true;
     // Idle reaper (Zombie-Fix, 2.9.): exit after N seconds without any frame
     // on EITHER transport so a forgotten host stops pinning GPU allocations.
@@ -640,9 +701,13 @@ int main(int argc, char** argv) {
 
     // Main loop: poll() statt blockierendem Read, damit der Idle-Reaper
     // feuern kann, während stdin still ist. Jede eingehende Nachricht (auch
-    // hello/capabilities) zählt als Aktivität.
+    // hello/capabilities) zählt als Aktivität. Der framed Read läuft gegen
+    // dieselbe Deadline: ein Peer, der nach dem poll-Signal nur tröpfelt
+    // (1 Byte pro Wakeup), dürfte sonst den Reaper unbegrenzt umgehen und
+    // die GPU gepinnt halten.
     std::string payload;
     for (;;) {
+        uint64_t read_deadline_ms = UINT64_MAX;
         if (idle_timeout_s > 0) {
             const uint64_t idle_ms = core.idle_ms();
             const uint64_t budget_ms = (uint64_t)idle_timeout_s * 1000;
@@ -654,6 +719,7 @@ int main(int argc, char** argv) {
                         core.device()->get_heap_budget(), core.heap_budget_start_mb());
                 break;
             }
+            read_deadline_ms = steady_ms() + (budget_ms - idle_ms);
             struct pollfd pfd{STDIN_FILENO, POLLIN, 0};
             const uint64_t wait_ms = budget_ms - idle_ms;
             // poll takes int ms; clamp absurd timeouts instead of narrowing.
@@ -666,7 +732,28 @@ int main(int argc, char** argv) {
             }
             if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) break; // Browser weg
         }
-        if (!read_framed(payload)) break; // EOF: Browser hat den Port getrennt
+        bool oversize = false, timed_out = false;
+        if (!read_framed(payload, oversize, timed_out, read_deadline_ms)) {
+            if (timed_out) {
+                // Kein kompletter Frame innerhalb des Idle-Budgets (Trickle-
+                // Feed): Reaper-Semantik statt ewigem Block — GPU freigeben,
+                // der Browser spawnt bei Bedarf neu.
+                fprintf(stderr, "[host] framed read timed out within the idle budget: exiting, browser re-spawns on next frame\n");
+            }
+            break; // EOF (Browser weg) oder Deadline: in beiden Fällen raus
+        }
+        if (oversize) {
+            // Same shape as the invalid_json error below (no requestId —
+            // the oversize body was discarded unread).
+            Object err;
+            err["type"] = Value("error");
+            err["protocolVersion"] = Value(3.0);
+            err["code"] = Value("message_too_large");
+            err["message"] = Value("framed message exceeds 100 MiB");
+            err["recoverable"] = Value(true);
+            write_framed(anime4k::json::stringify(Value(err)));
+            continue;
+        }
         core.note_activity();
         auto parsed = anime4k::json::parse(payload);
         if (!parsed.value || !parsed.value->is_object()) {
@@ -741,6 +828,9 @@ int main(int argc, char** argv) {
             std::string shmOut = get_string(req, "shmOut");
             bool useShmIn = !shmIn.empty();
             bool useShmOut = !shmOut.empty();
+            // Per-request engine selection, like the HTTP transport's
+            // &engine= query (unknown values fall back to ncnn in the core).
+            const std::string reqEngine = get_string(req, "engine");
             // fp16 request field kept for protocol compatibility; the shared
             // upscale core is fp16-storage GPU-only (validated path).
             [[maybe_unused]] bool reqFp16 = true;
@@ -776,7 +866,7 @@ int main(int argc, char** argv) {
             // Shared upscale core (p7): identical GPU path for stdin and HTTP
             // transports; the core serializes GPU ownership between them and
             // counts served frames.
-            bool ok = core.run_upscale(rgba.data(), width, height, target_w, target_h, out_rgba, out_w, out_h, err_msg);
+            bool ok = core.run_upscale(rgba.data(), width, height, target_w, target_h, out_rgba, out_w, out_h, err_msg, reqEngine);
             if (!ok) {
                 write_framed(error_json(requestId, "inference_failed", err_msg.empty() ? "unknown" : err_msg));
                 continue;

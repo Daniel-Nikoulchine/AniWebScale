@@ -53,6 +53,12 @@ describe('native session recovery', () => {
     expect(migrateNativeSessionMetadata({ version: 99 })).toBeNull();
   });
 
+  it('returns null for non-object storage entries instead of throwing', () => {
+    expect(migrateNativeSessionMetadata(null as unknown as { version?: unknown })).toBeNull();
+    expect(migrateNativeSessionMetadata('v3' as unknown as { version?: unknown })).toBeNull();
+    expect(migrateNativeSessionMetadata(undefined as unknown as { version?: unknown })).toBeNull();
+  });
+
   it('rejects delayed cleanup from a replaced native session', () => {
     const current = { sessionId: 'new-session' };
     expect(matchesExpectedNativeSession(current, 'old-session')).toBe(false);

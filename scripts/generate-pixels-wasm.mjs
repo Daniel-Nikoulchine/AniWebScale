@@ -30,6 +30,20 @@ function haveCargo() {
   return spawnSync('cargo', ['--version'], { stdio: 'ignore' }).status === 0;
 }
 
+/**
+ * The classic fresh-checkout failure is a cargo WITHOUT the wasm target
+ * (system toolchains ship host-only std): surface that as an actionable
+ * hint instead of a raw rustc dump.
+ */
+function missingWasmTargetHint() {
+  const sysroot = spawnSync('rustc', ['--print', 'sysroot'], { encoding: 'utf8' });
+  if (sysroot.status !== 0 || !sysroot.stdout) return '';
+  const rustlib = join(sysroot.stdout.trim(), 'lib', 'rustlib', 'wasm32-unknown-unknown');
+  return existsSync(rustlib)
+    ? ''
+    : ' (missing wasm32-unknown-unknown target in this cargo toolchain — run: rustup target add wasm32-unknown-unknown)';
+}
+
 function isFresh() {
   if (!existsSync(outFile)) return false;
   const outStat = statSync(outFile);
@@ -41,7 +55,7 @@ function build() {
     'cargo', ['build', '--release', '--target', 'wasm32-unknown-unknown'],
     { cwd: crateDir, stdio: 'inherit' },
   );
-  if (built.status !== 0) throw new Error('cargo build for wasm-pixels failed');
+  if (built.status !== 0) throw new Error(`cargo build for wasm-pixels failed${missingWasmTargetHint()}`);
   if (!existsSync(builtWasm)) throw new Error(`expected artifact missing: ${builtWasm}`);
   mkdirSync(outDir, { recursive: true });
   copyFileSync(builtWasm, outFile);

@@ -291,6 +291,10 @@ function selfTestPage(url) {
         if (gpuAdapter) {
           check('WebGPU adapter available', true);
           await waitFor(() => document.querySelector('#self-layer').dataset.anime4kApplied === 'true', 60000);
+          // The canvas appears on the first presented frame, which trails the
+          // applied marker (shader compile, upload, first submit). Poll it
+          // like the marker instead of asserting it in the same tick.
+          await waitFor(() => document.querySelector('#self-player > canvas')?.style.visibility === 'visible', 60000);
           check('automatic direct-video fullscreen output',
             document.querySelector('#self-player > canvas')?.style.visibility === 'visible'
             && document.querySelector('#self-layer').style.opacity === '0');

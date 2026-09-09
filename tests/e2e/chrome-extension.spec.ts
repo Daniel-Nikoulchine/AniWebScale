@@ -467,6 +467,10 @@ test(`runs ${mode} with frame generation through WebGPU`, async ({ extensionCont
   test.setTimeout(180_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
   requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  // First-frame presentation needs real GPU queue completions: headless
+  // SwiftShader submits work but never resolves onSubmittedWorkDone, so no
+  // canvas appears, opacity never drops and the watchdog churns the session.
+  requireOrSkipCapability(process.env.E2E_HEADED === '1', 'The canvas path needs headed Chromium with a real GPU (SwiftShader never settles completions).');
   await setExtensionSettings(extensionContext, true, {
     mode,
     frameGenerationEnabled: true,
@@ -501,6 +505,10 @@ for (const mode of ['A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2'] as const) {
     test.setTimeout(90_000);
     const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
     requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+    // First-frame presentation needs real GPU queue completions: headless
+    // SwiftShader submits work but never resolves onSubmittedWorkDone, so no
+    // canvas appears, opacity never drops and the watchdog churns the session.
+    requireOrSkipCapability(process.env.E2E_HEADED === '1', 'The canvas path needs headed Chromium with a real GPU (SwiftShader never settles completions).');
     await setExtensionSettings(extensionContext, true, {
       mode,
       quality: 'M',
@@ -526,6 +534,10 @@ test('redirects a direct video fullscreen request before automatic WebGPU startu
   test.setTimeout(90_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
   requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  // First-frame presentation needs real GPU queue completions: headless
+  // SwiftShader submits work but never resolves onSubmittedWorkDone, so no
+  // canvas appears, opacity never drops and the watchdog churns the session.
+  requireOrSkipCapability(process.env.E2E_HEADED === '1', 'The canvas path needs headed Chromium with a real GPU (SwiftShader never settles completions).');
   await setExtensionSettings(extensionContext);
   await page.goto('/layers.html');
   const enabled = await page.evaluate(() => document.fullscreenEnabled);
@@ -548,6 +560,11 @@ test('normalizes a broad page fullscreen to the compact player surface', async (
   test.setTimeout(90_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
   requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  // A stable enhanced session needs real GPU queue completions: headless
+  // SwiftShader submits work but never resolves onSubmittedWorkDone, so no
+  // frame presents and the watchdog keeps restarting the session (and its
+  // fullscreen layout) instead of settling it.
+  requireOrSkipCapability(process.env.E2E_HEADED === '1', 'The canvas path needs headed Chromium with a real GPU (SwiftShader never settles completions).');
   await setExtensionSettings(extensionContext);
   await page.goto('/layers.html');
   await page.locator('#enter-page-fullscreen').click();
@@ -577,6 +594,10 @@ test('enforces one automatic renderer while fullscreen moves between videos', as
   test.setTimeout(90_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
   requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  // First-frame presentation needs real GPU queue completions: headless
+  // SwiftShader submits work but never resolves onSubmittedWorkDone, so no
+  // canvas appears and opacity never drops.
+  requireOrSkipCapability(process.env.E2E_HEADED === '1', 'The canvas path needs headed Chromium with a real GPU (SwiftShader never settles completions).');
   await setExtensionSettings(extensionContext);
   await page.goto('/media.html');
   await expect(page.locator(OVERLAY_SELECTOR)).toHaveCount(3);
@@ -634,6 +655,10 @@ test('runs frame generation without enhancement effects when mode is Off', async
   await page.goto('/layers.html');
   const enabled = await page.evaluate(() => document.fullscreenEnabled);
   requireOrSkipCapability(enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
+  // First-frame presentation needs real GPU queue completions: headless
+  // SwiftShader submits work but never resolves onSubmittedWorkDone, so no
+  // canvas appears and opacity never drops.
+  requireOrSkipCapability(process.env.E2E_HEADED === '1', 'The canvas path needs headed Chromium with a real GPU (SwiftShader never settles completions).');
 
   await page.locator('#enter-fullscreen').click();
   await expect(page.locator('#layer-video')).toHaveAttribute('data-anime4k-applied', 'true', { timeout: 60_000 });

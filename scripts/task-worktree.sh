@@ -40,6 +40,8 @@ cmd_new() {
   echo "OK: $path auf Branch $branch (Basis $base)"
   echo "Naechste Schritte im Worktree:"
   echo "  cd $path && npm ci && npm run generate:presets"
+  echo "  Dazu: cp $REPO/wasm/pixels.wasm $path/wasm/ (generiert, gitignoriert, ohne Rust-WASM-Target nicht baubar)"
+  echo "  Python (numpy/onnx): /home/daniel/Projects/anime4kBrowser/.venv-realesrgan/bin/python aus dem Haupt-Repo nutzen, venv wird nicht mitkopiert"
 }
 
 cmd_list() {

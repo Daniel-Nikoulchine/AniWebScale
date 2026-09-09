@@ -15,7 +15,8 @@ describe('generated external GLSL models', () => {
   it('emits self-contained WGSL compute passes', () => {
     for (const model of Object.values(GENERATED_EXTERNAL_GLSL_MODELS)) {
       expect(model.sourceSha256).toMatch(/^[0-9a-f]{64}$/);
-      expect(model.pixelShuffleSource).toBeTruthy();
+      expect(typeof model.pixelShuffleSource).toBe('string');
+      expect(model.pixelShuffleSource.length).toBeGreaterThan(0);
       for (const pass of model.passes) {
         expect(pass.wgsl).toContain('@compute');
         expect(pass.wgsl).toContain('fn computeMain');

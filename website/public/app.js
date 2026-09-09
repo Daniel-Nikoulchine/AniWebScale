@@ -45,8 +45,7 @@ nav?.addEventListener('click', event => {
 });
 
 document.querySelector('.gpu-notice a')?.addEventListener('click', () => {
-  const requirements = document.querySelector('#gpu-requirements');
-  if (requirements) requirements.open = true;
+  for (const id of ['#gpu-requirements', '#protected-video']) document.querySelector(id)?.setAttribute('open', '');
 });
 
 const observer = reduceMotion || !('IntersectionObserver' in window)
@@ -68,6 +67,37 @@ slider?.addEventListener('input', () => {
   for (const name of [...stage.classList]) if (name.startsWith('split-')) stage.classList.remove(name);
   stage.classList.add(`split-${split}`);
 });
+
+// One-time slider hint: sweep 20 → 50 on first reveal so visitors discover
+// the comparison. Skipped for reduced motion; any user input takes over.
+if (slider && !reduceMotion && 'IntersectionObserver' in window) {
+  let hintFinished = false;
+  let hintCancelled = false;
+  const cancelHint = () => { hintCancelled = true; };
+  slider.addEventListener('pointerdown', cancelHint, { once: true });
+  slider.addEventListener('keydown', cancelHint, { once: true });
+  const setSplit = value => {
+    slider.value = String(value);
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const hintObserver = new IntersectionObserver(entries => {
+    if (hintFinished || !entries.some(entry => entry.isIntersecting)) return;
+    hintFinished = true;
+    hintObserver.disconnect();
+    setSplit(20);
+    const startedAt = performance.now();
+    const duration = 900;
+    const frame = now => {
+      if (hintCancelled) { setSplit(50); return; }
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 2);
+      setSplit(Math.round(20 + (50 - 20) * eased));
+      if (progress < 1) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }, { threshold: 0.4 });
+  hintObserver.observe(slider.parentElement);
+}
 
 const emailLink = document.querySelector('[data-support-email]');
 if (emailLink && !emailLink.getAttribute('href')?.startsWith('mailto:')) {

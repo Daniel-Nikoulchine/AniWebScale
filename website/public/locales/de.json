@@ -69,16 +69,13 @@
     "message": "Glattere Farbbänder"
   },
   "cmpItem3": {
-    "message": "Schärfere Details bei 2x und 4x"
-  },
-  "cmpKicker": {
-    "message": "02 / SIEH DEN UNTERSCHIED"
+    "message": "Schärfere Details durch KI-Upscaling"
   },
   "cmpText": {
     "message": "Ziehe den Regler, um das Original-Frame mit einem echten KI-hochskalierten Render zu vergleichen."
   },
   "cmpTitle": {
-    "message": "Weiche Quelle,<br><em>scharfer Render.</em>"
+    "message": "Weiche Quelle,<br>scharfer Render."
   },
   "colorTheme": {
     "message": "Farbschema"
@@ -104,8 +101,8 @@
   "disablingExtension": {
     "message": "Erweiterung wird deaktiviert..."
   },
-  "dlKicker": {
-    "message": "BEREIT, WENN DU ES BIST"
+  "dlGithub": {
+    "message": "Entwicklung auf GitHub verfolgen →"
   },
   "dlNote": {
     "message": "Store-Listings werden vorbereitet. Download-Links erscheinen hier, sobald sie live sind."
@@ -188,14 +185,11 @@
   "faq6Q": {
     "message": "Wie bekomme ich Support?"
   },
-  "faqKicker": {
-    "message": "03 / GUT ZU WISSEN"
-  },
   "faqSub": {
     "message": "Noch neugierig? Die Erweiterung ist darauf ausgelegt, berechenbar, lokal und leicht rückgängig zu machen zu sein."
   },
   "faqTitle": {
-    "message": "Fragen<br><em>treffen Antworten.</em>"
+    "message": "Fragen<br>treffen Antworten."
   },
   "feat1Text": {
     "message": "Anime4K und KI-gestützte Modi schärfen jedes Frame, während dein Video weiterspielt."
@@ -233,14 +227,11 @@
   "feat6Title": {
     "message": "Gemacht für Line Art"
   },
-  "featKicker": {
-    "message": "01 / DAS GUTE ZEUG"
-  },
   "featSub": {
     "message": "Gebaut für animierte Inhalte, bei denen klare Konturen und feine Farbabstufungen am wichtigsten sind."
   },
   "featTitle": {
-    "message": "Eine kleine Erweiterung.<br><em>Jedes Frame geschärft.</em>"
+    "message": "Eine kleine Erweiterung.<br>Jedes Frame geschärft."
   },
   "finishSetup": {
     "message": "Einrichtung abschließen"
@@ -295,18 +286,6 @@
   },
   "frameMotion2xEvenOff": {
     "message": "Bewegungsbasierte 2x-Rate, auch bei ausgeschalteter Verbesserung."
-  },
-  "gpuCheck": {
-    "message": "Anforderungen prüfen"
-  },
-  "gpuNoticeAria": {
-    "message": "Grafikkarten-Anforderung"
-  },
-  "gpuText": {
-    "message": "Neuere integrierte Grafikkarten schaffen leichtere Presets. Für flüssiges 4K, KI-Upscaling und Frame-Generierung empfiehlt sich eine leistungsstarke dedizierte Grafikkarte mit aktuellen Treibern und ausreichend VRAM."
-  },
-  "gpuTitle": {
-    "message": "Eine moderne GPU ist erforderlich."
   },
   "heroArtAria": {
     "message": "AniWebScale-Videoplayer mit echter Upscaling-Vorschau"
@@ -488,6 +467,18 @@
   "notFoundTitle": {
     "message": "Seite nicht gefunden — AniWebScale"
   },
+  "noticeAria": {
+    "message": "Voraussetzungen"
+  },
+  "noticeCheck": {
+    "message": "Anforderungen & Kompatibilität prüfen"
+  },
+  "noticeText": {
+    "message": "Leichte Presets schaffen ggf. neuere integrierte Grafikkarten, aber flüssiges 4K, KI-Upscaling, Frame-Generierung und DRM-geschützte Dienste brauchen eine leistungsstarke dedizierte GPU oder den nativen Windows-Renderer."
+  },
+  "noticeTitle": {
+    "message": "Moderne GPU erforderlich — Native für geschützte Streams."
+  },
   "onboardingTitle": {
     "message": "Schärfere Anime, in Echtzeit."
   },
@@ -659,14 +650,17 @@
   "repoCaptionStrong": {
     "message": "RealESR-AnimeVideo-v3 x4-Upscale-Vorschau"
   },
-  "repoKicker": {
-    "message": "VISUELLE VORSCHAU"
+  "repoFigureAlt": {
+    "message": "Echter Vorher-Nachher-Vergleich: 450-mal-200-Anime-Clipframe, hochskaliert auf 1800-mal-800 mit RealESR-AnimeVideo-v3 — weiches bilineares Original links, KI-verbesserter Render rechts"
+  },
+  "repoSource": {
+    "message": "Quelle: Projekt-Testfixture-Clipframe (450×200-Mitten-Crop, keine Untertitel)"
   },
   "repoText": {
     "message": "Dieser Seite-an-Seite-Vergleich zeigt ein echtes 450-mal-200-Quellframe, hochskaliert auf 1800-mal-800 mit dem RealESR-AnimeVideo-v3-Modell: weiches bilineares Original links, KI-verbesserter Render rechts."
   },
   "repoTitle": {
-    "message": "Links weich,<br><em>rechts scharf.</em>"
+    "message": "Links weich,<br>rechts scharf."
   },
   "requestingSiteAccess": {
     "message": "Website-Zugriff wird angefragt..."
@@ -688,6 +682,12 @@
   },
   "savingSetup": {
     "message": "Einrichtung wird gespeichert..."
+  },
+  "sceneEnhanced": {
+    "message": "RealESR x4 · 1800×800"
+  },
+  "sceneOriginal": {
+    "message": "ORIGINAL · 450×200"
   },
   "settingsHome": {
     "message": "Startseite der AniWebScale-Einstellungen"
@@ -775,18 +775,6 @@
   },
   "storeComingSoon": {
     "message": "Demnächst"
-  },
-  "streamCheck": {
-    "message": "Kompatibilität prüfen"
-  },
-  "streamNoticeAria": {
-    "message": "Kompatibilität mit geschütztem Streaming"
-  },
-  "streamText": {
-    "message": "Geschützte Streams können den WebGPU-Pfad nicht nutzen. Der Native-Windows-Renderer ist erforderlich, aber einzelne Dienste können die Aufnahme trotzdem blockieren, da AniWebScale DRM niemals umgeht."
-  },
-  "streamTitle": {
-    "message": "Crunchyroll, Netflix und ähnliche Dienste benötigen Native."
   },
   "support": {
     "message": "Support"

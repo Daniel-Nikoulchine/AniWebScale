@@ -11,5 +11,8 @@
     "dev": "npx --yes serve public",
     "start": "npx --yes serve public",
     "build:client": "esbuild client/site-localize.mjs --bundle --minify --format=iife --outfile=public/site-localize.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

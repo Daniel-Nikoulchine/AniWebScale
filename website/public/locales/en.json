@@ -69,16 +69,13 @@
     "message": "Smoother color bands"
   },
   "cmpItem3": {
-    "message": "Sharper details at 2x and 4x"
-  },
-  "cmpKicker": {
-    "message": "02 / SEE THE DIFFERENCE"
+    "message": "Sharper details with AI upscaling"
   },
   "cmpText": {
     "message": "Drag the slider to compare the original frame with a real AI-upscaled render."
   },
   "cmpTitle": {
-    "message": "Soft source,<br><em>crisp render.</em>"
+    "message": "Soft source,<br>crisp render."
   },
   "colorTheme": {
     "message": "Color theme"
@@ -104,8 +101,8 @@
   "disablingExtension": {
     "message": "Disabling extension..."
   },
-  "dlKicker": {
-    "message": "READY WHEN YOU ARE"
+  "dlGithub": {
+    "message": "Follow development on GitHub →"
   },
   "dlNote": {
     "message": "Store listings are being prepared. Download links will appear here as soon as they are live."
@@ -188,14 +185,11 @@
   "faq6Q": {
     "message": "How do I get support?"
   },
-  "faqKicker": {
-    "message": "03 / GOOD TO KNOW"
-  },
   "faqSub": {
     "message": "Still curious? The extension is designed to be predictable, local and easy to undo."
   },
   "faqTitle": {
-    "message": "Questions,<br><em>meet answers.</em>"
+    "message": "Questions,<br>meet answers."
   },
   "feat1Text": {
     "message": "Anime4K and AI-powered modes sharpen every frame while your video keeps playing."
@@ -233,14 +227,11 @@
   "feat6Title": {
     "message": "Made for line art"
   },
-  "featKicker": {
-    "message": "01 / THE GOOD STUFF"
-  },
   "featSub": {
     "message": "Built for animated content where crisp outlines and subtle color transitions matter most."
   },
   "featTitle": {
-    "message": "One small extension.<br><em>Every frame sharpened.</em>"
+    "message": "One small extension.<br>Every frame sharpened."
   },
   "finishSetup": {
     "message": "Finish setup"
@@ -295,18 +286,6 @@
   },
   "frameMotion2xEvenOff": {
     "message": "Motion-aware 2x, even while enhancement is off."
-  },
-  "gpuCheck": {
-    "message": "Check requirements"
-  },
-  "gpuNoticeAria": {
-    "message": "Graphics card requirement"
-  },
-  "gpuText": {
-    "message": "Recent integrated graphics may handle lighter presets. For smooth 4K, AI upscaling and frame generation, use a powerful dedicated graphics card with current drivers and sufficient VRAM."
-  },
-  "gpuTitle": {
-    "message": "A modern GPU is required."
   },
   "heroArtAria": {
     "message": "AniWebScale video player with real upscaling preview"
@@ -488,6 +467,18 @@
   "notFoundTitle": {
     "message": "Page not found — AniWebScale"
   },
+  "noticeAria": {
+    "message": "Setup requirements"
+  },
+  "noticeCheck": {
+    "message": "Check requirements & compatibility"
+  },
+  "noticeText": {
+    "message": "Lighter presets may run on recent integrated graphics, but smooth 4K, AI upscaling, frame generation and DRM-protected services need a powerful dedicated GPU or the Native Windows renderer."
+  },
+  "noticeTitle": {
+    "message": "A modern GPU is required — Native for protected streams."
+  },
   "onboardingTitle": {
     "message": "Sharper anime, in real time."
   },
@@ -659,14 +650,17 @@
   "repoCaptionStrong": {
     "message": "RealESR-AnimeVideo-v3 x4 upscaled preview"
   },
-  "repoKicker": {
-    "message": "VISUAL PREVIEW"
+  "repoFigureAlt": {
+    "message": "Real before-and-after: 450 by 200 anime clip frame upscaled to 1800 by 800 with RealESR-AnimeVideo-v3 — soft bilinear original on the left, AI-enhanced render on the right"
+  },
+  "repoSource": {
+    "message": "Source: project test-fixture clip frame (450×200 center crop, no subtitles)"
   },
   "repoText": {
     "message": "This side-by-side comparison shows a real 450 by 200 source frame upscaled to 1800 by 800 with the RealESR-AnimeVideo-v3 model: soft bilinear original on the left, AI-enhanced render on the right."
   },
   "repoTitle": {
-    "message": "Soft on the left,<br><em>crisp on the right.</em>"
+    "message": "Soft on the left,<br>crisp on the right."
   },
   "requestingSiteAccess": {
     "message": "Requesting site access..."
@@ -688,6 +682,12 @@
   },
   "savingSetup": {
     "message": "Saving setup..."
+  },
+  "sceneEnhanced": {
+    "message": "RealESR x4 · 1800×800"
+  },
+  "sceneOriginal": {
+    "message": "ORIGINAL · 450×200"
   },
   "settingsHome": {
     "message": "AniWebScale settings home"
@@ -775,18 +775,6 @@
   },
   "storeComingSoon": {
     "message": "Coming soon"
-  },
-  "streamCheck": {
-    "message": "Check compatibility"
-  },
-  "streamNoticeAria": {
-    "message": "Protected streaming compatibility"
-  },
-  "streamText": {
-    "message": "Protected streams cannot use the WebGPU frame path. The Native Windows renderer is required, but individual services may still block capture because AniWebScale never bypasses DRM."
-  },
-  "streamTitle": {
-    "message": "Crunchyroll, Netflix and similar services require Native."
   },
   "support": {
     "message": "Support"

@@ -217,19 +217,20 @@ test('presents enhancement modes with readable names and relevant controls', asy
     await popup.goto(`chrome-extension://${EXTENSION_ID}/popup.html`);
     const mode = popup.locator('#mode');
     await expect(mode).toHaveValue('A');
-    await expect(mode.locator('option:checked')).toHaveText('Anime4K A - Balanced restore + 2x upscale (Recommended)');
+    await expect(mode.locator('option:checked')).toHaveText('Anime4K A · Balanced');
     await expect(mode.locator('option')).toHaveText([
-      'Off - No image enhancement',
-      'Anime4K A - Balanced restore + 2x upscale (Recommended)',
-      'Anime4K B - Soft restore + 2x upscale',
-      'Anime4K C - Denoise + 2x upscale',
-      'Anime4K A+A - Strong 2-pass restore + up to 4x',
-      'Anime4K B+B - Strong soft restore + up to 4x',
-      'Anime4K C+A - Denoise, restore + up to 4x',
-      'Anime4K CNN 2x - Sharp neural upscale (GPU: medium)',
-      'ArtCNN C4F16 2x - Line/detail reconstruction (GPU: real-time)',
-      'ACNet F8B4 2x - Fast lightweight upscale (GPU: very light)',
-      'ARNet F8B8 2x - Strong detail recovery (GPU: balanced)',
+      'Off',
+      'Anime4K A · Balanced',
+      'Anime4K B · Soft restore',
+      'Anime4K C · Denoise',
+      'Anime4K A+A · Strong',
+      'Anime4K B+B · Strong soft',
+      'Anime4K C+A · Denoise+Restore',
+      'Anime4K CNN · Sharp 2x',
+      'ArtCNN · Line detail',
+      'ACNet · Fast',
+      'ARNet · Strong detail',
+      'Real-ESRGAN · Max detail',
     ]);
     expect(await mode.locator('option').evaluateAll((options) =>
       options.every((option) => (option as HTMLOptionElement).title.length > 60),
@@ -250,7 +251,7 @@ test('presents enhancement modes with readable names and relevant controls', asy
     await expect(mode.locator('option[value="GANX3"]')).toHaveCount(0);
     await expect(mode.locator('option[value="GANX4"]')).toHaveCount(0);
     await mode.selectOption('ARTCNN');
-    await expect(mode.locator('option:checked')).toHaveText('ArtCNN C4F16 2x - Line/detail reconstruction (GPU: real-time)');
+    await expect(mode.locator('option:checked')).toHaveText('ArtCNN · Line detail');
     await expect(popup.locator('#quality')).toBeDisabled();
 
     await expect(mode.locator('option[value="REALESRGANX4"]')).toHaveCount(0);
@@ -258,9 +259,9 @@ test('presents enhancement modes with readable names and relevant controls', asy
     // RealESRGAN is a valid browser-only mode and must appear in the selector.
     await expect(mode.locator('option[value="REALESRGAN"]')).toHaveCount(1);
     await mode.selectOption('REALESRGAN');
-    await expect(mode.locator('option:checked')).toHaveText(/Real-ESRGAN AnimeVideo v3 4x/);
+    await expect(mode.locator('option:checked')).toHaveText('Real-ESRGAN · Max detail');
     await mode.selectOption('OFF');
-    await expect(popup.locator('option:checked')).toHaveText('Off - No image enhancement');
+    await expect(mode.locator('option:checked')).toHaveText('Off');
     await expect(popup.locator('#backend')).toBeDisabled();
   } finally {
     await popup.close();
@@ -271,7 +272,7 @@ test('shows the official AniWebScale logo in the settings hero', async ({ extens
   const options = await extensionContext.newPage();
   try {
     await options.goto(`chrome-extension://${EXTENSION_ID}/options.html`);
-    const header = options.locator('.site-header');
+    const header = options.locator('.panel-header');
     await expect(header).toBeVisible();
     await expect(header.locator('.brand img')).toHaveAttribute('src', 'icons/icon128.png');
     await expect(options.locator('.topbar')).toHaveCount(0);
@@ -296,16 +297,14 @@ test('shows the official AniWebScale logo in the settings hero', async ({ extens
     await themeSelect.selectOption(storedTheme);
     await expect(root).toHaveAttribute('data-theme', effectiveTheme);
 
-    const logo = options.locator('.hero-logo');
+    const logo = options.locator('.panel-header .brand img');
     await expect(logo).toBeVisible();
-    await expect(logo).toHaveAttribute('src', 'icons/icon400.png');
-    await expect(options.locator('.hero-art .screen')).toHaveCount(0);
-    await expect(options.locator('.hero-art .cloud')).toHaveCount(0);
+    await expect(logo).toHaveAttribute('src', 'icons/icon128.png');
     expect(await logo.evaluate((image: HTMLImageElement) => ({
       complete: image.complete,
       width: image.naturalWidth,
       height: image.naturalHeight,
-    }))).toEqual({ complete: true, width: 400, height: 400 });
+    }))).toEqual({ complete: true, width: 128, height: 128 });
   } finally {
     await options.close();
   }
@@ -351,7 +350,7 @@ test('global popup toggle immediately disables and re-enables video management',
   const popup = await extensionContext.newPage();
   await popup.goto(`chrome-extension://${EXTENSION_ID}/popup.html`);
   const toggle = popup.locator('#extension-enabled');
-  const toggleRow = popup.locator('.extension-switch-card .check-row');
+  const toggleRow = popup.locator('.extension-switch-card label.ui-toggle');
   try {
     await expect(toggle).toBeChecked();
     await toggleRow.click();
@@ -431,6 +430,12 @@ test('starts only in player fullscreen, remains stable, and stops after exit', a
   test.setTimeout(90_000);
   const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
   requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
+  // SwiftShader (headless default) reports WebGPU but never settles queue
+  // completions for real work, so no frame ever completes and no canvas
+  // appears (measured: submits ok, onSubmittedWorkDone never resolves).
+  // The canvas path needs real GPU completions (verified headed on RX 6750
+  // XT). AdapterInfo is empty in both modes, so gate on the headed flag.
+  requireOrSkipCapability(process.env.E2E_HEADED === '1', 'The canvas path needs headed Chromium with a real GPU (SwiftShader never settles completions).');
   await setExtensionSettings(extensionContext);
   await page.goto('/layers.html');
   await expect(page.locator(OVERLAY_SELECTOR)).toHaveCount(1);

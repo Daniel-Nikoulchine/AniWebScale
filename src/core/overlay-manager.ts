@@ -244,6 +244,11 @@ export class OverlayManager {
     return this.canvas;
   }
 
+  /** True once a rendered frame was presented on the output canvas. */
+  public get isCanvasVisible(): boolean {
+    return this.canvasVisible;
+  }
+
   public showCanvas(): void {
     const canvas = this.getCanvas();
     if (canvas.parentNode !== this.video.parentNode) {

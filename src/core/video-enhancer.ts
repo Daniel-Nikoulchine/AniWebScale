@@ -87,6 +87,14 @@ export class VideoEnhancer {
   private nativePlaybackTimer?: number;
   private fullscreenDebounceTimer?: number;
   private fullscreenRevision = 0;
+  /**
+   * First-frame watchdog: a renderer that never presents (transient device
+   * loss at first start, observed flaky in Zen E2E) leaves applied set with
+   * no canvas and no error. One restart heals it (proven by manual retry);
+   * the flag bounds it to a single restart per enhancer life.
+   */
+  private firstFrameWatchdogTimer?: number;
+  private firstFrameWatchdogFired = false;
   /** The one serialized lifecycle: settings and fullscreen reconcile never interleave. */
   private readonly lifecycle = new EnhancerLifecycle();
   private readonly events = new EventScope();
@@ -320,6 +328,7 @@ export class VideoEnhancer {
       if (!this.isTransitionCurrent(revision)) return;
       VideoEnhancer.activeEnhancer = this;
       this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+      this.armFirstFrameWatchdog();
     } catch (error) {
       if (!this.isTransitionCurrent(revision)) return;
       // Renderer/backend failures are operational errors and are shown in the
@@ -959,8 +968,43 @@ export class VideoEnhancer {
     this.video.removeAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR);
   }
 
+  /**
+   * Arms the first-frame watchdog after a successful start: if no frame was
+   * presented within 8 s (applied set, WebGPU renderer alive, canvas still
+   * hidden, native not active), the first start hit a silent stall and one
+   * restart is attempted. Healthy starts present in well under a second, so
+   * the timeout never fires for them; the fired flag bounds it to one retry.
+   */
+  private armFirstFrameWatchdog(): void {
+    if (this.firstFrameWatchdogFired || this.destroyed) return;
+    this.disarmFirstFrameWatchdog();
+    this.firstFrameWatchdogTimer = window.setTimeout(() => {
+      this.firstFrameWatchdogTimer = undefined;
+      if (this.destroyed || this.firstFrameWatchdogFired) return;
+      if (this.backend.isNativeActive) return;
+      if (!this.renderer) return;
+      if (this.video.getAttribute(ANIME4K_APPLIED_ATTR) !== 'true') return;
+      if (this.overlay.isCanvasVisible) return;
+      this.firstFrameWatchdogFired = true;
+      console.warn('[Anime4K] First frame never presented; restarting enhancement once.');
+      void this.stopEnhancement()
+        .then(() => { if (!this.destroyed) return this.startEnhancement(); })
+        .catch(error => {
+          console.warn('[Anime4K] First-frame watchdog restart failed:', error);
+        });
+    }, 8000);
+  }
+
+  private disarmFirstFrameWatchdog(): void {
+    if (this.firstFrameWatchdogTimer !== undefined) {
+      window.clearTimeout(this.firstFrameWatchdogTimer);
+      this.firstFrameWatchdogTimer = undefined;
+    }
+  }
+
   public async stopEnhancement(options: { stopNative?: boolean; releaseClaim?: boolean } = {}): Promise<void> {
     const { stopNative = true, releaseClaim = true } = options;
+    this.disarmFirstFrameWatchdog();
     // Snapshot native ownership BEFORE beginTransition() flips the phase to
     // 'starting' — reading it afterwards made this guard permanently false,
     // so an active native session was only ever stopped while a fallback

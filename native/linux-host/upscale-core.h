@@ -57,6 +57,7 @@ struct UpscaleCoreConfig {
     bool use_fp16 = true;
     bool use_int8 = false;
     bool use_srvgg_engine = false;
+    int infer_div = 1; // Stufe 1: 1 voll, 2 infer at ceil(W/2) (Gate-PASS); Rest -> 1
     std::string param_path;
     std::string bin_path;
     std::string int8_param;
@@ -121,6 +122,9 @@ public:
     // the gpu instance back down (mirrors the original early return).
     bool load_models(const UpscaleCoreConfig& cfg) {
         use_srvgg_engine_ = cfg.use_srvgg_engine;
+        // Stufe 1: nur div=2 freigegeben (Gate 30.4 dB PASS); alles andere -> 1.
+        infer_div_ = (cfg.infer_div == 2) ? 2 : 1;
+        if (infer_div_ != 1) fprintf(stderr, "[host] infer-div=%d (Stufe 1)\n", infer_div_);
 
         net_.opt.use_vulkan_compute = true;
         net_.opt.num_threads = 4;
@@ -314,6 +318,48 @@ private:
                           std::vector<unsigned char>& out, int& out_w, int& out_h,
                           std::string& err_msg, const std::string& engine) {
 #if NCNN_VULKAN
+        // Stufe 1: infer-div=2 halbiert den Netz-Input per exaktem Box-Average
+        // (fraktionale Kanten). target_w/h bleiben Presentation-Ziele; der
+        // bestehende p8-Pfad skaliert das 2x-Netz-Output per GPU-Shader runter.
+        // Tiled-Schwelle greift auf dem kleinen Input (automatisch seltener).
+        // Nur mit Presentation-Target: ohne target gilt weiter voll 4x.
+        std::vector<unsigned char> small;
+        if (infer_div_ == 2 && target_w > 0 && target_h > 0 && width >= 2 && height >= 2) {
+            const int sw = (width + 1) / 2, sh = (height + 1) / 2;
+            small.assign((size_t)sw * sh * 4, 0);
+            for (int y = 0; y < sh; ++y) {
+                const float y0f = (float)y * height / sh;
+                const float y1f = (float)(y + 1) * height / sh;
+                const int y0 = (int)floorf(y0f), y1 = (int)ceilf(y1f);
+                for (int x = 0; x < sw; ++x) {
+                    const float x0f = (float)x * width / sw;
+                    const float x1f = (float)(x + 1) * width / sw;
+                    const int x0 = (int)floorf(x0f), x1 = (int)ceilf(x1f);
+                    float ar = 0, ag = 0, ab = 0, wsum = 0;
+                    for (int sy = y0; sy < y1; ++sy) {
+                        const float wy = std::min(y1f, (float)sy + 1) - std::max(y0f, (float)sy);
+                        if (wy <= 0) continue;
+                        for (int sx = x0; sx < x1; ++sx) {
+                            const float wx = std::min(x1f, (float)sx + 1) - std::max(x0f, (float)sx);
+                            if (wx <= 0) continue;
+                            const float wgt = wx * wy;
+                            const unsigned char* px4 = rgba + (((size_t)sy * width) + sx) * 4;
+                            ar += px4[0] * wgt; ag += px4[1] * wgt; ab += px4[2] * wgt;
+                            wsum += wgt;
+                        }
+                    }
+                    const float inv = 1.0f / std::max(wsum, 1e-6f);
+                    unsigned char* d = small.data() + (((size_t)y * sw) + x) * 4;
+                    d[0] = (unsigned char)std::min(255.0f, floorf(ar * inv + 0.5f));
+                    d[1] = (unsigned char)std::min(255.0f, floorf(ag * inv + 0.5f));
+                    d[2] = (unsigned char)std::min(255.0f, floorf(ab * inv + 0.5f));
+                    d[3] = 255;
+                }
+            }
+            rgba = small.data();
+            width = sw;
+            height = sh;
+        }
         const long long px = (long long)width * height;
         const bool tiled = px > (long long)1280 * 720;
         // E4 selection: explicit per-request engine wins; otherwise the
@@ -545,6 +591,7 @@ private:
     SrvggVulkan* srvgg_ = nullptr; // lazy, created on the first E4 frame
     std::string srvgg_models_dir_;
     bool use_srvgg_engine_ = false;
+    int infer_div_ = 1; // Stufe 1: 1 voll, 2 halb (Rest faellt auf 1)
 
     std::mutex upscale_mutex_;
     std::atomic<uint64_t> last_activity_ms_{now_ms()};

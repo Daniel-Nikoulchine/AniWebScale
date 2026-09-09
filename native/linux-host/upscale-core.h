@@ -279,6 +279,39 @@ public:
 #endif
     }
 
+    // Stufe 5 (Session-Warmup): 2 tiny frames through the full run_upscale
+    // path (one untargeted 4x, one with presentation target to also warm the
+    // div2/down2 + postproc-downscale branches when enabled). Moves the
+    // first-dispatch/compile tax from the first served frame to process
+    // startup. Returns total warmup ms. Idempotent per process.
+    double warmup() {
+        auto t0 = std::chrono::steady_clock::now();
+        std::vector<unsigned char> rgba((size_t)320 * 240 * 4);
+        for (int y = 0; y < 240; ++y)
+            for (int x = 0; x < 320; ++x) {
+                unsigned char* d = rgba.data() + (((size_t)y * 320) + x) * 4;
+                d[0] = (unsigned char)((x * 3) & 0xff);
+                d[1] = (unsigned char)((y * 5) & 0xff);
+                d[2] = (unsigned char)(((x + y) * 7) & 0xff);
+                d[3] = 255;
+            }
+        for (int i = 0; i < 2; ++i) {
+            std::vector<unsigned char> out;
+            int ow = 0, oh = 0;
+            std::string err;
+            // i==0: full 4x, no target; i==1: with target (div2 path when on).
+            const int tw = (i == 0) ? 0 : 320, th = (i == 0) ? 0 : 240;
+            if (!run_upscale(rgba.data(), 320, 240, tw, th, out, ow, oh, err)) {
+                fprintf(stderr, "[host] warmup frame %d failed: %s\n", i, err.c_str());
+                break;
+            }
+        }
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        fprintf(stderr, "[host] session warmup done in %.1f ms\n", ms);
+        return ms;
+    }
+
     void shutdown() {
         if (blob_) { device_->reclaim_blob_allocator(blob_); blob_ = nullptr; }
         if (staging_) { device_->reclaim_staging_allocator(staging_); staging_ = nullptr; }

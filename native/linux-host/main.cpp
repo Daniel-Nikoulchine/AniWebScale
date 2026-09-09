@@ -527,6 +527,12 @@ int main(int argc, char** argv) {
         inferDiv = (v == 2) ? 2 : 1;
         fprintf(stderr, "[host] ANIWEBSCALE_INFER_DIV=%s -> div=%d\n", e, inferDiv);
     }
+    // Stufe 5: Session-Warmup an (Opt-out ANIWEBSCALE_NO_WARMUP=1); der
+    // --traffic-test misst bewusst kalt und bleibt ohne Vorwaermung.
+    bool noWarmup = false;
+    if (const char* e = std::getenv("ANIWEBSCALE_NO_WARMUP")) {
+        noWarmup = std::atoi(e) != 0;
+    }
     // Deep-fusion premise probe: --traffic-test W H [ITERS] times one 64ch
     // fp16 layer boundary and exits (no models, no network).
     bool trafficTest = false;
@@ -613,6 +619,10 @@ int main(int argc, char** argv) {
     core_cfg.int8_param = int8_param;
     core_cfg.int8_bin = int8_bin;
     if (!core.load_models(core_cfg)) return 1;
+
+    // Stufe 5: First-Dispatch-Tax vom ersten Frame an den Startup ziehen.
+    if (!noWarmup && !trafficTest) core.warmup();
+    else fprintf(stderr, "[host] session warmup skipped\n");
 
 #if NCNN_VULKAN
     if (trafficTest) {

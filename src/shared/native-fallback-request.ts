@@ -1,7 +1,7 @@
 import { isNativeConfiguration } from '../native/protocol';
 import type { NativeConfiguration } from '../native/protocol';
 
-const FALLBACK_REASONS = [
+export const FALLBACK_REASONS = [
   'eme',
   'security-error',
   'webgpu-unavailable',
@@ -11,12 +11,16 @@ const FALLBACK_REASONS = [
 
 export type NativeFallbackReason = (typeof FALLBACK_REASONS)[number];
 
+/**
+ * The native fallback wire request. `reason` and `output` used to ride along
+ * but were validated and never read by the background, so only the fields the
+ * session machine consumes remain. The caller-side `NativeFallbackReason` is
+ * still used to classify why a fallback happened; it is simply not transmitted.
+ */
 export interface NativeFallbackRequest {
   type: 'NATIVE_FALLBACK_REQUEST';
   videoId: string;
-  reason: NativeFallbackReason;
   configuration: NativeConfiguration;
-  output: 'auto';
   videoRect: {
     x: number;
     y: number;
@@ -34,10 +38,7 @@ export function isNativeFallbackRequest(value: unknown): value is NativeFallback
     && typeof request.videoId === 'string'
     && request.videoId.length > 0
     && request.videoId.length <= 128
-    && typeof request.reason === 'string'
-    && FALLBACK_REASONS.includes(request.reason as NativeFallbackReason)
     && isNativeConfiguration(request.configuration)
-    && request.output === 'auto'
     && !!rect
     && [rect.x, rect.y, rect.width, rect.height, rect.devicePixelRatio]
       .every(component => typeof component === 'number' && Number.isFinite(component))

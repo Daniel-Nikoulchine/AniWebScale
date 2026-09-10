@@ -1,12 +1,16 @@
 /*
- * UpscaleCore: the GPU/inference state of the AniWebScale ncnn host,
- * extracted from the former monolithic main() (deep-module refactor).
+ * UpscaleCore: the serialized GPU/inference coordinator of the AniWebScale
+ * ncnn host. Owns the per-frame staging buffers, the exclusive-GPU mutex, the
+ * idle clock and the served-frame counter, and drives the per-frame
+ * Vulkan/ncnn pipeline (run_upscale_impl, moved byte-for-byte out of main()'s
+ * run_upscale lambda — moved, not rewritten).
  *
- * Owns the Vulkan device, the persistent blob/staging allocators, the ncnn
- * Net, the optional hand-written SRVGG backend and the GPU pre/postproc
- * pipelines, plus the shared upscale bookkeeping (exclusive-GPU mutex, idle
- * clock, served-frame counter). The per-frame Vulkan/ncnn logic is moved
- * byte-for-byte out of main()'s run_upscale lambda — moved, not rewritten.
+ * The GPU resources themselves (device, ncnn Net, allocators, pre/postproc
+ * pipelines, lazy srvgg backend, precision policy) live behind GpuRuntime;
+ * the tiled path's persistent staging buffers and recompute-halo compose/copy
+ * loops live in TiledComposer (reached under UpscaleCore's mutex); the pure
+ * per-frame geometry/target decisions live in frame-plan.h and
+ * fp32-governor.h, and the shared CPU box-average in box-downscale.h.
  *
  * Both transports (framed stdin/stdout JSON, loopback HTTP) are thin adapters
  * around this interface. The idle clock is deliberately NOT bumped by
@@ -14,13 +18,11 @@
  * message receipt, the HTTP handler on a successful frame), preserving the
  * original semantics. run_upscale only increments the served-frame counter.
  *
- * Lifecycle:
+ * Lifecycle (forwarded to GpuRuntime):
  *   init_device()  — gpu instance + device selection + report (false = fatal)
  *   load_models()  — ncnn net, custom pipelines, persistent allocators
  *   run_upscale()  — per-frame entry, exclusive GPU ownership via mutex
- *   shutdown()     — reclaim + net.clear + destroy instance (in that order:
- *                    the Net must release GPU resources before the instance
- *                    dies, or the destructor SIGSEGVs in the driver)
+ *   shutdown()     — reclaim + net.clear + destroy instance (in that order)
  */
 
 #pragma once
@@ -32,55 +34,21 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <mutex>
 #include <new>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include "net.h"
-#include "gpu.h"
-#if NCNN_VULKAN
-#include "pipelinecache.h"
-#endif
+#include "box-downscale.h"
+#include "fp32-governor.h"
+#include "frame-plan.h"
+#include "gpu-frame.h"
+#include "tiled-composer.h"
+#include "gpu-runtime.h"
 #include "srvgg-vulkan.h"
 
-#if NCNN_VULKAN
-#include "realesrgan_spike_postproc.comp.hex.h"
-#include "realesrgan_spike_preproc.comp.hex.h"
-#include "realesrgan_spike_preproc_f32.comp.hex.h"
-#include "realesrgan_spike_postproc_f32.comp.hex.h"
-#include "realesrgan_spike_preproc_down2.comp.hex.h"
-#endif
-
 namespace aniwebscale {
-
-// Process configuration for load_models(); filled in by main()'s env/arg
-// parsing (CLI concerns stay out of the core).
-struct UpscaleCoreConfig {
-    bool use_fp16 = true;
-    bool use_int8 = false;
-    bool use_srvgg_engine = false;
-    int infer_div = 1; // Stufe 1: 1 voll, 2 infer at ceil(W/2) (Gate-PASS); Rest -> 1
-    // fp32 governor tuning (see UpscaleCore members). budget 0 = disabled.
-    double fp32_budget_ms = 0.0;
-    double fp32_ms_per_px = 3.0e-4;
-    double fp32_min_scale = 0.5;
-    std::string param_path;
-    std::string bin_path;
-    std::string int8_param;
-    std::string int8_bin;
-};
-
-// ncnn wraps a dims=2 Mat with Mat::total() == cstep, i.e. the 16-byte-aligned
-// byte count. record_clone's upload/download memcpy moves total()*elemsize
-// bytes, so any external buffer handed to ncnn must be allocated to that
-// padded size or the copy runs up to 12 bytes past the end (heap overflow for
-// tile sizes whose w*h*4 is not 16-aligned, e.g. 675x675).
-static inline size_t alignedFrameBytes(size_t bytes) {
-    return (bytes + 15u) & ~(size_t)15u;
-}
 
 class UpscaleCore {
 public:
@@ -89,203 +57,13 @@ public:
     UpscaleCore(const UpscaleCore&) = delete;
     UpscaleCore& operator=(const UpscaleCore&) = delete;
 
-    // ncnn gpu instance + device selection + device report. Returns false
-    // after logging when no Vulkan device is available (no teardown —
-    // mirrors the original early return).
-    bool init_device() {
-        ncnn::create_gpu_instance();
-        device_ = ncnn::get_gpu_device(0);
-        if (!device_) {
-            fprintf(stderr, "[host] no Vulkan device\n");
-            return false;
-        }
-        report_device(device_);
-        // Zombie-Hypothese (2.9.) ist belegter VRAM durch den persistenten
-        // Blob-Pool: Budget jetzt loggen, am Idle-Exit nochmal, dann weiß man es.
-        heap_budget_start_mb_ = device_->get_heap_budget();
-        return true;
-    }
+    bool init_device() { return runtime_.init_device(); }
 
-    // E6: explicit ncnn pipeline-cache load. The device compiles every
-    // layer + custom pipeline on first use; loading the previous session's
-    // cache hides that cold-start cost on every later spawn (RADV's disk
-    // cache covers shaders, this covers ncnn's pipeline layer: layouts,
-    // descriptors, specialization). Best effort, never fatal. Call between
-    // init_device() and load_models().
     void load_pipeline_cache(const std::string& path, const std::string& cache_dir) {
-        try {
-            std::filesystem::create_directories(cache_dir);
-#if NCNN_VULKAN
-            const ncnn::PipelineCache* pipeline_cache = device_->get_pipeline_cache();
-            if (pipeline_cache) {
-                FILE* cache_in = fopen(path.c_str(), "rb");
-                if (cache_in) {
-                    const int rc = pipeline_cache->load_cache(cache_in);
-                    fclose(cache_in);
-                    fprintf(stderr, "[host] pipeline cache %s: %s (rc=%d)\n",
-                            rc == 0 ? "loaded" : "rejected",
-                            path.c_str(), rc);
-                } else {
-                    fprintf(stderr, "[host] no pipeline cache yet: %s\n", path.c_str());
-                }
-            }
-#else
-            (void)path;
-#endif
-        } catch (...) {}
+        runtime_.load_pipeline_cache(path, cache_dir);
     }
 
-    // ncnn Net + GPU pre/postproc pipelines + persistent allocators. Returns
-    // false after logging on any fatal step; the allocator-failure path tears
-    // the gpu instance back down (mirrors the original early return).
-    bool load_models(const UpscaleCoreConfig& cfg) {
-        use_srvgg_engine_ = cfg.use_srvgg_engine;
-        // fp32-storage mode: the network, preproc and postproc all run with
-        // 32-bit channels (elemsize 4) instead of fp16 storage (elemsize 2).
-        // ~2.5x slower on NAVI22 but numerically exact; the hand-written srvgg
-        // engine is fp16-only and is disabled for the whole process here.
-        use_fp16_ = cfg.use_fp16;
-        if (!use_fp16_) fprintf(stderr, "[host] fp32 storage mode (no fp16)\n");
-        // Stufe 1: nur div=2 freigegeben (Gate 30.4 dB PASS); alles andere -> 1.
-        infer_div_ = (cfg.infer_div == 2) ? 2 : 1;
-        if (infer_div_ != 1) fprintf(stderr, "[host] infer-div=%d (Stufe 1)\n", infer_div_);
-        fp32_budget_ms_ = cfg.fp32_budget_ms;
-        fp32_ms_per_px_ = cfg.fp32_ms_per_px > 0 ? cfg.fp32_ms_per_px : 3.0e-4;
-        fp32_min_scale_ = cfg.fp32_min_scale > 0 ? cfg.fp32_min_scale : 0.5;
-        if (!use_fp16_ && fp32_budget_ms_ > 0)
-            fprintf(stderr, "[host] fp32 governor: budget=%.1fms cost=%.2e ms/px minscale=%.2f\n",
-                    fp32_budget_ms_, fp32_ms_per_px_, fp32_min_scale_);
-
-        net_.opt.use_vulkan_compute = true;
-        net_.opt.num_threads = 4;
-        net_.opt.use_fp16_packed = cfg.use_fp16;
-        net_.opt.use_fp16_storage = cfg.use_fp16;
-        net_.opt.use_fp16_arithmetic = false;
-        net_.opt.use_winograd_convolution = true;
-        net_.opt.use_bf16_storage = false;
-        // INT8-Pfad (nur mit quantisiertem Modell, sonst stiller Fallback auf
-        // fp32-Layer — deshalb oben fail-fast ohne int8-Dateien).
-        net_.opt.use_int8_inference = cfg.use_int8;
-        net_.opt.use_int8_storage = cfg.use_int8;
-        net_.opt.use_int8_packed = cfg.use_int8;
-        net_.opt.use_int8_arithmetic = cfg.use_int8;
-
-        const std::string& load_param = cfg.use_int8 ? cfg.int8_param : cfg.param_path;
-        const std::string& load_bin = cfg.use_int8 ? cfg.int8_bin : cfg.bin_path;
-        if (net_.load_param(load_param.c_str()) != 0) {
-            fprintf(stderr, "[host] failed to load param %s\n", load_param.c_str());
-            return false;
-        }
-        if (net_.load_model(load_bin.c_str()) != 0) {
-            fprintf(stderr, "[host] failed to load bin %s\n", load_bin.c_str());
-            return false;
-        }
-        fprintf(stderr, "[host] model loaded\n");
-
-#if NCNN_VULKAN
-        if (cfg.use_fp16) {
-            postproc_ = new ncnn::Pipeline(device_);
-            postproc_->set_optimal_local_size_xyz(32, 32, 1);
-            std::vector<ncnn::vk_specialization_type> specs(1);
-            specs[0].i = 0;
-            if (postproc_->create(realesrgan_spike_postproc_comp_data, sizeof(realesrgan_spike_postproc_comp_data), specs) != 0) {
-                fprintf(stderr, "[host] failed to create postproc pipeline\n");
-                delete postproc_;
-                postproc_ = nullptr;
-            } else {
-                fprintf(stderr, "[host] GPU postproc ready\n");
-            }
-            // Preproc: RGBA8 -> planar fp16, avoids CPU loop + CPU cast
-            preproc_ = new ncnn::Pipeline(device_);
-            preproc_->set_optimal_local_size_xyz(32, 32, 1);
-            std::vector<ncnn::vk_specialization_type> pre_specs(1);
-            pre_specs[0].i = 0;
-            if (preproc_->create(realesrgan_spike_preproc_comp_data, sizeof(realesrgan_spike_preproc_comp_data), pre_specs) != 0) {
-                fprintf(stderr, "[host] failed to create preproc pipeline\n");
-                delete preproc_;
-                preproc_ = nullptr;
-            } else {
-                fprintf(stderr, "[host] GPU preproc ready\n");
-            }
-            // Stufe 2: down2 preproc (div2 box-downscale folded into preproc,
-            // one dispatch, full-res upload). Null => CPU-loop fallback.
-            preproc_down2_ = new ncnn::Pipeline(device_);
-            preproc_down2_->set_optimal_local_size_xyz(32, 32, 1);
-            std::vector<ncnn::vk_specialization_type> down2_specs(1);
-            down2_specs[0].i = 0;
-            if (preproc_down2_->create(realesrgan_spike_preproc_down2_comp_data,
-                                       sizeof(realesrgan_spike_preproc_down2_comp_data),
-                                       down2_specs) != 0) {
-                fprintf(stderr, "[host] failed to create preproc_down2 pipeline, div2 stays on CPU pre\n");
-                delete preproc_down2_;
-                preproc_down2_ = nullptr;
-            } else {
-                fprintf(stderr, "[host] GPU preproc_down2 ready\n");
-            }
-        } else {
-            // fp32-storage pipelines: same layout and push constants as the
-            // fp16 shaders, 32-bit channel type. No down2 variant — the
-            // infer-div=2 CPU box pass feeds the small frame to the fp32
-            // preproc (the down2 shader is an fp16-only optimization).
-            postproc_f32_ = new ncnn::Pipeline(device_);
-            postproc_f32_->set_optimal_local_size_xyz(32, 32, 1);
-            std::vector<ncnn::vk_specialization_type> specs(1);
-            specs[0].i = 0;
-            if (postproc_f32_->create(realesrgan_spike_postproc_f32_comp_data,
-                                      sizeof(realesrgan_spike_postproc_f32_comp_data), specs) != 0) {
-                fprintf(stderr, "[host] failed to create fp32 postproc pipeline\n");
-                delete postproc_f32_;
-                postproc_f32_ = nullptr;
-            } else {
-                fprintf(stderr, "[host] GPU fp32 postproc ready\n");
-            }
-            preproc_f32_ = new ncnn::Pipeline(device_);
-            preproc_f32_->set_optimal_local_size_xyz(32, 32, 1);
-            std::vector<ncnn::vk_specialization_type> pre_specs(1);
-            pre_specs[0].i = 0;
-            if (preproc_f32_->create(realesrgan_spike_preproc_f32_comp_data,
-                                     sizeof(realesrgan_spike_preproc_f32_comp_data), pre_specs) != 0) {
-                fprintf(stderr, "[host] failed to create fp32 preproc pipeline\n");
-                delete preproc_f32_;
-                preproc_f32_ = nullptr;
-            } else {
-                fprintf(stderr, "[host] GPU fp32 preproc ready\n");
-            }
-        }
-#endif
-
-        // E4 phase 1: srvgg backend is fully lazy (zero cost when unused or
-        // disabled): created on the first E4 frame, weights + pipelines then.
-        srvgg_models_dir_ =
-            std::filesystem::path(cfg.bin_path).parent_path().parent_path().string();
-        if (cfg.use_srvgg_engine) {
-            fprintf(stderr, "[srvgg] engine enabled (env ANIWEBSCALE_SRVGG_ENGINE), models dir %s\n",
-                    srvgg_models_dir_.c_str());
-        }
-
-        // Persistent Vulkan allocators — acquired once, reused for every frame.
-        // Avoids per-frame vkAllocate churn and mirrors benchmark S2 change.
-        blob_ = device_->acquire_blob_allocator();
-        staging_ = device_->acquire_staging_allocator();
-        if (!blob_ || !staging_) {
-            fprintf(stderr, "[host] failed to acquire Vulkan allocators\n");
-            destroy_pipelines();
-            // Same ordering rule as shutdown(): the Net must release its GPU
-            // resources BEFORE the instance dies, or ~Net() SIGSEGVs later in
-            // the driver. (Latent since HEAD — the failure path skipped it.)
-            // Reclaim only after every user is gone (see shutdown()).
-            net_.clear();
-            if (blob_) device_->reclaim_blob_allocator(blob_);
-            if (staging_) device_->reclaim_staging_allocator(staging_);
-            blob_ = nullptr;
-            staging_ = nullptr;
-            ncnn::destroy_gpu_instance();
-            device_ = nullptr;
-            return false;
-        }
-        fprintf(stderr, "[host] persistent allocators ready (blob=%p staging=%p)\n", (void*)blob_, (void*)staging_);
-        return true;
-    }
+    bool load_models(const UpscaleCoreConfig& cfg) { return runtime_.load_models(cfg); }
 
     // Per-frame entry (p7): single-pass for small frames, tiled (640/32)
     // above 1280x720, GPU pre/post-processing, latest-wins quality identical
@@ -301,8 +79,13 @@ public:
     bool run_upscale(const unsigned char* rgba, int width, int height,
                      int target_w, int target_h,
                      std::vector<unsigned char>& out, int& out_w, int& out_h,
-                     std::string& err_msg, const std::string& engine = "") {
+                     std::string& err_msg, const std::string& engine = "",
+                     std::string* err_stage = nullptr) {
         std::lock_guard<std::mutex> lock(upscale_mutex_);
+        // Failure phase for the error reply ("upload" until the frame reaches
+        // the GPU submit; "tile" in the tiled compose path). Defaulted here so
+        // a bad_alloc thrown before the impl sets it still reports a stage.
+        if (err_stage != nullptr && err_stage->empty()) *err_stage = "upload";
         // A giant frame (up to 4096px per side) can exhaust RAM in a staging
         // resize (a 4096^2 tiled compose is 1 GiB): fail the frame loudly so
         // the client falls back instead of dying on an uncaught bad_alloc.
@@ -311,7 +94,7 @@ public:
         bool ok = false;
         try {
             ok = run_upscale_impl(rgba, width, height, target_w, target_h,
-                                  out, out_w, out_h, err_msg, engine);
+                                  out, out_w, out_h, err_msg, engine, err_stage);
         } catch (const std::bad_alloc&) {
             err_msg = "out of memory for frame staging";
             ok = false;
@@ -320,27 +103,7 @@ public:
         return ok;
     }
 
-    // E6: persist the device pipeline cache for the next cold start. The
-    // caller runs this after the transports stop (GPU idle, every pipeline
-    // compiled) and before shutdown() (the cache dies with the device).
-    void save_pipeline_cache(const std::string& path) {
-#if NCNN_VULKAN
-        const ncnn::PipelineCache* pipeline_cache = device_->get_pipeline_cache();
-        if (pipeline_cache) {
-            FILE* cache_out = fopen(path.c_str(), "wb");
-            if (cache_out) {
-                const int rc = pipeline_cache->save_cache(cache_out);
-                fclose(cache_out);
-                fprintf(stderr, "[host] pipeline cache saved: %s (rc=%d)\n",
-                        path.c_str(), rc);
-            } else {
-                fprintf(stderr, "[host] pipeline cache save failed: %s\n", path.c_str());
-            }
-        }
-#else
-        (void)path;
-#endif
-    }
+    void save_pipeline_cache(const std::string& path) { runtime_.save_pipeline_cache(path); }
 
     // Stufe 5 (Session-Warmup): 2 tiny frames through the full run_upscale
     // path (one untargeted 4x, one with presentation target to also warm the
@@ -375,27 +138,7 @@ public:
         return ms;
     }
 
-    void shutdown() {
-        // Order matters (same rule as net_.clear() vs destroy_gpu_instance
-        // below): every GPU-resource owner dies BEFORE its allocators are
-        // reclaimed. Reclaiming first and then deleting srvgg_ (VkMats
-        // backed by the blob pool) or clearing the Net frees memory back
-        // into a reclaimed pool.
-#if NCNN_VULKAN
-        delete srvgg_;
-        srvgg_ = nullptr;
-        destroy_pipelines();
-#endif
-        // Lifetime rule from the spike: the Net must release its GPU resources
-        // BEFORE the instance dies. net.clear() destroys the layers now, while
-        // the instance is still alive; the empty Net destructor afterwards is
-        // a no-op.
-        net_.clear();
-        if (blob_) { device_->reclaim_blob_allocator(blob_); blob_ = nullptr; }
-        if (staging_) { device_->reclaim_staging_allocator(staging_); staging_ = nullptr; }
-        ncnn::destroy_gpu_instance();
-        device_ = nullptr;
-    }
+    void shutdown() { runtime_.shutdown(); }
 
     // Idle-Reaper-Uhr: beide Transporte (stdin-framed + HTTP-Loopback) melden
     // Aktivität; der HTTP-Pfad läuft auf einem eigenen Thread, daher atomar.
@@ -411,40 +154,24 @@ public:
 
     // Accessors for the process-level concerns that stay in main(): the
     // --traffic-test probe and the pipeline-cache persistence helpers.
-    ncnn::VulkanDevice* device() const { return device_; }
-    ncnn::VkAllocator* blob_allocator() const { return blob_; }
-    ncnn::VkAllocator* staging_allocator() const { return staging_; }
-    uint32_t heap_budget_start_mb() const { return heap_budget_start_mb_; }
+    ncnn::VulkanDevice* device() const { return runtime_.device(); }
+    ncnn::VkAllocator* blob_allocator() const { return runtime_.blob_allocator(); }
+    ncnn::VkAllocator* staging_allocator() const { return runtime_.staging_allocator(); }
+    uint32_t heap_budget_start_mb() const { return runtime_.heap_budget_start_mb(); }
 
 private:
-    // Delete every custom pre/postproc pipeline (both precisions). Used by the
-    // load-failure path and shutdown(); null-safe and idempotent.
-    void destroy_pipelines() {
-#if NCNN_VULKAN
-        delete postproc_; postproc_ = nullptr;
-        delete postproc_f32_; postproc_f32_ = nullptr;
-        delete preproc_; preproc_ = nullptr;
-        delete preproc_f32_; preproc_f32_ = nullptr;
-        delete preproc_down2_; preproc_down2_ = nullptr;
-#endif
-    }
-
-    static void report_device(const ncnn::VulkanDevice* dev) {
-        const auto& info = dev->info;
-        fprintf(stderr, "[host] device=%s api=%u.%u.%u driver=%s fp16_packed=%d fp16_storage=%d fp16_arith=%d rebar=%d\n",
-            info.device_name(),
-            info.api_version() >> 22, (info.api_version() >> 12) & 0x3ff, info.api_version() & 0xfff,
-            info.driver_name(),
-            info.support_fp16_packed(), info.support_fp16_storage(), info.support_fp16_arithmetic(),
-            info.resizable_bar_enabled());
-    }
 
     // Body of the former run_upscale lambda, moved verbatim (local variables
     // became members). Caller must hold upscale_mutex_.
     bool run_upscale_impl(const unsigned char* rgba, int width, int height,
                           int target_w, int target_h,
                           std::vector<unsigned char>& out, int& out_w, int& out_h,
-                          std::string& err_msg, const std::string& engine) {
+                          std::string& err_msg, const std::string& engine,
+                          std::string* err_stage) {
+        auto set_stage = [&](const char* stage) {
+            if (err_stage != nullptr) *err_stage = stage;
+        };
+        set_stage("upload");
 #if NCNN_VULKAN
         // Stufe 1: infer-div=2 halbiert den Netz-Input per exaktem Box-Average
         // (fraktionale Kanten). target_w/h bleiben Presentation-Ziele; der
@@ -457,10 +184,10 @@ private:
         // bit-identical). Null pipeline => CPU-loop fallback.
         bool gpu_pre_down2 = false;
         int full_w = 0, full_h = 0;
-        if (infer_div_ == 2 && target_w > 0 && target_h > 0 && width >= 2 && height >= 2) {
+        if (runtime_.infer_div() == 2 && target_w > 0 && target_h > 0 && width >= 2 && height >= 2) {
             const int sw = (width + 1) / 2, sh = (height + 1) / 2;
-            const bool small_tiled = (long long)sw * sh > (long long)1280 * 720;
-            if (preproc_down2_ != nullptr && !small_tiled) {
+            const bool small_tiled = isTiledFrame(sw, sh);
+            if (runtime_.preproc_down2() != nullptr && !small_tiled) {
                 gpu_pre_down2 = true;
                 full_w = width;
                 full_h = height;
@@ -468,35 +195,7 @@ private:
                 height = sh;
             } else {
             small.assign((size_t)sw * sh * 4, 0);
-            for (int y = 0; y < sh; ++y) {
-                const float y0f = (float)y * height / sh;
-                const float y1f = (float)(y + 1) * height / sh;
-                const int y0 = (int)floorf(y0f), y1 = (int)ceilf(y1f);
-                for (int x = 0; x < sw; ++x) {
-                    const float x0f = (float)x * width / sw;
-                    const float x1f = (float)(x + 1) * width / sw;
-                    const int x0 = (int)floorf(x0f), x1 = (int)ceilf(x1f);
-                    float ar = 0, ag = 0, ab = 0, wsum = 0;
-                    for (int sy = y0; sy < y1; ++sy) {
-                        const float wy = std::min(y1f, (float)sy + 1) - std::max(y0f, (float)sy);
-                        if (wy <= 0) continue;
-                        for (int sx = x0; sx < x1; ++sx) {
-                            const float wx = std::min(x1f, (float)sx + 1) - std::max(x0f, (float)sx);
-                            if (wx <= 0) continue;
-                            const float wgt = wx * wy;
-                            const unsigned char* px4 = rgba + (((size_t)sy * width) + sx) * 4;
-                            ar += px4[0] * wgt; ag += px4[1] * wgt; ab += px4[2] * wgt;
-                            wsum += wgt;
-                        }
-                    }
-                    const float inv = 1.0f / std::max(wsum, 1e-6f);
-                    unsigned char* d = small.data() + (((size_t)y * sw) + x) * 4;
-                    d[0] = (unsigned char)std::min(255.0f, floorf(ar * inv + 0.5f));
-                    d[1] = (unsigned char)std::min(255.0f, floorf(ag * inv + 0.5f));
-                    d[2] = (unsigned char)std::min(255.0f, floorf(ab * inv + 0.5f));
-                    d[3] = 255;
-                }
-            }
+            boxDownscaleRgba8(rgba, width, height, small.data(), sw, sh);
             rgba = small.data();
             width = sw;
             height = sh;
@@ -510,450 +209,41 @@ private:
         // Quality loss is bounded by the budget and fp32_min_scale_; fp16 mode
         // is untouched. Single-pass only: the tiled compose path keeps its
         // full-resolution seam math (and the product cap never tiles).
-        if (!use_fp16_ && fp32_budget_ms_ > 0 && target_w > 0 && target_h > 0) {
-            const long long full_px = (long long)width * height;
-            if (full_px > 0 && full_px <= (long long)1280 * 720) {
-                const double budget_px = (double)fp32_budget_ms_ / fp32_ms_per_px_;
-                double s = std::sqrt(budget_px / (double)full_px);
-                if (s > 1.0) s = 1.0;
-                if (s < fp32_min_scale_) s = fp32_min_scale_;
-                const int nw = std::max(2, (int)std::lround((double)width * s));
-                const int nh = std::max(2, (int)std::lround((double)height * s));
-                if (nw < width || nh < height) {
-                    fp32_scaled_.assign((size_t)nw * nh * 4, 0);
-                    for (int y = 0; y < nh; ++y) {
-                        const float y0f = (float)y * height / nh;
-                        const float y1f = (float)(y + 1) * height / nh;
-                        const int y0 = (int)floorf(y0f), y1 = (int)ceilf(y1f);
-                        for (int x = 0; x < nw; ++x) {
-                            const float x0f = (float)x * width / nw;
-                            const float x1f = (float)(x + 1) * width / nw;
-                            const int x0 = (int)floorf(x0f), x1 = (int)ceilf(x1f);
-                            float ar = 0, ag = 0, ab = 0, wsum = 0;
-                            for (int sy = y0; sy < y1; ++sy) {
-                                const float wy = std::min(y1f, (float)sy + 1) - std::max(y0f, (float)sy);
-                                if (wy <= 0) continue;
-                                for (int sx = x0; sx < x1; ++sx) {
-                                    const float wx = std::min(x1f, (float)sx + 1) - std::max(x0f, (float)sx);
-                                    if (wx <= 0) continue;
-                                    const float wgt = wx * wy;
-                                    const unsigned char* px4 = rgba + (((size_t)sy * width) + sx) * 4;
-                                    ar += px4[0] * wgt; ag += px4[1] * wgt; ab += px4[2] * wgt;
-                                    wsum += wgt;
-                                }
-                            }
-                            const float inv = 1.0f / std::max(wsum, 1e-6f);
-                            unsigned char* d = fp32_scaled_.data() + (((size_t)y * nw) + x) * 4;
-                            d[0] = (unsigned char)std::min(255.0f, floorf(ar * inv + 0.5f));
-                            d[1] = (unsigned char)std::min(255.0f, floorf(ag * inv + 0.5f));
-                            d[2] = (unsigned char)std::min(255.0f, floorf(ab * inv + 0.5f));
-                            d[3] = 255;
-                        }
-                    }
-                    rgba = fp32_scaled_.data();
-                    width = nw;
-                    height = nh;
-                }
+        {
+            int nw = 0, nh = 0;
+            const Fp32GovernorParams governor{runtime_.fp32_budget_ms(),
+                                              runtime_.fp32_ms_per_px(),
+                                              runtime_.fp32_min_scale()};
+            if (!runtime_.use_fp16()
+                && planFp32Governor(width, height, target_w, target_h, governor, nw, nh)) {
+                fp32_scaled_.assign((size_t)nw * nh * 4, 0);
+                boxDownscaleRgba8(rgba, width, height, fp32_scaled_.data(), nw, nh);
+                rgba = fp32_scaled_.data();
+                width = nw;
+                height = nh;
             }
         }
-        const long long px = (long long)width * height;
-        const bool tiled = px > (long long)1280 * 720;
+        const bool tiled = isTiledFrame(width, height);
         // E4 selection: explicit per-request engine wins; otherwise the
         // process env default applies (probes + back-compat). Unknown values
         // fall back to ncnn.
-        const bool wantSrvgg = !engine.empty() ? (engine == "srvgg") : use_srvgg_engine_;
-        ncnn::Option opt = net_.opt;
-        opt.blob_vkallocator = blob_;
-        opt.workspace_vkallocator = blob_;
-        opt.staging_vkallocator = staging_;
-
-        auto run_gpu_frame = [&](const unsigned char* rgba_src, int iw, int ih,
-                                 int fw, int fh, // postproc target for THIS tile/frame
-                                 std::vector<unsigned char>& frame_out, int& ow, int& oh,
-                                 std::string& emsg, bool allowSrvgg,
-                                 bool pre_down2 = false, int full_w = 0, int full_h = 0) -> bool {
-            // Spike lifetime rule: ONE VkCompute per inference, destroyed with
-            // the frame's VkMats before the allocators are touched again.
-            // Reusing a long-lived VkCompute across several submit_and_wait()
-            // cycles (the tiled path) reliably SIGSEGVs inside RADV on the
-            // second tile's submit — the command buffer scratch space is
-            // recycled while the driver still references the previous
-            // submission. The single-pass path used to share the persistent
-            // frame_cmd from p3; per-frame is the only pattern that has ever
-            // been validated with tiles, so use it everywhere.
-            ncnn::VkCompute cmd(device_);
-            ncnn::Option topt = opt;
-            // fp32 storage runs the whole chain with 32-bit channels; fp16
-            // uses 16-bit. Selected once per frame from the process mode.
-            const size_t act_elemsize = use_fp16_ ? (size_t)2 : (size_t)4;
-            ncnn::Pipeline* postproc = use_fp16_ ? postproc_ : postproc_f32_;
-            ncnn::VkMat rgba_gpu;
-            ncnn::VkMat in_gpu_pre;
-            ncnn::Mat tile_rgba_cpu;
-            if (pre_down2) {
-                // Stufe 2: full-res upload, down2 shader halves to iw x ih.
-                // Stufe 3 (Zero-Copy-Upload): der Frame-Puffer wird direkt
-                // gewrappt statt alloc+memcpy — record_clone kopiert beim
-                // Recorden synchron ins Staging, der Puffer lebt garantiert
-                // bis submit_and_wait (gleicher Scope). Keine Ownership.
-                tile_rgba_cpu = ncnn::Mat(full_w, full_h,
-                                          const_cast<unsigned char*>(rgba_src),
-                                          (size_t)4, 1);
-                rgba_gpu.create(full_w, full_h, (size_t)4, 1, blob_);
-                cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
-                in_gpu_pre.create(iw, ih, 3, act_elemsize, 1, blob_);
-                std::vector<ncnn::VkMat> binds(2);
-                binds[0] = rgba_gpu;
-                binds[1] = in_gpu_pre;
-                std::vector<ncnn::vk_constant_type> consts(5);
-                consts[0].i = full_w;
-                consts[1].i = full_h;
-                consts[2].i = iw;
-                consts[3].i = ih;
-                consts[4].i = (int)in_gpu_pre.cstep;
-                ncnn::VkMat disp; disp.w = iw; disp.h = ih; disp.c = 1;
-                cmd.record_pipeline(preproc_down2_, binds, consts, disp);
-            } else {
-            // Stufe 3 (Zero-Copy-Upload): wie oben, Frame-Puffer wrappen.
-            tile_rgba_cpu = ncnn::Mat(iw, ih,
-                                      const_cast<unsigned char*>(rgba_src),
-                                      (size_t)4, 1);
-            rgba_gpu.create(iw, ih, (size_t)4, 1, blob_);
-            if (!rgba_gpu.data) { emsg = "gpu upload alloc failed"; return false; }
-            cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
-            // No local re-declaration here: it would shadow the outer
-            // in_gpu_pre that the extractor/srvgg path below actually uses,
-            // leaving that outer mat empty (SIGFPE deep in ncnn's Padding).
-            in_gpu_pre.create(iw, ih, 3, act_elemsize, 1, blob_);
-            if (!in_gpu_pre.data) { emsg = "gpu input alloc failed"; return false; }
-            // A failed preproc pipeline creation (logged at load) must fail
-            // the frame, not dereference a null pipeline below. The pipelines
-            // are precision-matched to the network storage mode.
-            ncnn::Pipeline* preproc = use_fp16_ ? preproc_ : preproc_f32_;
-            if (!preproc || !postproc) { emsg = "gpu pre/postproc pipeline unavailable"; return false; }
-            {
-                std::vector<ncnn::VkMat> binds(2);
-                binds[0] = rgba_gpu;
-                binds[1] = in_gpu_pre;
-                std::vector<ncnn::vk_constant_type> consts(3);
-                consts[0].i = iw;
-                consts[1].i = ih;
-                consts[2].i = (int)in_gpu_pre.cstep; // real padded cstep from the blob
-                ncnn::VkMat disp; disp.w = iw; disp.h = ih; disp.c = 1;
-                cmd.record_pipeline(preproc, binds, consts, disp);
-            }
-            }
-            ncnn::VkMat out_gpu;
-            // E4 phase 1: hand-written SRVGG kernels instead of the ncnn
-            // extractor (full frames only; tiles and any srvgg failure fall
-            // back to ncnn for the same frame). Postproc/download below are
-            // shared: tailOut is fp16 planar exactly like extractor output.
-            bool srvggServed = false;
-            bool srvggAttempted = false;
-            // The hand-written engine consumes/produces fp16 planar only, so
-            // it is unavailable in fp32-storage mode (ncnn serves the frame).
-            if (allowSrvgg && wantSrvgg && use_fp16_) {
-                srvggAttempted = true;
-                if (!srvgg_) srvgg_ = new SrvggVulkan(device_, blob_, staging_);
-                std::string srvggErr;
-                if (srvgg_->ensure(srvgg_models_dir_, srvggErr)
-                    && srvgg_->run(cmd, in_gpu_pre, iw, ih, out_gpu, topt, srvggErr)) {
-                    srvggServed = true;
-                    static bool loggedSrvgg = false;
-                    if (!loggedSrvgg) {
-                        loggedSrvgg = true;
-                        fprintf(stderr, "[srvgg] serving frames (ncnn fallback armed)\n");
-                    }
-                } else {
-                    fprintf(stderr, "[srvgg] frame falls back to ncnn: %s\n", srvggErr.c_str());
-                }
-            }
-            if (!srvggServed) {
-                ncnn::Extractor ex = net_.create_extractor();
-                ex.set_blob_vkallocator(blob_);
-                ex.set_workspace_vkallocator(blob_);
-                ex.set_staging_vkallocator(staging_);
-                ex.input("data", in_gpu_pre);
-                int ret = ex.extract("output", out_gpu, cmd);
-                if (ret != 0) { emsg = "extractor extract failed"; return false; }
-            }
-            // Presentation target: exact when given (the shader picks identity,
-            // box-downscale or bilinear-upscale per axis), else the network
-            // output. fp32 mode can hand the postproc a target larger than the
-            // (governor-reduced) network output, so do NOT clamp to out_gpu.
-            const int pw = fw > 0 ? fw : out_gpu.w;
-            const int ph = fh > 0 ? fh : out_gpu.h;
-            ncnn::VkMat out_rgba_gpu;
-            out_rgba_gpu.create(pw, ph, (size_t)4, 1, blob_);
-            if (!out_rgba_gpu.data) { emsg = "gpu output alloc failed"; return false; }
-            {
-                std::vector<ncnn::VkMat> binds(2);
-                binds[0] = out_gpu;
-                binds[1] = out_rgba_gpu;
-                std::vector<ncnn::vk_constant_type> consts(5);
-                consts[0].i = out_gpu.w;
-                consts[1].i = out_gpu.h;
-                consts[2].i = out_gpu.cstep;
-                consts[3].i = pw;
-                consts[4].i = ph;
-                ncnn::VkMat disp; disp.w = pw; disp.h = ph; disp.c = 1;
-                cmd.record_pipeline(postproc, binds, consts, disp);
-            }
-            ncnn::Mat dst;
-            // Stufe 3 (Zero-Copy-Download): Zielvektor vorab auf pw x ph
-            // bringen, der Download landet direkt drin — create_like uebernimmt den
-            // Puffer bei Formgleichheit (dims=2, w=pw, h=ph, e4/u1,
-            // allocator=null==blob_allocator). Fallback unten falls nicht.
-            frame_out.resize(alignedFrameBytes((size_t)pw * ph * 4));
-            dst = ncnn::Mat(pw, ph, frame_out.data(), (size_t)4, 1);
-            cmd.record_clone(out_rgba_gpu, dst, topt);
-            // Never ignore the submit result: a dead submit leaves every
-            // buffer untouched (silent black frame with even alpha 0) while
-            // the HTTP layer reports success. Fail loudly so the client
-            // retries or falls back instead of presenting black. A failed
-            // submit also voids any weight clone srvgg recorded into this
-            // command: re-arm the upload whenever srvgg was involved, not
-            // only when it served — a run() failure after the clone plus a
-            // failed fallback submit would otherwise leave later frames
-            // convolving against never-written blob memory.
-            if (cmd.submit_and_wait() != 0) {
-                if (srvggAttempted) srvgg_->invalidateGpuWeights();
-                emsg = "gpu submit failed";
-                return false;
-            }
-            ow = dst.w; oh = dst.h;
-            // The download must have produced the target-sized frame: dst
-            // without data (OOM on the clone) or a size the postproc never
-            // promised means the bytes below would be garbage.
-            if (!dst.data || ow <= 0 || oh <= 0 || ow != pw || oh != ph) {
-                emsg = !dst.data ? "gpu download failed" : "gpu postproc size mismatch";
-                return false;
-            }
-            size_t need = (size_t)ow*oh*4;
-            frame_out.resize(need);
-            memcpy(frame_out.data(), dst.data, need);
-            return true;
-        };
+        const bool wantSrvgg = !engine.empty() ? (engine == "srvgg") : runtime_.use_srvgg_engine();
 
         if (!tiled) {
-            return run_gpu_frame(rgba, width, height, target_w, target_h, out, out_w, out_h, err_msg, true,
-                                 gpu_pre_down2, full_w, full_h);
-        }
-        // Tile in input pixels. PAD covers model prepadding (10) + conv margin.
-        // Stufe 4 (Overlap-Tuning, Tile-Kurve 1080p-full, host-latency-bench):
-        // n=5: 480:399ms, 512:396ms, 576:395ms, 640:398ms, 960:470ms;
-        // n=10: 576:396.0ms vs 640:396.9ms (Rauschen). 480-640 flach,
-        // 960 +18% (Working-Set). 640 bleibt; PAD=32 ist Model-Eigenschaft.
-        const int TILE = 642, PAD = 33, scale = 4;
-        // Tiling DESIGN NOTE — this host tiles with a recompute-halo scheme
-        // (PAD-halo around each tile, core-region copy, NO feathering), while
-        // the ORT worker tiles with overlap + weighted feathering
-        // (src/shared/realesrgan-tile-geometry.js, TILE 384/512 + 24). The
-        // divergence is deliberate, not drift: ncnn's tiled spike is a
-        // recompute-halo design from a different execution model, and the two
-        // paths never had to agree pixel-for-pixel. Do not "unify" them
-        // without an E2E gate on both engines.
-        // Tiled path: when a presentation target is given, first compose the
-        // full 4x frame (bit-identical to the untargeted path), then do ONE
-        // box-average pass over the composed bytes on the CPU. When the
-        // presentation target is an exact integer shrink f of the 4x output
-        // and every tile's target grid lines up with the global one, each tile
-        // is instead box-downscaled on the GPU and its core copied straight
-        // into the target, so the full-4x per-tile download and the CPU
-        // compose+downscale disappear. TILE/PAD are multiples of 3, so the
-        // common display ratios f=2/3/4/6 align for typical widths; anything
-        // that fails the per-tile check keeps the CPU box pass.
-        out_w = width * scale; out_h = height * scale;
-        const bool downscale = target_w > 0 && target_h > 0
-            && (target_w < out_w || target_h < out_h);
-        int tile_ds_factor = 0;
-        if (downscale && out_w % target_w == 0 && out_h % target_h == 0) {
-            const int fw = out_w / target_w, fh = out_h / target_h;
-            if (fw == fh && fw > 1) {
-                const int f = fw;
-                bool aligned = true;
-                for (int ty = 0; ty < height && aligned; ty += TILE) {
-                    const int cy1 = std::min(ty + TILE, height);
-                    const int ey0 = std::max(0, ty - PAD), ey1 = std::min(height, cy1 + PAD);
-                    if ((ey0 * scale) % f != 0 || ((ty - ey0) * scale) % f != 0
-                        || ((cy1 - ty) * scale) % f != 0 || ((ey1 - ey0) * scale) % f != 0) aligned = false;
-                }
-                for (int tx = 0; tx < width && aligned; tx += TILE) {
-                    const int cx1 = std::min(tx + TILE, width);
-                    const int ex0 = std::max(0, tx - PAD), ex1 = std::min(width, cx1 + PAD);
-                    if ((ex0 * scale) % f != 0 || ((tx - ex0) * scale) % f != 0
-                        || ((cx1 - tx) * scale) % f != 0 || ((ex1 - ex0) * scale) % f != 0) aligned = false;
-                }
-                if (aligned) tile_ds_factor = f;
+            GpuFrameOutcome outcome;
+            if (!run_gpu_frame(runtime_, rgba, width, height, target_w, target_h,
+                               true, wantSrvgg, gpu_pre_down2, full_w, full_h, out, outcome)) {
+                err_msg = outcome.error;
+                set_stage(outcome.stage.empty() ? "upload" : outcome.stage.c_str());
+                return false;
             }
-        }
-        if (tile_ds_factor > 0) {
-            const int f = tile_ds_factor;
-            const int ds_w = out_w / f, ds_h = out_h / f; // == target_w / target_h
-            if (out.size() != (size_t)ds_w * ds_h * 4) out.resize((size_t)ds_w * ds_h * 4);
-            unsigned char* ds_dst = out.data();
-            for (int ty = 0; ty < height; ty += TILE) {
-                for (int tx = 0; tx < width; tx += TILE) {
-                    int cx0 = tx, cy0 = ty;
-                    int cx1 = std::min(tx + TILE, width), cy1 = std::min(ty + TILE, height);
-                    int ex0 = std::max(0, cx0 - PAD), ey0 = std::max(0, cy0 - PAD);
-                    int ex1 = std::min(width, cx1 + PAD), ey1 = std::min(height, cy1 + PAD);
-                    int ew = ex1 - ex0, eh = ey1 - ey0;
-                    const size_t tile_need = (size_t)ew * eh * 4;
-                    const size_t tile_alloc = alignedFrameBytes(tile_need);
-                    if (tile_input_.size() < tile_alloc) tile_input_.resize(tile_alloc);
-                    unsigned char* tile = tile_input_.data();
-                    for (int y = 0; y < eh; ++y) {
-                        memcpy(tile + (size_t)y * ew * 4,
-                               rgba + ((size_t)(ey0 + y) * width + ex0) * 4,
-                               (size_t)ew * 4);
-                    }
-                    const int dtw = (ew * scale) / f, dth = (eh * scale) / f;
-                    int tw = 0, th = 0;
-                    std::string terr;
-                    if (!run_gpu_frame(tile, ew, eh, dtw, dth, tile_downscaled_, tw, th, terr, false)) {
-                        err_msg = terr.empty() ? "tile failed" : terr;
-                        return false;
-                    }
-                    // Core region in the downscaled tile → its slot in the
-                    // target. The alignment check above keeps every offset
-                    // integral and the box windows identical to the global
-                    // downscale.
-                    const int gx0 = (cx0 * scale) / f, gy0 = (cy0 * scale) / f;
-                    const int ox = ((cx0 - ex0) * scale) / f, oy = ((cy0 - ey0) * scale) / f;
-                    const int cw = ((cx1 - cx0) * scale) / f, ch = ((cy1 - cy0) * scale) / f;
-                    const unsigned char* src = tile_downscaled_.data();
-                    for (int y = 0; y < ch; ++y) {
-                        memcpy(ds_dst + (((size_t)(gy0 + y) * ds_w) + gx0) * 4,
-                               src + ((size_t)(oy + y) * tw + ox) * 4,
-                               (size_t)cw * 4);
-                    }
-                }
-            }
-            out_w = ds_w; out_h = ds_h;
+            out_w = outcome.out_w;
+            out_h = outcome.out_h;
             return true;
         }
-        const int comp_w = out_w, comp_h = out_h; // compose size
-        // Persistent compose/tile buffers (mutex-held, single in-flight
-        // upscale): the core regions partition the full frame, so every byte
-        // is overwritten below — no per-frame zero-fill (1080p: 132 MB
-        // memset saved) and no per-tile malloc/free churn. swap() hands the
-        // filled buffer to the caller and keeps their old one for next frame.
-        const size_t comp_bytes = (size_t)out_w * out_h * 4;
-        if (tiled_output_.size() != comp_bytes) tiled_output_.resize(comp_bytes);
-        unsigned char* comp = tiled_output_.data();
-        for (int ty = 0; ty < height; ty += TILE) {
-            for (int tx = 0; tx < width; tx += TILE) {
-                int cx0 = tx, cy0 = ty;
-                int cx1 = std::min(tx + TILE, width), cy1 = std::min(ty + TILE, height);
-                int ex0 = std::max(0, cx0 - PAD), ey0 = std::max(0, cy0 - PAD);
-                int ex1 = std::min(width, cx1 + PAD), ey1 = std::min(height, cy1 + PAD);
-                int ew = ex1 - ex0, eh = ey1 - ey0;
-                const size_t tile_need = (size_t)ew * eh * 4;
-                const size_t tile_alloc = alignedFrameBytes(tile_need);
-                if (tile_input_.size() < tile_alloc) tile_input_.resize(tile_alloc);
-                unsigned char* tile = tile_input_.data();
-                for (int y = 0; y < eh; ++y) {
-                    memcpy(tile + (size_t)y * ew * 4,
-                           rgba + ((size_t)(ey0 + y) * width + ex0) * 4,
-                           (size_t)ew * 4);
-                }
-                int tw = 0, th = 0;
-                std::string terr;
-                if (!run_gpu_frame(tile, ew, eh, 0, 0, tile_output_, tw, th, terr, false)) {
-                    err_msg = terr.empty() ? "tile failed" : terr;
-                    return false;
-                }
-                // Copy core region: core input (cx0..cx1)x(cy0..cy1) → output*4
-                int owx0 = (cx0 - ex0) * scale, owy0 = (cy0 - ey0) * scale;
-                int core_w = (cx1 - cx0) * scale, core_h = (cy1 - cy0) * scale;
-                int ox = cx0 * scale, oy = cy0 * scale;
-                const unsigned char* tiled_out = tile_output_.data();
-                for (int y = 0; y < core_h; ++y) {
-                    memcpy(comp + (((size_t)(oy + y) * out_w) + ox) * 4,
-                           tiled_out + ((size_t)(owy0 + y) * tw + owx0) * 4,
-                           (size_t)core_w * 4);
-                }
-            }
-        }
-        if (downscale) {
-            // Exact box average, same weights as the shader (fractional
-            // edges). ONE float path for every geometry: the old integer
-            // "fast lane" for exact power-of-two factors did a runtime
-            // integer division per channel per output pixel and measured
-            // 5-7x SLOWER than this loop (standalone + host A/B) - removed.
-            // This loop is bit-identical for those factors anyway: 1/area is
-            // exact and every partial sum stays < 2^24 in float32.
-            const int nw = std::min(target_w, comp_w);
-            const int nh = std::min(target_h, comp_h);
-            std::vector<unsigned char> small((size_t)nw * nh * 4);
-            // The CPU box pass is compute-bound (~2.4 cycles/tap) and reads the
-            // whole composed frame; split the output rows across cores. Each
-            // row writes disjoint bytes of `small` and only reads `comp`, so
-            // the result is bit-identical to the single-threaded loop.
-            auto downscale_rows = [&](int ry_begin, int ry_end) {
-            for (int y = ry_begin; y < ry_end; ++y) {
-                const float y0f = (float)y * comp_h / nh;
-                const float y1f = (float)(y + 1) * comp_h / nh;
-                const int y0 = (int)floorf(y0f), y1 = (int)ceilf(y1f);
-                for (int x = 0; x < nw; ++x) {
-                    const float x0f = (float)x * comp_w / nw;
-                    const float x1f = (float)(x + 1) * comp_w / nw;
-                    const int x0 = (int)floorf(x0f), x1 = (int)ceilf(x1f);
-                    float ar = 0, ag = 0, ab = 0, wsum = 0;
-                    for (int sy = y0; sy < y1; ++sy) {
-                        const float wy = std::min(y1f, (float)sy + 1) - std::max(y0f, (float)sy);
-                        if (wy <= 0) continue;
-                        for (int sx = x0; sx < x1; ++sx) {
-                            const float wx = std::min(x1f, (float)sx + 1) - std::max(x0f, (float)sx);
-                            if (wx <= 0) continue;
-                            const float wgt = wx * wy;
-                            const unsigned char* px4 = comp + (((size_t)sy * comp_w) + sx) * 4;
-                            ar += px4[0] * wgt; ag += px4[1] * wgt; ab += px4[2] * wgt;
-                            wsum += wgt;
-                        }
-                    }
-                    const float inv = 1.0f / std::max(wsum, 1e-6f);
-                    unsigned char* d = small.data() + (((size_t)y * nw) + x) * 4;
-                    d[0] = (unsigned char)std::min(255.0f, floorf(ar * inv + 0.5f));
-                    d[1] = (unsigned char)std::min(255.0f, floorf(ag * inv + 0.5f));
-                    d[2] = (unsigned char)std::min(255.0f, floorf(ab * inv + 0.5f));
-                    d[3] = 255;
-                }
-            }
-            };
-            const unsigned hw_threads = std::thread::hardware_concurrency();
-            const int want_threads = std::max(1, std::min<int>((int)(hw_threads ? hw_threads : 1), 8));
-            const int rows_per_thread = (nh + want_threads - 1) / want_threads;
-            if (want_threads <= 1 || rows_per_thread == 0) {
-                downscale_rows(0, nh);
-            } else {
-                std::vector<std::thread> workers;
-                workers.reserve((size_t)want_threads);
-                bool spawn_failed = false;
-                try {
-                    for (int t = 0; t < want_threads; ++t) {
-                        const int a = t * rows_per_thread;
-                        const int b = std::min(nh, a + rows_per_thread);
-                        if (a < b) workers.emplace_back(downscale_rows, a, b);
-                    }
-                } catch (...) {
-                    // Thread creation failed (resource exhaustion): join what
-                    // exists first (a joinable std::thread destructor would
-                    // terminate), then recompute every row on this thread.
-                    // Rows are independent and idempotent, so the recompute is
-                    // bit-identical.
-                    spawn_failed = true;
-                }
-                for (auto& worker : workers) worker.join();
-                if (spawn_failed) downscale_rows(0, nh);
-            }
-            out.swap(small);
-            out_w = nw; out_h = nh;
-        } else {
-            out.swap(tiled_output_);
-        }
-        return true;
+        return tiled_composer_.compose(runtime_, rgba, width, height,
+                                       target_w, target_h, out, out_w, out_h,
+                                       err_msg, wantSrvgg, err_stage);
 #else
         (void)rgba; (void)width; (void)height; (void)out; (void)out_w; (void)out_h;
         err_msg = "built without Vulkan support";
@@ -961,42 +251,13 @@ private:
 #endif
     }
 
-    ncnn::VulkanDevice* device_ = nullptr;
-    ncnn::Net net_;
-    ncnn::VkAllocator* blob_ = nullptr;
-    ncnn::VkAllocator* staging_ = nullptr;
-#if NCNN_VULKAN
-    ncnn::Pipeline* postproc_ = nullptr;      // fp16 storage
-    ncnn::Pipeline* preproc_ = nullptr;       // fp16 storage
-    ncnn::Pipeline* postproc_f32_ = nullptr;  // fp32 storage
-    ncnn::Pipeline* preproc_f32_ = nullptr;   // fp32 storage
-    ncnn::Pipeline* preproc_down2_ = nullptr; // Stufe 2: div2 in-preproc downscale
-#endif
-    SrvggVulkan* srvgg_ = nullptr; // lazy, created on the first E4 frame
-    std::string srvgg_models_dir_;
-    bool use_srvgg_engine_ = false;
-    bool use_fp16_ = true; // false = fp32 storage (elemsize 4 everywhere)
-    int infer_div_ = 1; // Stufe 1: 1 voll, 2 halb (Rest faellt auf 1)
-    // fp32 governor: target frame budget (ms), calibrated net cost (ms per
-    // input pixel) and the lowest allowed inference scale. 0 budget disables
-    // the governor (full-resolution fp32, used for A/B and quality gates).
-    double fp32_budget_ms_ = 0.0;
-    double fp32_ms_per_px_ = 3.0e-4;
-    double fp32_min_scale_ = 0.5;
+    GpuRuntime runtime_;
     std::vector<unsigned char> fp32_scaled_; // governor's downsampled input
-    // Persistent tiled-path staging (mutex-held, see the tiled branch):
-    // compose output, tile input gathering and per-tile network output.
-    // Reused across frames to avoid per-frame big mallocs + the full-frame
-    // memset; the tile cores partition the frame so no fill is needed.
-    std::vector<unsigned char> tiled_output_;
-    std::vector<unsigned char> tile_input_;
-    std::vector<unsigned char> tile_output_;
-    std::vector<unsigned char> tile_downscaled_; // per-tile GPU box-downscale output
+    TiledComposer tiled_composer_;
 
     std::mutex upscale_mutex_;
     std::atomic<uint64_t> last_activity_ms_{now_ms()};
     std::atomic<uint64_t> frames_served_{0};
-    uint32_t heap_budget_start_mb_ = 0;
 };
 
 } // namespace aniwebscale

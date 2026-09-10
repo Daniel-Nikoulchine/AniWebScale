@@ -12,8 +12,10 @@
  * The client never imports onnxruntime-web: it only shuttles URLs and planar
  * float buffers. The worker imports the standalone ORT bundle at runtime.
  *
- * Shipped for both browsers. The worker runs the WebGPU EP and falls back to
- * WASM internally. On Firefox this is the only place WebGPU inference can run:
+ * Shipped for both browsers. The worker runs the WebGPU EP only (WASM was
+ * removed); an inability to create a WebGPU session surfaces as a worker
+ * inference failure and the pipeline falls back to its main-thread session.
+ * On Firefox this is the only place WebGPU inference can run:
  * the content script's MV3 CSP blocks the asyncify loader's `new Function`,
  * but a blob worker is allowed it (verified on Zen). If the worker cannot be
  * spawned, `create()` resolves to null and the pipeline keeps its main-thread
@@ -35,7 +37,6 @@ import type {
   WorkerInferMessage,
   WorkerInitMessage,
 } from '../shared/realesrgan-worker-protocol.js';
-import type { RealEsrganPrecision } from '../types';
 import {
   buildWorkerInferMessage,
   buildWorkerInitMessage,
@@ -43,6 +44,11 @@ import {
   WORKER_REPLY_ERROR_CODES,
 } from '../shared/realesrgan-worker-protocol.js';
 import { formatRealEsrganError, REALESRGAN_ERROR_CODES, withRealEsrganCode } from '../shared/realesrgan-error-codes';
+import type { RealEsrganFrameResult, RealEsrganInferenceRunner } from './realesrgan-runner';
+
+// The Runner seam lives in realesrgan-runner.ts; re-export it here so the
+// long-standing imports from this module (pipeline.ts, tests) keep working.
+export type { RealEsrganFrameResult, RealEsrganInferenceRunner } from './realesrgan-runner';
 
 /** Overridable primitives so tests can drive the client without a browser. */
 export interface RealEsrganWorkerClientOptions {
@@ -87,86 +93,6 @@ const DEFAULT_INIT_TIMEOUT_MS = 15_000;
 // the retry.
 const DEFAULT_INFER_TIMEOUT_MS = 18_000;
 
-export interface RealEsrganFrameResult {
-  data: Uint8Array;
-  width: number;
-  height: number;
-  /**
-   * Precision that served this frame. Set by the ORT worker from its reply
-   * (fp16 model URL won or not); absent on the native client, whose model
-   * is baked into the host. The pipeline counts fp16 worker frames for the
-   * overlay label — unknown counts as fp32.
-   */
-  precision?: RealEsrganPrecision;
-}
-
-/**
- * Minimal inference contract the pipeline depends on. The worker client and
- * the native Vulkan client are the two adapters behind this seam (the
- * Runner-Broker picks between them); tests stub it. Keeps the pipeline
- * decoupled from each adapter's transport machinery.
- *
- * Everything a caller must know lives here:
- *
- * - Entry points. `runFrame` accepts planar NCHW RGB ([1,3,h,w]); the
- *   returned frame is tightly packed RGBA8 with its ACTUAL dimensions.
- *   `runFrameRgba` is the optional tight-RGBA fast path (only the native
- *   host offers it — it POSTs RGBA8 anyway); a caller probes nothing: the
- *   Pfadauswahl (realesrgan-inference-path) reads the capability off the
- *   interface.
- * - Capabilities. `supportsTargetDownscale` declares whether the adapter
- *   box-averages the result down to `targetWidth/targetHeight` before
- *   returning (native host: true, worker: absent). `maxInFlight` declares
- *   how many runFrame calls the adapter overlaps (native: 2, upload N+1
- *   overlaps compute N; worker: absent = 1, ORT's global output-buffer
- *   cache; main-thread session: absent = 1, shared session). Absent
- *   capabilities mean "not offered", never "probe the concrete class".
- * - Model parameters. `modelUrl`/`modelUrlFp16` name the model asset for
- *   this frame (resolved by the Modell-Auswahl, realesrgan-model-assets).
- *   Only session-backed adapters consume them; the native host has its
- *   model baked in and ignores both. `modelUrlFp16` may be null.
- * - Buffer discipline. The caller owns the input buffer and may reuse or
- *   free it as soon as the call returns; an adapter that still needs the
- *   bytes in flight must copy them (the pooled pipeline buffers are reused
- *   every frame). Results are fresh buffers owned by the caller.
- * - Lifetime. Runners are process-lifetime singletons owned by the
- *   Runner-Broker and shared across pipeline instances; callers must not
- *   dispose them. Teardown belongs to the adapter classes themselves (each
- *   cleans up its own create-failure path).
- */
-export interface RealEsrganInferenceRunner {
-  runFrame(
-    modelUrl: string,
-    modelUrlFp16: string | null,
-    width: number,
-    height: number,
-    data: Float32Array,
-    targetWidth?: number,
-    targetHeight?: number,
-  ): Promise<RealEsrganFrameResult>;
-  /**
-   * Optional fast path: tightly packed RGBA8 straight in, skipping the
-   * planar-float roundtrip. Bit-identical output for opaque video.
-   */
-  runFrameRgba?(
-    modelUrl: string,
-    width: number,
-    height: number,
-    data: Uint8Array,
-    targetWidth?: number,
-    targetHeight?: number,
-  ): Promise<RealEsrganFrameResult>;
-  readonly maxInFlight?: number;
-  /** Adapter box-averages the 4x result down to the requested target. */
-  readonly supportsTargetDownscale?: boolean;
-  /**
-   * Diagnostics hook: adapters that produce per-frame path labels fire it
-   * (once per distinct value). Assigning it on an adapter that never fires
-   * is harmless.
-   */
-  onFramePath?: ((path: string) => void) | null;
-}
-
 export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
   private readonly worker: RealEsrganWorkerHandle;
   private readonly pending = new Map<number, PendingInference>();
@@ -180,6 +106,8 @@ export class RealEsrganWorkerClient implements RealEsrganInferenceRunner {
   }> = [];
   private nextId = 1;
   private disposed = false;
+  /** Explicit adapter identity (see RealEsrganInferenceRunner.kind). */
+  public readonly kind = 'worker' as const;
   /** Optional diagnostics hook: fired once per distinct composition path. */
   public onFramePath: ((path: string) => void) | null = null;
   private lastLoggedPath: string | null = null;

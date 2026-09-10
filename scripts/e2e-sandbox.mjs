@@ -15,7 +15,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -68,12 +68,13 @@ if (type === 'firefox' && process.env.E2E_USE_XVFB === '1' && !useXvfb) {
 // Build bwrap args if enabled
 function buildBwrapArgs() {
   if (!useBwrap) return null;
+  // No --unshare-net and no --share-net: bwrap keeps the host network
+  // namespace by default, which is what the loopback fixture servers need.
   const args = [
     '--die-with-parent',
     '--unshare-pid',
     '--unshare-uts',
     '--unshare-ipc',
-    '--share-net',
     '--proc', '/proc',
     '--dev', '/dev',
   ];
@@ -108,6 +109,15 @@ function buildBwrapArgs() {
   const home = process.env.HOME;
   if (home && existsSync(home)) {
     args.push('--bind', home, home);
+    // Opt-in scoped home: override the host home bind with a repo-scoped temp
+    // dir so an E2E run cannot write into the real profile/cache. Off by
+    // default because Firefox/Zen may rely on an existing ~/.config; enable
+    // with E2E_SCOPED_HOME=1.
+    if (process.env.E2E_SCOPED_HOME === '1') {
+      const scopedHome = path.join(workspace, '.tmp', 'e2e-home');
+      mkdirSync(scopedHome, { recursive: true });
+      args.push('--bind', scopedHome, home);
+    }
   }
 
   // tmpfs /tmp — isolates temp files, but we must re-expose X11 socket after tmpfs.

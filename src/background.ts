@@ -7,14 +7,14 @@
  * consent bookkeeping, site-access synchronization and onboarding.
  */
 import { ensureLatestConfig } from './utils/migration';
-import { createAsyncSerializer } from './shared/async-serializer';
+import { createAsyncSerializer, fireAndForget } from './shared/async-serializer';
 import {
   requestNativeConsent,
   resetNativeConsent,
 } from './shared/native-consent';
 import { createBackgroundRouter } from './background/router';
 import { IframeSiteAccessManager, type FrameAccessReply } from './background/iframe-site-access';
-import { urlUpdatedMessage, siteAccessResultMessage } from './shared/runtime-messages';
+import { siteAccessResultMessage } from './shared/runtime-messages';
 import {
   synchronizeRegisteredContentScripts,
   injectSiteScripts,
@@ -22,9 +22,10 @@ import {
 import { shouldReopenOnboarding } from './shared/onboarding-gating';
 import { NativeSession } from './background/native-session';
 import { createRealEsrganHttpInfoHandler } from './background/realesrgan-http-info';
+import { isNativeConfiguration, type NativeConfiguration } from './native/protocol';
 
 const serialized = createAsyncSerializer();
-let siteAccessChain: Promise<void> = Promise.resolve();
+const serializeSiteAccess = createAsyncSerializer();
 
 /**
  * Fire-and-forget serialized work with a rejection handler. Bare `void
@@ -33,9 +34,7 @@ let siteAccessChain: Promise<void> = Promise.resolve();
  * MV3 unhandled rejection instead of a one-line warning.
  */
 function runBackgroundTask(promise: Promise<unknown>, label: string): void {
-  promise.catch(error => {
-    console.warn(`[Background] ${label} failed:`, error);
-  });
+  fireAndForget(promise, 'Background', label);
 }
 
 const nativeSession = new NativeSession({
@@ -50,11 +49,9 @@ const nativeSession = new NativeSession({
 // Dynamic registration remains for older installations and explicit grants.
 function updateSiteAccess(): Promise<void> {
   if (__ANIME4K_E2E__) return Promise.resolve();
-  const operation = siteAccessChain.then(async () => {
+  return serializeSiteAccess(async () => {
     await synchronizeRegisteredContentScripts();
   });
-  siteAccessChain = operation.catch(() => undefined);
-  return operation;
 }
 
 async function isExtensionEnabled(): Promise<boolean> {
@@ -63,8 +60,9 @@ async function isExtensionEnabled(): Promise<boolean> {
 }
 
 /** Storage stays authoritative: applySettings persists before it notifies. */
-function readNativeConfiguration(): Promise<Record<string, unknown>> {
-  return chrome.storage.local.get(['mode', 'quality', 'frameGenerationEnabled']) as Promise<Record<string, unknown>>;
+async function readNativeConfiguration(): Promise<NativeConfiguration | null> {
+  const stored = await chrome.storage.local.get(['mode', 'quality', 'frameGenerationEnabled']);
+  return isNativeConfiguration(stored) ? stored : null;
 }
 
 async function sendToFrame<T = unknown>(
@@ -144,11 +142,8 @@ const handleMessage = createBackgroundRouter({
     updateConfiguration: configuration => nativeSession.updateNativeConfiguration(configuration),
     stopSession: (reason, notify, restoreTab, sessionId) =>
       nativeSession.stopNativeSession(reason, notify, restoreTab, sessionId),
-    status: () => nativeSession.status as unknown as Record<string, unknown>,
     sendPlaybackState: (sessionId, playbackActive, mediaTime) =>
       nativeSession.sendPlaybackState(sessionId, playbackActive, mediaTime),
-    forwardMediaCommand: (command, value) => nativeSession.forwardMediaCommand(command, value),
-    forwardPointer: request => nativeSession.forwardPointer(request),
     readConfiguration: readNativeConfiguration,
   },
   platform: {
@@ -157,11 +152,6 @@ const handleMessage = createBackgroundRouter({
     updateSiteAccess,
     requestFrameSiteAccess,
     resetConsent: resetNativeConsent,
-    openOptionsPage: () => chrome.runtime.openOptionsPage(),
-    openOnboarding: () => {
-      void chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
-      return Promise.resolve();
-    },
     realEsrganHttpInfo: createRealEsrganHttpInfoHandler(),
   },
 });
@@ -174,7 +164,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return true;
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'loading' || changeInfo.url) {
     runBackgroundTask(serialized(async () => {
       const current = await nativeSession.store.loadActiveEnhancement();
@@ -185,14 +175,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     const sessionId = nativeSession.activeSession.sessionId;
     runBackgroundTask(serialized(() => nativeSession.stopNativeSession('The source tab navigated.', true, true, sessionId)), 'stopping the session on navigation');
     return;
-  }
-
-  if (changeInfo.status === 'complete' && tab.url) {
-    void chrome.tabs.sendMessage(tabId, urlUpdatedMessage(tab.url)).catch(error => {
-      if (!String(error?.message ?? error).includes('Receiving end does not exist')) {
-        console.warn('[Background] Could not notify a tab about navigation.', error);
-      }
-    });
   }
 });
 

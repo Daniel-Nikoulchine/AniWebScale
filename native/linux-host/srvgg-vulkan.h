@@ -74,14 +74,10 @@ class SrvggVulkan {
     // false (caller: ncnn) on any failure, same contract as run().
     bool runTiled(ncnn::VkCompute& cmd, const ncnn::VkMat& preprocOut, int width, int height,
                   ncnn::VkMat& tailOut, const ncnn::Option& opt, std::string& err);
-    // Temporary bisect: when non-null, downloads actB right after conv0
-    // (in-order) for offline comparison. Env-gated, removed after.
-    ncnn::Mat* debugAct0Out = nullptr;
 
     ncnn::VulkanDevice* device_;
     ncnn::VkAllocator* blob_;
     ncnn::VkAllocator* staging_;
-    bool weightsLoaded_ = false;
     // Latched when the weight files could not be read: weights do not appear
     // mid-process, so ensure() must not re-open two missing files every frame
     // (the caller calls ensure() per frame until it succeeds).

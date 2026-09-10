@@ -4,16 +4,12 @@ import {
   AI_UPSCALE_MODES,
   ENHANCEMENT_MODES,
   ID_TO_MODE,
-  LEGACY_BASE_TO_MODE,
   MODE_TO_ID,
-  MODE_TO_LEGACY_BASE,
   QUALITY_TIERS,
   calculateAutoTargetSize,
-  isDoubleMode,
   legacyTierToQuality,
   isProcessingEnabled,
   modeUsesQuality,
-  qualityToLegacyTier,
 } from '../src/shared/presets';
 import {
   scheduleEffectsForTarget,
@@ -35,22 +31,17 @@ describe('official Anime4K presets', () => {
     expect(new Set(combinations).size).toBe(18);
   });
 
-  it('round-trips current and legacy mode identifiers', () => {
+  it('round-trips current mode identifiers', () => {
     for (const mode of ANIME4K_MODES) {
       expect(ID_TO_MODE[MODE_TO_ID[mode]]).toBe(mode);
-      expect(LEGACY_BASE_TO_MODE[MODE_TO_LEGACY_BASE[mode]]).toBe(mode);
     }
   });
 
-  it('identifies only the chained double-upscale modes', () => {
-    expect(ANIME4K_MODES.filter(isDoubleMode)).toEqual(['AA', 'BB', 'CA']);
-  });
-
   it('migrates legacy performance tiers deterministically', () => {
-    expect(qualityToLegacyTier('M')).toBe('performance');
-    expect(qualityToLegacyTier('VL')).toBe('balanced');
-    expect(qualityToLegacyTier('UL')).toBe('ultra');
+    expect(legacyTierToQuality('performance')).toBe('M');
+    expect(legacyTierToQuality('balanced')).toBe('VL');
     expect(legacyTierToQuality('quality')).toBe('UL');
+    expect(legacyTierToQuality('ultra')).toBe('UL');
     expect(legacyTierToQuality(undefined)).toBe('VL');
   });
 

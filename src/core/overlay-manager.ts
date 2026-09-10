@@ -11,6 +11,8 @@ import {
 
 const MIN_VIDEO_WIDTH = 240;
 const MIN_VIDEO_HEIGHT = 135;
+/** A path/slot share at or above this percentage is reported as the majority. */
+const MAJORITY_PCT = 50;
 
 /**
  * Runner label for the RealESRGAN overlay line. The native Vulkan host also
@@ -19,8 +21,8 @@ const MIN_VIDEO_HEIGHT = 135;
  * Pure for tests; thresholds mirror the compose-path majority rule below.
  */
 export function runnerLabelForStats(stats: { nativePct: number; runnerPct: number }): string {
-  if (stats.nativePct >= 50) return 'native-gpu';
-  return stats.runnerPct >= 50 ? 'runner' : 'main';
+  if (stats.nativePct >= MAJORITY_PCT) return 'native-gpu';
+  return stats.runnerPct >= MAJORITY_PCT ? 'runner' : 'main';
 }
 
 export class OverlayManager {
@@ -51,11 +53,9 @@ export class OverlayManager {
 
   public static create(video: HTMLVideoElement): OverlayManager {
     const videoId = video.dataset.anime4kVideoId;
-    if (videoId) {
-      OverlayManager.live.get(videoId)?.destroy();
-      document.querySelectorAll<HTMLElement>(`[${OverlayManager.HOST_MARKER}="${CSS.escape(videoId)}"]`)
-        .forEach(host => host.remove());
-    }
+    // Recreating for one video destroys the old manager, which removes its
+    // host through the stored reference — no DOM re-discovery needed.
+    if (videoId) OverlayManager.live.get(videoId)?.destroy();
     const manager = new OverlayManager(video);
     if (videoId) OverlayManager.live.set(videoId, manager);
     return manager;
@@ -276,7 +276,7 @@ export class OverlayManager {
     }
     if (stats.realesrgan) {
       const r = stats.realesrgan;
-      const composePath = r.gpuComposePct >= 50 ? 'gpu' : 'cpu';
+      const composePath = r.gpuComposePct >= MAJORITY_PCT ? 'gpu' : 'cpu';
       const worker = runnerLabelForStats(r);
       const precision = r.precision === 'fp16' ? 'FP16' : r.precision === 'int8' ? 'INT8' : 'FP32';
       const head = typeof r.enhancedFps === 'number' && typeof r.count === 'number'

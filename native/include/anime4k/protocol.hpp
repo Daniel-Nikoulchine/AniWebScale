@@ -1,6 +1,7 @@
 #pragma once
 
 #include "anime4k/json.hpp"
+#include "anime4k/protocol_version.hpp"
 
 #include <Windows.h>
 
@@ -12,7 +13,6 @@
 
 namespace anime4k::protocol {
 
-inline constexpr std::uint32_t kProtocolVersion = 3;
 inline constexpr std::uint32_t kMaximumMessageBytes = 1024U * 1024U;
 inline constexpr wchar_t kHostName[] = L"io.github.anime4k_browser.native";
 

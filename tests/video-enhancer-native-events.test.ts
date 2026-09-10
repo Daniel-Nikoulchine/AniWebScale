@@ -11,6 +11,7 @@ vi.mock('../src/core/fullscreen-layout-manager', () => ({
 import { OverlayManager } from '../src/core/overlay-manager';
 import { FullscreenLayoutManager } from '../src/core/fullscreen-layout-manager';
 import { VideoEnhancer } from '../src/core/video-enhancer';
+import type { NativeSessionClient } from '../src/core/native-session-client';
 
 function createVideo() {
   return {
@@ -27,7 +28,7 @@ function createVideo() {
   };
 }
 
-function createNativeClient() {
+function createNativeClient(): NativeSessionClient {
   return {
     claim: vi.fn(async () => ({ ok: true })),
     release: vi.fn(async () => undefined),
@@ -36,6 +37,7 @@ function createNativeClient() {
     stop: vi.fn(async () => undefined),
     sendPlaybackState: vi.fn(async () => undefined),
     hasPendingFallback: vi.fn(() => false),
+    hasActiveFallback: vi.fn(() => false),
   };
 }
 
@@ -100,7 +102,7 @@ describe('VideoEnhancer native session events (real instance)', () => {
       return layout;
     } as never);
     const native = createNativeClient();
-    const enhancer = VideoEnhancer.create(createVideo() as unknown as HTMLVideoElement, native as never);
+    const enhancer = VideoEnhancer.create(createVideo() as unknown as HTMLVideoElement, native);
     const fireSessionEvent = (detail: Record<string, unknown>): void => {
       const listener = windowListeners.get('anime4k-native-session');
       if (!listener) throw new Error('native session listener was not registered');
@@ -114,20 +116,18 @@ describe('VideoEnhancer native session events (real instance)', () => {
     const inner = enhancer as unknown as {
       backend: { markNativeActive(): void; isNativeActive: boolean };
       lifecycle: { begin(): number };
-      nativeSessionId: string | null;
-      switchingFromNativeRevision: number | null;
-      switchingFromNativeSessionId: string | null;
+      nativeSwitch: { arm(revision: number, sessionId: string | null): void };
+      nativeObserver: { currentSessionId: string | null };
     };
     inner.backend.markNativeActive();
-    inner.nativeSessionId = null;
-    inner.switchingFromNativeRevision = inner.lifecycle.begin();
-    inner.switchingFromNativeSessionId = 'session-old';
+    expect(inner.nativeObserver.currentSessionId).toBeNull();
+    inner.nativeSwitch.arm(inner.lifecycle.begin(), 'session-old');
     (VideoEnhancer as unknown as { activeEnhancer: unknown }).activeEnhancer = enhancer;
 
     fireSessionEvent({ type: 'stopped', sessionId: 'session-old' });
 
     expect(inner.backend.isNativeActive).toBe(false);
-    expect(inner.nativeSessionId).toBeNull();
+    expect(inner.nativeObserver.currentSessionId).toBeNull();
     // The terminal event of the intentionally stopped session must not run
     // the full teardown: no claim release, no host stop, active owner kept.
     expect(native.release).not.toHaveBeenCalled();
@@ -140,15 +140,15 @@ describe('VideoEnhancer native session events (real instance)', () => {
     const { enhancer, native, fireSessionEvent } = createEnhancer();
     const inner = enhancer as unknown as {
       backend: { markNativeActive(): void; isNativeActive: boolean };
-      nativeSessionId: string | null;
+      nativeObserver: { beginSession(sessionId: string): void; currentSessionId: string | null };
     };
     inner.backend.markNativeActive();
-    inner.nativeSessionId = 'session-new';
+    inner.nativeObserver.beginSession('session-new');
 
     fireSessionEvent({ type: 'stopped', sessionId: 'session-old' });
 
     expect(inner.backend.isNativeActive).toBe(true);
-    expect(inner.nativeSessionId).toBe('session-new');
+    expect(inner.nativeObserver.currentSessionId).toBe('session-new');
     expect(native.release).not.toHaveBeenCalled();
     expect(native.stop).not.toHaveBeenCalled();
     enhancer.destroy();

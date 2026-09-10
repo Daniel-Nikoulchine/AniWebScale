@@ -32,14 +32,21 @@ function optionFor(mode: EnhancementMode): HTMLOptionElement {
   const option = document.createElement('option');
   option.value = mode;
   const presentation = MODE_PRESENTATIONS[mode];
+  option.dataset.i18n = presentation.optionKey;
+  option.dataset.i18nTitle = presentation.descriptionKey;
   option.textContent = message(presentation.optionKey, presentation.optionLabel);
   option.title = message(presentation.descriptionKey, presentation.description);
   return option;
 }
 
-function group(label: string, modes: readonly EnhancementMode[]): HTMLOptGroupElement {
+function group(
+  labelKey: string,
+  labelFallback: string,
+  modes: readonly EnhancementMode[],
+): HTMLOptGroupElement {
   const element = document.createElement('optgroup');
-  element.label = label;
+  element.dataset.i18n = labelKey;
+  element.label = message(labelKey, labelFallback);
   element.append(...modes.map(optionFor));
   return element;
 }
@@ -51,8 +58,8 @@ export function populateModeSelect(
   const mode = isEnhancementMode(requestedMode) ? requestedMode : 'A';
   select.replaceChildren(
     optionFor('OFF'),
-    group(message('anime4kModeGroup', 'Anime4K presets'), ANIME4K_MODES),
-    group(message('aiModeGroup', 'AI upscaling | GPU intensive'), AI_UPSCALE_MODES),
+    group('anime4kModeGroup', 'Anime4K presets', ANIME4K_MODES),
+    group('aiModeGroup', 'AI upscaling | GPU intensive', AI_UPSCALE_MODES),
   );
   select.value = mode;
   return mode;

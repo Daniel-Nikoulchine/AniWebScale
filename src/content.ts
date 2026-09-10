@@ -5,7 +5,7 @@
  * gesture forwarding.
  */
 import { initializeOnPage, reapplySettings } from './core/video-manager';
-import { getAllManagedVideos, getEnhancer } from './core/enhancer-map';
+import { getAllManagedVideos, getEnhancer } from './core/video-population';
 import { NativeIsolationSession } from './core/native-isolation';
 import { NativeInputBridge, showNotice } from './core/native-input-bridge';
 import { installIframeSiteAccessProbe } from './core/iframe-site-access';
@@ -188,10 +188,6 @@ async function handleRuntimeMessage(request: unknown): Promise<unknown> {
       return { ok: true };
     }
 
-    case 'URL_UPDATED':
-      // The manager remains active across same-document SPA navigation.
-      return { ok: true };
-
     case 'NATIVE_CONSENT_REQUEST': {
       const allowed = window.confirm(nativeConsentPrompt(message.origin ?? 'this website'));
       return { allowed };
@@ -279,9 +275,9 @@ async function handleRuntimeMessage(request: unknown): Promise<unknown> {
       };
 
     case 'NATIVE_SESSION_EVENT': {
-      const event = message.event as Record<string, unknown> | undefined;
-      if (event?.type === 'error') showNotice(String(event.message ?? 'Native renderer error.'), true);
-      else if (event?.type === 'status' && event.state === 'capturing') showNotice('AniWebScale native rendering is active.');
+      const event = message.event;
+      if (event.type === 'error') showNotice(event.message || 'Native renderer error.', true);
+      else if (event.type === 'status' && event.state === 'capturing') showNotice('AniWebScale native rendering is active.');
       window.dispatchEvent(new CustomEvent('anime4k-native-session', { detail: event }));
       return { ok: true };
     }

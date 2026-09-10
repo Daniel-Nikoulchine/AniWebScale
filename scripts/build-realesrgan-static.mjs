@@ -24,14 +24,17 @@
  *
  * Usage:
  *   node scripts/build-realesrgan-static.mjs [--check] [--force]
- *   --check  fail when a variant is missing or older than base/script
+ *   --check  fail when a present variant does not byte-match the deterministic
+ *            derivation from the base model; a missing (git-ignored, build-only)
+ *            variant is reported but not fatal
  *   --force  rebuild every variant
  *
- * Idempotent: fresh variants are skipped (mtime stamp). Generated files live
- * next to the base model and are git-ignored build artifacts; the runtime
- * serves them only on exact-shape match with dynamic fallback otherwise.
+ * Idempotent by content: a variant is skipped when its bytes already equal the
+ * deterministic derivation from the base model. Generated files live next to
+ * the base model and are git-ignored build artifacts; the runtime serves them
+ * only on exact-shape match with dynamic fallback otherwise.
  */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -388,19 +391,15 @@ function buildVariant(height, width, force) {
   return buildVariantTo(height, width, MODEL_DIR, force);
 }
 
-export function buildVariantTo(height, width, modelDir, force) {
-  const file = staticFileName(height, width);
-  const outPath = join(modelDir, file);
+/**
+ * Deterministically derive the expected variant bytes from the base model and
+ * prove the only differences are the 6 dim leaves. Pure content comparison —
+ * no mtimes, so a fresh checkout (all files sharing a timestamp) cannot look
+ * stale.
+ */
+function expectedVariantBytes(height, width, modelDir) {
   const basePath = join(modelDir, BASE_FILE);
   if (!existsSync(basePath)) throw new Error(`base model missing: ${basePath}`);
-  const baseStat = statSync(basePath);
-  const selfStat = statSync(fileURLToPath(import.meta.url));
-  if (!force && existsSync(outPath)) {
-    const outStat = statSync(outPath);
-    if (outStat.mtimeMs > baseStat.mtimeMs && outStat.mtimeMs > selfStat.mtimeMs) {
-      return { file, skipped: true };
-    }
-  }
   const baseBytes = readFileSync(basePath);
   const baseTree = parseProto(baseBytes);
   // Round-trip self-check: the codec must reproduce the base byte-identically
@@ -410,20 +409,28 @@ export function buildVariantTo(height, width, modelDir, force) {
   }
   const patched = patchStaticDims(baseTree, height, width);
   const derivedBytes = serializeProto(patched);
-  const derivedTree = parseProto(derivedBytes);
-  assertDimOnlyDiff(parseProto(baseBytes), derivedTree, height, width);
+  assertDimOnlyDiff(parseProto(baseBytes), parseProto(derivedBytes), height, width);
+  return derivedBytes;
+}
+
+export function buildVariantTo(height, width, modelDir, force) {
+  const file = staticFileName(height, width);
+  const outPath = join(modelDir, file);
+  const derivedBytes = expectedVariantBytes(height, width, modelDir);
+  const current = existsSync(outPath) ? readFileSync(outPath) : null;
+  if (!force && current && current.equals(derivedBytes)) {
+    return { file, skipped: true };
+  }
   mkdirSync(modelDir, { recursive: true });
   writeFileSync(outPath, derivedBytes);
   return { file, skipped: false, bytes: derivedBytes.length };
 }
 
-function variantFresh(height, width) {
+/** 'current' when the bytes match, 'stale' when present but divergent, 'missing' when absent. */
+function variantStatus(height, width) {
   const outPath = join(MODEL_DIR, staticFileName(height, width));
-  if (!existsSync(outPath)) return false;
-  const baseStat = statSync(join(MODEL_DIR, BASE_FILE));
-  const selfStat = statSync(fileURLToPath(import.meta.url));
-  const outStat = statSync(outPath);
-  return outStat.mtimeMs > baseStat.mtimeMs && outStat.mtimeMs > selfStat.mtimeMs;
+  if (!existsSync(outPath)) return 'missing';
+  return readFileSync(outPath).equals(expectedVariantBytes(height, width, MODEL_DIR)) ? 'current' : 'stale';
 }
 
 async function main() {
@@ -431,12 +438,21 @@ async function main() {
   const check = args.has('--check');
   const force = args.has('--force');
   if (check) {
-    const stale = STATIC_TARGETS.filter(t => !variantFresh(t.height, t.width));
+    const stale = [];
+    const missing = [];
+    for (const t of STATIC_TARGETS) {
+      const status = variantStatus(t.height, t.width);
+      if (status === 'stale') stale.push(staticFileName(t.height, t.width));
+      else if (status === 'missing') missing.push(staticFileName(t.height, t.width));
+    }
     if (stale.length > 0) {
-      console.error(`realesrgan-static --check: stale/missing: ${stale.map(t => staticFileName(t.height, t.width)).join(', ')}`);
+      console.error(`realesrgan-static --check: present but divergent (run npm run generate:realesrgan-static): ${stale.join(', ')}`);
       process.exit(1);
     }
-    console.log(`realesrgan-static --check: ${STATIC_TARGETS.length} variants fresh.`);
+    if (missing.length > 0) {
+      console.warn(`realesrgan-static --check: ${missing.length} variant(s) not built in this checkout (git-ignored build output): ${missing.join(', ')}`);
+    }
+    console.log(`realesrgan-static --check: ${STATIC_TARGETS.length - missing.length} variants byte-match the deterministic derivation.`);
     return;
   }
   for (const t of STATIC_TARGETS) {

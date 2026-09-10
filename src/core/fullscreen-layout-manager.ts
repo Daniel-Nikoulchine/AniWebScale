@@ -15,6 +15,19 @@ import {
 const STYLE_ID = 'anime4k-fullscreen-layout-style';
 let activeManager: FullscreenLayoutManager | null = null;
 
+/**
+ * The layout currently owning the single-layout slot. Owner accessor for
+ * observability and tests; the single-layout guarantee is unchanged.
+ */
+export function activeFullscreenLayout(): FullscreenLayoutManager | null {
+  return activeManager;
+}
+
+/** Drop the singleton pointer (test isolation); does not touch the DOM. */
+export function resetActiveFullscreenLayout(): void {
+  activeManager = null;
+}
+
 interface LayoutState {
   root: HTMLElement;
   video: HTMLVideoElement;

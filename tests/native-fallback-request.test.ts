@@ -4,13 +4,11 @@ import { isNativeFallbackRequest } from '../src/shared/native-fallback-request';
 const request = {
   type: 'NATIVE_FALLBACK_REQUEST',
   videoId: 'video-current',
-  reason: 'native-selected',
   configuration: {
     mode: 'A',
     quality: 'M',
     frameGenerationEnabled: false,
   },
-  output: 'auto',
   videoRect: {
     x: 0,
     y: 0,
@@ -25,6 +23,11 @@ describe('native fallback request validation', () => {
     expect(isNativeFallbackRequest(request)).toBe(true);
     expect(isNativeFallbackRequest({ ...request, origin: 'null' })).toBe(true);
     expect(isNativeFallbackRequest({ ...request, origin: 'https://spoofed.example' })).toBe(true);
+  });
+
+  it('ignores reason/output from older senders instead of rejecting', () => {
+    // Dropped from the wire; a legacy sender that still includes them parses.
+    expect(isNativeFallbackRequest({ ...request, reason: 'eme', output: 'auto' })).toBe(true);
   });
 
   it('allows a transient zero-area rect because capture geometry is remeasured', () => {
@@ -47,6 +50,5 @@ describe('native fallback request validation', () => {
       ...request,
       configuration: { ...request.configuration, frameGenerationEnabled: 'yes' },
     })).toBe(false);
-    expect(isNativeFallbackRequest({ ...request, reason: 'unknown' })).toBe(false);
   });
 });

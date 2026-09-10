@@ -2,16 +2,21 @@ import {
   isNativeConfiguration,
   isNativeEvent,
   isNativeMediaCommandName,
-  isNativePointerEventPayload,
   type NativeConfiguration,
   type NativeMediaCommandName,
 } from '../native/protocol';
+import {
+  parseNativePointerPayload,
+  type NativePointerPayload,
+} from './native-pointer';
 import {
   isNativeFallbackRequest,
   type NativeFallbackRequest,
 } from './native-fallback-request';
 import { isHttpOrigin } from './native-session-messages';
 import type { NativeEvent } from '../native/protocol';
+
+export type { NativePointerPayload };
 
 /**
  * The typed protocol for the extension's runtime message seam.
@@ -55,40 +60,12 @@ export interface NativeStopRequest {
   videoId?: string;
 }
 
-export interface NativeStatusRequest {
-  type: 'NATIVE_STATUS';
-}
-
 export interface NativePlaybackStateRequest {
   type: 'NATIVE_PLAYBACK_STATE';
   sessionId: string;
   videoId: string;
   playbackActive: boolean;
   mediaTime: number;
-}
-
-export interface NativeMediaCommandRequest {
-  type: 'NATIVE_MEDIA_COMMAND';
-  command: NativeMediaCommandName;
-  value?: number;
-}
-
-/** The pointer payload as it crosses the seam in both directions. */
-export interface NativePointerPayload {
-  event: string;
-  x: number;
-  y: number;
-  button?: number;
-  buttons?: number;
-  deltaX?: number;
-  deltaY?: number;
-  shiftKey?: boolean;
-  ctrlKey?: boolean;
-  altKey?: boolean;
-}
-
-export interface NativePointerRequest extends NativePointerPayload {
-  type: 'NATIVE_POINTER';
 }
 
 export interface NativeResetConsentRequest {
@@ -115,14 +92,6 @@ export interface SiteAccessIframeRequest {
   origin: string;
 }
 
-export interface OpenOptionsPageRequest {
-  type: 'OPEN_OPTIONS_PAGE';
-}
-
-export interface OpenOnboardingRequest {
-  type: 'OPEN_ONBOARDING';
-}
-
 /**
  * Content scripts cannot call chrome.runtime.connectNative (background-only),
  * so the renderer asks the background for the ncnn host's loopback HTTP
@@ -140,16 +109,11 @@ export type RuntimeRequest =
   | NativeFallbackRequest
   | NativeUpdateConfigurationRequest
   | NativeStopRequest
-  | NativeStatusRequest
   | NativePlaybackStateRequest
-  | NativeMediaCommandRequest
-  | NativePointerRequest
   | NativeResetConsentRequest
   | SettingsUpdatedRequest
   | SiteAccessSyncRequest
   | SiteAccessIframeRequest
-  | OpenOptionsPageRequest
-  | OpenOnboardingRequest
   | RealEsrganHttpInfoRequest;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -238,8 +202,6 @@ export function parseRuntimeRequest(value: unknown): RuntimeRequestParseResult {
           videoId: asString(value.videoId),
         },
       };
-    case 'NATIVE_STATUS':
-      return { kind: 'message', message: { type } };
     case 'NATIVE_PLAYBACK_STATE': {
       const sessionId = asString(value.sessionId);
       const videoId = asString(value.videoId);
@@ -254,36 +216,6 @@ export function parseRuntimeRequest(value: unknown): RuntimeRequestParseResult {
         message: { type, sessionId, videoId, playbackActive, mediaTime },
       };
     }
-    case 'NATIVE_MEDIA_COMMAND': {
-      if (!isNativeMediaCommandName(value.command)) return invalid(type, 'Invalid media command.');
-      return {
-        kind: 'message',
-        message: {
-          type,
-          command: value.command,
-          value: asFiniteNumber(value.value),
-        },
-      };
-    }
-    case 'NATIVE_POINTER':
-      return isNativePointerEventPayload(value)
-        ? {
-            kind: 'message',
-            message: {
-              type,
-              event: String(value.event),
-              x: Number(value.x),
-              y: Number(value.y),
-              button: asFiniteNumber(value.button),
-              buttons: asFiniteNumber(value.buttons),
-              deltaX: asFiniteNumber(value.deltaX),
-              deltaY: asFiniteNumber(value.deltaY),
-              shiftKey: typeof value.shiftKey === 'boolean' ? value.shiftKey : undefined,
-              ctrlKey: typeof value.ctrlKey === 'boolean' ? value.ctrlKey : undefined,
-              altKey: typeof value.altKey === 'boolean' ? value.altKey : undefined,
-            },
-          }
-        : invalid(type, 'Invalid native pointer event.');
     case 'NATIVE_RESET_CONSENT': {
       const origin = asString(value.origin);
       if (origin !== undefined && !isHttpOrigin(origin)) return invalid(type, 'Invalid consent origin.');
@@ -299,10 +231,6 @@ export function parseRuntimeRequest(value: unknown): RuntimeRequestParseResult {
         ? { kind: 'message', message: { type, origin } }
         : invalid(type, 'Invalid player origin.');
     }
-    case 'OPEN_OPTIONS_PAGE':
-      return { kind: 'message', message: { type } };
-    case 'OPEN_ONBOARDING':
-      return { kind: 'message', message: { type } };
     case 'REALESRGAN_HTTP_INFO':
       return { kind: 'message', message: { type } };
     default:
@@ -315,11 +243,6 @@ export function parseRuntimeRequest(value: unknown): RuntimeRequestParseResult {
 export interface Anime4kForceStopMessage {
   type: 'ANIME4K_FORCE_STOP';
   videoId: string;
-}
-
-export interface UrlUpdatedMessage {
-  type: 'URL_UPDATED';
-  url?: string;
 }
 
 export interface NativeConsentRequestMessage {
@@ -367,13 +290,13 @@ export interface NativePointerEventMessage extends NativePointerPayload {
 
 export interface NativeMediaCommandEventMessage {
   type: 'NATIVE_MEDIA_COMMAND_EVENT';
-  command: string;
+  command: NativeMediaCommandName;
   value?: number;
 }
 
 export interface NativeSessionEventMessage {
   type: 'NATIVE_SESSION_EVENT';
-  event?: NativeEvent;
+  event: NativeEvent;
 }
 
 /**
@@ -391,7 +314,6 @@ export interface SiteAccessResultMessage {
 
 export type FrameMessage =
   | Anime4kForceStopMessage
-  | UrlUpdatedMessage
   | NativeConsentRequestMessage
   | NativePrepareFullscreenMessage
   | NativeMeasureFullscreenMessage
@@ -434,8 +356,6 @@ export function parseFrameMessage(value: unknown): FrameMessageParseResult {
       if (videoId === undefined) return frameInvalid(type, 'Force-stop without a video id.');
       return { kind: 'message', message: { type, videoId } };
     }
-    case 'URL_UPDATED':
-      return { kind: 'message', message: { type, url: asString(value.url) } };
     case 'NATIVE_CONSENT_REQUEST':
       return { kind: 'message', message: { type, origin: asString(value.origin) } };
     case 'NATIVE_PREPARE_FULLSCREEN': {
@@ -479,29 +399,15 @@ export function parseFrameMessage(value: unknown): FrameMessageParseResult {
           originalTitle: asString(value.originalTitle),
         },
       };
-    case 'NATIVE_POINTER_EVENT':
-      // Mirrors the runtime-direction NATIVE_POINTER gate above: coordinates
-      // must be finite and normalized, otherwise NaN would flow into the
-      // input bridge (whose clamp maps NaN to the video origin — a phantom
-      // click) instead of an explicit invalid verdict.
-      return isNativePointerEventPayload(value)
-        ? {
-            kind: 'message',
-            message: {
-              type,
-              event: value.event,
-              x: value.x,
-              y: value.y,
-              button: asFiniteNumber(value.button),
-              buttons: asFiniteNumber(value.buttons),
-              deltaX: asFiniteNumber(value.deltaX),
-              deltaY: asFiniteNumber(value.deltaY),
-              shiftKey: typeof value.shiftKey === 'boolean' ? value.shiftKey : undefined,
-              ctrlKey: typeof value.ctrlKey === 'boolean' ? value.ctrlKey : undefined,
-              altKey: typeof value.altKey === 'boolean' ? value.altKey : undefined,
-            },
-          }
+    case 'NATIVE_POINTER_EVENT': {
+      // Coordinates must be finite and normalized, otherwise NaN would flow
+      // into the input bridge (whose clamp maps NaN to the video origin — a
+      // phantom click) instead of an explicit invalid verdict.
+      const payload = parseNativePointerPayload(value);
+      return payload
+        ? { kind: 'message', message: { type, ...payload } }
         : frameInvalid(type, 'Invalid native pointer event.');
+    }
     case 'NATIVE_MEDIA_COMMAND_EVENT': {
       if (!isNativeMediaCommandName(value.command)) return frameInvalid(type, 'Invalid media command.');
       return {
@@ -513,8 +419,12 @@ export function parseFrameMessage(value: unknown): FrameMessageParseResult {
         },
       };
     }
-    case 'NATIVE_SESSION_EVENT':
-      return { kind: 'message', message: { type, event: isNativeEvent(value.event) ? value.event : undefined } };
+    case 'NATIVE_SESSION_EVENT': {
+      // The session-event seam must carry a valid native event: forwarding an
+      // undefined detail would desync the content-side session view.
+      if (!isNativeEvent(value.event)) return frameInvalid(type, 'Invalid native session event.');
+      return { kind: 'message', message: { type, event: value.event } };
+    }
     case 'SITE_ACCESS_RESULT': {
       const outcome = value.outcome === 'granted' || value.outcome === 'denied' ? value.outcome : 'failed';
       return {
@@ -546,75 +456,101 @@ export {
   siteAccessIframeRequestMessage,
   siteAccessResultMessage,
   nativeResetConsentMessage,
-  urlUpdatedMessage,
+  realEsrganHttpInfoMessage,
   nativeConsentRequestMessage,
+  anime4kForceStopMessage,
+  nativePrepareFullscreenMessage,
+  nativeMeasureFullscreenMessage,
+  nativeSetTitleNonceMessage,
+  nativeRestoreSessionMessage,
+  nativeRestoreTitleMessage,
+  nativePointerEventMessage,
+  nativeMediaCommandEventMessage,
+  nativeSessionEventMessage,
 } from './runtime-message-builders';
 
 // ── Response forms ───────────────────────────────────────────────────────
 
-export interface StatusResponse {
+/**
+ * The shared `{ ok, message }` envelope every handler response carries. The
+ * outcome types below all derive from it; only the field whitelists differ.
+ */
+export interface ResponseEnvelope {
   ok: boolean;
   message?: string;
 }
+
+/**
+ * How a missing/opaque envelope is interpreted. This is the one deliberate
+ * difference between the response seams and is always chosen explicitly:
+ * - 'ok': an absent envelope means the handler had nothing to report, which
+ *   counts as success (the pre-protocol `as { ok?: boolean }` contract).
+ * - 'refuse': an absent envelope proves nothing, so it is a refusal.
+ */
+type EnvelopeAbsence = 'ok' | 'refuse';
+
+function readResponseEnvelope(
+  value: unknown,
+  absence: EnvelopeAbsence,
+): { envelope: ResponseEnvelope; record: Record<string, unknown> | null } {
+  if (!value || typeof value !== 'object') {
+    return { envelope: { ok: absence === 'ok' }, record: null };
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    envelope: {
+      ok: absence === 'ok' ? record.ok !== false : record.ok === true,
+      ...(typeof record.message === 'string' ? { message: record.message } : {}),
+    },
+    record,
+  };
+}
+
+export type StatusResponse = ResponseEnvelope;
 
 /**
  * Interpret a handler's response envelope. Handlers that have nothing to
  * report answer `undefined`; only an explicit `{ ok: false }` counts as a
- * refusal, so an absent envelope resolves as success — the exact contract
- * the per-call-site `as { ok?: boolean }` casts implemented.
+ * refusal, so an absent envelope resolves as success.
  */
 export function parseStatusResponse(value: unknown): StatusResponse {
-  if (!value || typeof value !== 'object') return { ok: true };
-  const record = value as Record<string, unknown>;
-  return {
-    ok: record.ok !== false,
-    ...(typeof record.message === 'string' ? { message: record.message } : {}),
-  };
+  return readResponseEnvelope(value, 'ok').envelope;
 }
 
-export interface SiteAccessIframeResponseValue {
-  ok: boolean;
+export interface SiteAccessIframeResponseValue extends ResponseEnvelope {
   outcome?: 'injected' | 'prompting' | 'suppressed';
-  message?: string;
 }
 
 /**
  * Interpret the background's reply to a SITE_ACCESS_IFRAME_REQUEST. The
- * outcome is only trusted when the envelope is explicitly ok, mirroring the
- * status-response contract used by the other content-side call sites.
+ * outcome is only trusted when the envelope is explicitly ok; an absent
+ * envelope is a refusal, unlike parseStatusResponse.
  */
 export function parseSiteAccessIframeResponse(value: unknown): SiteAccessIframeResponseValue {
-  if (!value || typeof value !== 'object') return { ok: false };
-  const record = value as Record<string, unknown>;
-  const outcome = record.outcome;
+  const { envelope, record } = readResponseEnvelope(value, 'refuse');
+  const outcome = record?.outcome;
   return {
-    ok: record.ok === true,
+    ...envelope,
     ...(outcome === 'injected' || outcome === 'prompting' || outcome === 'suppressed'
       ? { outcome }
       : {}),
-    ...(typeof record.message === 'string' ? { message: record.message } : {}),
   };
 }
 
-export interface NativeFallbackResponseValue {
-  ok: boolean;
+export interface NativeFallbackResponseValue extends ResponseEnvelope {
   status?: 'started' | 'unavailable' | 'denied';
-  message?: string;
   sessionId?: string;
 }
 
 export function parseNativeFallbackResponse(value: unknown): NativeFallbackResponseValue {
-  if (!value || typeof value !== 'object') return { ok: false };
-  const record = value as Record<string, unknown>;
-  // Whitelist like parseSiteAccessIframeResponse above: an unknown status
-  // must not masquerade as a known outcome downstream.
-  const status = record.status === 'started' || record.status === 'unavailable' || record.status === 'denied'
-    ? record.status
-    : undefined;
+  const { envelope, record } = readResponseEnvelope(value, 'refuse');
+  // Whitelist: an unknown status must not masquerade as a known outcome.
+  const status = record?.status;
   return {
-    ok: record.ok === true,
-    ...(status !== undefined ? { status } : {}),
-    ...(typeof record.message === 'string' ? { message: record.message } : {}),
-    ...(typeof record.sessionId === 'string' ? { sessionId: record.sessionId } : {}),
+    ...envelope,
+    ...(status === 'started' || status === 'unavailable' || status === 'denied'
+      ? { status }
+      : {}),
+    ...(typeof record?.sessionId === 'string' ? { sessionId: record.sessionId } : {}),
   };
 }

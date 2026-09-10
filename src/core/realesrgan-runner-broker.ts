@@ -9,10 +9,22 @@
  * browser. Production wiring lives in `createProductionBroker()`.
  */
 import { REALESRGAN_PIXELS_WASM_CHUNK } from '../shared/realesrgan-models';
-import { RealEsrganWorkerClient, type RealEsrganInferenceRunner } from './realesrgan-worker-client';
+import { E2E_KNOBS } from '../shared/realesrgan-e2e-knobs.js';
+import { RealEsrganWorkerClient } from './realesrgan-worker-client';
 import { RealEsrganNativeVulkanClient } from './realesrgan-native-vulkan-client';
+import type { RealEsrganInferenceRunner } from './realesrgan-runner';
 
 export type { RealEsrganInferenceRunner };
+
+/**
+ * Storage keys of the E2E runner overrides, derived from the canonical knob
+ * table (realesrgan-e2e-knobs.js owns the names; the broker only reads them).
+ */
+function e2eStorageKey(env: string, fallback: string): string {
+  return E2E_KNOBS.find(knob => knob.env === env)?.storage ?? fallback;
+}
+const E2E_FORCE_WORKER_STORAGE_KEY = e2eStorageKey('E2E_FORCE_WORKER', 'e2eForceWorker');
+const E2E_VULKAN_SRVGG_STORAGE_KEY = e2eStorageKey('E2E_VULKAN_SRVGG', 'vulkanSrvgg');
 
 export const NATIVE_RUNNER_RETRY_COOLDOWN_MS = 30_000;
 
@@ -82,7 +94,7 @@ export class RealEsrganRunnerBroker {
   async resolveRunner(): Promise<RealEsrganInferenceRunner | null> {
     // E2E override: the clip runner forces the worker path via storage to
     // gate worker-only behavior. Guarded so production never consults it.
-    if (this.e2eOverrides && await readFlag(this.readStorageKey, 'e2eForceWorker')) {
+    if (this.e2eOverrides && await readFlag(this.readStorageKey, E2E_FORCE_WORKER_STORAGE_KEY)) {
       return this.getWorkerRunner();
     }
     const native = await this.getNativeRunner();
@@ -105,7 +117,7 @@ export class RealEsrganRunnerBroker {
       this.nativePromise = (async () => {
         // Hand-written Vulkan SRVGG behind a storage opt-in (default off).
         // The host falls back to ncnn per frame when unavailable.
-        const engine: RealEsrganNativeEngine = await readFlag(this.readStorageKey, 'vulkanSrvgg')
+        const engine: RealEsrganNativeEngine = await readFlag(this.readStorageKey, E2E_VULKAN_SRVGG_STORAGE_KEY)
           ? 'srvgg'
           : 'ncnn';
         const runner = await this.createNativeRunner(engine);

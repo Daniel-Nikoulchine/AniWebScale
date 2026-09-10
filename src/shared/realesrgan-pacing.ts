@@ -3,16 +3,15 @@
  *
  * RealESRGAN inference can take longer than a video frame interval. The video
  * keeps running; this scheduler decides which frame is worth processing and
- * which results are stale. A frame is processed only when fewer than `depth`
- * inferences are in flight (Hebel 2.4: depth 2 on the native path so upload
- * N+1 overlaps compute N; 1 everywhere else). When no slot is free, newly
- * arriving frames are skipped and counted for the stats overlay.
+ * tracks the newest-seen work. A frame is processed only when fewer
+ * than `depth` inferences are in flight (Hebel 2.4: depth 2 on the native path
+ * so upload N+1 overlaps compute N; 1 everywhere else). When no slot is free,
+ * newly arriving frames are skipped and counted for the stats overlay.
  */
 export class RealEsrganFrameScheduler {
   private readonly inFlight = new Set<number>();
   private newestSeenFrame = -1;
   private skipped = 0;
-  private dropped = 0;
 
   /** True when a slot below `depth` is free and this frame is new. */
   shouldProcess(frameIndex: number, depth = 1): boolean {
@@ -40,15 +39,6 @@ export class RealEsrganFrameScheduler {
     this.newestSeenFrame = frameIndex;
   }
 
-  /** True when the result for `frameIndex` is still the newest work. */
-  isResultCurrent(frameIndex: number): boolean {
-    if (frameIndex < this.newestSeenFrame) {
-      this.dropped += 1;
-      return false;
-    }
-    return true;
-  }
-
   /** Mark inference for `frameIndex` as finished. */
   markCompleted(frameIndex: number): void {
     this.inFlight.delete(frameIndex);
@@ -73,15 +63,9 @@ export class RealEsrganFrameScheduler {
     return this.skipped;
   }
 
-  /** Completed results discarded because a newer frame had already arrived. */
-  get droppedResults(): number {
-    return this.dropped;
-  }
-
   reset(): void {
     this.inFlight.clear();
     this.newestSeenFrame = -1;
     this.skipped = 0;
-    this.dropped = 0;
   }
 }

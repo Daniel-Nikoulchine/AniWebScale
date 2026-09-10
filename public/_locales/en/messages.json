@@ -406,5 +406,44 @@
   },
   "realesrganCap360": {
     "message": "360p · Emergency (~30 fps)"
+  },
+  "grantTitle": {
+    "message": "Enable this video player"
+  },
+  "grantLeadBefore": {
+    "message": "This site embeds its video player from"
+  },
+  "grantLeadAfter": {
+    "message": ". Grant AniWebScale access to that player so it can enhance the video in fullscreen."
+  },
+  "grantAction": {
+    "message": "Grant access"
+  },
+  "grantInvalid": {
+    "message": "This request is invalid. Close this tab and try again."
+  },
+  "grantAlreadyGranted": {
+    "message": "Access already granted. Applying it to the open tab..."
+  },
+  "grantApplying": {
+    "message": "Access granted. Applying it to the open tab..."
+  },
+  "grantDonePlay": {
+    "message": "Done. Switch back to your video and play it."
+  },
+  "grantDoneFullscreen": {
+    "message": "Done. Switch back to your video and enter fullscreen."
+  },
+  "grantRefused": {
+    "message": "The browser refused the request. Grant access from the extension popup instead."
+  },
+  "grantDenied": {
+    "message": "Access was denied. You can grant it later from the extension popup."
+  },
+  "grantFine": {
+    "message": "The grant covers this player domain only. You can revoke it anytime from the extension popup."
+  },
+  "nativeConsentPrompt": {
+    "message": "Allow AniWebScale to capture this browser tab with the local Windows renderer for {origin}?\n\nDRM playback requires browser hardware acceleration to be disabled and the browser restarted. Otherwise protected video may appear black. The renderer only receives composited pixels and does not bypass DRM."
   }
 }

@@ -5,12 +5,14 @@ import type { RendererOptions } from '../src/core/renderer';
 import { VideoEnhancer } from '../src/core/video-enhancer';
 import { createNativeSessionClient } from '../src/core/native-session-client';
 import { BackendState } from '../src/core/backend-state';
-import { OverloadTracker } from '../src/core/render-stats';
 import { EnhancerLifecycle } from '../src/core/enhancer-lifecycle';
+import { NativeSwitchLedger } from '../src/core/native-switch';
 import { EventScope } from '../src/shared/event-scope';
-import { DEFAULT_SETTINGS } from '../src/utils/settings';
+import { DEFAULT_SETTINGS, getSettings } from '../src/utils/settings';
 import { fullscreenContext } from '../src/core/fullscreen-context';
-import { createRenderStatsTap } from '../src/core/render-stats-tap';
+import { EnhancerStatsConsumer } from '../src/core/enhancer-stats-consumer';
+import { FullscreenReconciler } from '../src/core/enhancer-fullscreen-reconciler';
+import { NativeSessionObserver } from '../src/core/enhancer-native-observer';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -53,7 +55,6 @@ function createBareEnhancer() {
     showCanvas: vi.fn(),
     hideCanvas: vi.fn(),
     setStats: vi.fn(),
-    setWarning: vi.fn(),
     destroy: vi.fn(),
     detach: vi.fn(),
     reattach: vi.fn(),
@@ -74,25 +75,16 @@ function createBareEnhancer() {
     native: createNativeSessionClient(),
     renderer: null,
     backend: new BackendState(),
-    nativeSessionId: null,
     currentModeId: null,
     currentSettings: null,
     overlay,
     fullscreenLayout,
     encryptedDetected: false,
-    performanceWarning: false,
-    oversharpenWarning: false,
-    nativeOverloadTracker: new OverloadTracker(),
-    lastNativeDroppedFrames: 0,
-    autoCap: null,
     destroyed: false,
-    switchingFromNative: false,
     targetResizeObserver,
     unsubscribeFullscreenContext: () => undefined,
-    fullscreenRevision: 0,
     lifecycle: new EnhancerLifecycle(),
-    automaticSession: false,
-    nativeRetryBlocked: false,
+    nativeSwitch: new NativeSwitchLedger(),
     events: new EventScope(),
     videoEvents: new EventScope(),
     encryptedHandler: () => undefined,
@@ -102,10 +94,52 @@ function createBareEnhancer() {
     fullscreenChangeHandler: () => undefined,
     windowScrollHandler: () => undefined,
   });
-  // White-box harness: run the production stats wiring instead of
-  // duplicating it, so new consumers cannot desync this harness.
-  enhancer.statsTap = createRenderStatsTap();
-  enhancer.wireStatsConsumers();
+  // White-box harness: wire the same collaborators the production constructor
+  // builds, instead of duplicating their behavior, so the harness cannot
+  // desync from the facade.
+  enhancer.statsConsumer = new EnhancerStatsConsumer({
+    isDestroyed: () => enhancer.destroyed,
+    getSettings: () => enhancer.currentSettings,
+    getRenderer: () => enhancer.renderer,
+    isWebGPUActive: () => enhancer.backend.isWebGPUActive,
+    getVideo: () => enhancer.video,
+    getCanvas: () => enhancer.overlay.getCanvas(),
+    setOverlayStats: stats => enhancer.overlay.setStats(stats),
+    enqueue: operation => enhancer.lifecycle.enqueue(operation),
+    onRendererError: error => enhancer.handleRendererError(error),
+  });
+  enhancer.reconciler = new FullscreenReconciler({
+    isDestroyed: () => enhancer.destroyed,
+    getVideo: () => enhancer.video,
+    getSettings: () => enhancer.currentSettings,
+    setSettings: settings => { enhancer.currentSettings = settings; },
+    loadSettings: () => getSettings(),
+    hasRenderer: () => enhancer.renderer !== null,
+    isNativeActive: () => enhancer.backend.isNativeActive,
+    isStarting: () => enhancer.backend.isStarting,
+    hasActiveFallback: () => enhancer.native.hasActiveFallback(enhancer.videoId),
+    hasPendingFallback: () => enhancer.native.hasPendingFallback(enhancer.videoId),
+    enterLayout: () => enhancer.fullscreenLayout.enter(),
+    exitLayout: () => enhancer.fullscreenLayout.exit(),
+    start: settings => enhancer.startEnhancement(settings),
+    stop: () => enhancer.stopEnhancement(),
+    beginReconcile: () => enhancer.lifecycle.beginReconcile(),
+    isReconcileCurrent: (token: number) => enhancer.lifecycle.isReconcileCurrent(token),
+    enqueue: operation => enhancer.lifecycle.enqueue(operation),
+  });
+  enhancer.nativeObserver = new NativeSessionObserver({
+    isDestroyed: () => enhancer.destroyed,
+    isNativeActive: () => enhancer.backend.isNativeActive,
+    getVideo: () => enhancer.video,
+    getVideoId: () => enhancer.videoId,
+    isAbandonedSwitchCurrent: () => enhancer.nativeSwitch.isCurrent((revision: number) => enhancer.lifecycle.isCurrent(revision)),
+    abandonsSwitch: sessionId => enhancer.nativeSwitch.abandons(sessionId),
+    recordStats: stats => enhancer.handleStats(stats),
+    markIdle: () => enhancer.backend.markIdle(),
+    blockAutoRetry: () => enhancer.reconciler.blockAutoRetry(),
+    scheduleFullscreenReconcile: (delay: number) => enhancer.reconciler.schedule(delay),
+    onSessionTerminated: ended => enhancer.handleNativeSessionEnded(ended),
+  }, enhancer.native);
   return { enhancer, video, overlay, fullscreenLayout, targetResizeObserver };
 }
 
@@ -188,12 +222,12 @@ describe('VideoEnhancer lifecycle transitions', () => {
     });
 
     enhancer.backend.markNativeActive();
-    enhancer.nativePlaybackTimer = 41;
+    enhancer.nativeObserver.playbackTimer = 41;
     (VideoEnhancer as any).activeEnhancer = enhancer;
     const stopping = enhancer.stopEnhancement();
 
     expect(enhancer.backend.isNativeActive).toBe(false);
-    expect(enhancer.nativePlaybackTimer).toBeUndefined();
+    expect(enhancer.nativeObserver.playbackTimer).toBeUndefined();
     expect(clearIntervalSpy).toHaveBeenCalledWith(41);
     expect(video.removeAttribute).toHaveBeenCalledWith(ANIME4K_APPLIED_ATTR);
     expect((VideoEnhancer as any).activeEnhancer).toBeNull();
@@ -291,7 +325,6 @@ describe('VideoEnhancer lifecycle transitions', () => {
     enhancer.renderer = renderer;
     enhancer.currentSettings = previousSettings;
     enhancer.currentModeId = 'previous-mode';
-    enhancer.oversharpenWarning = true;
 
     await expect(enhancer.updateSettings({
       ...previousSettings,
@@ -300,7 +333,6 @@ describe('VideoEnhancer lifecycle transitions', () => {
 
     expect(enhancer.currentSettings).toBe(previousSettings);
     expect(enhancer.currentModeId).toBe('previous-mode');
-    expect(enhancer.oversharpenWarning).toBe(true);
     expect(enhancer.renderer).toBe(renderer);
     expect(overlay.hideCanvas).not.toHaveBeenCalled();
   });
@@ -375,8 +407,7 @@ describe('VideoEnhancer lifecycle transitions', () => {
     (video as unknown as Record<string, unknown>).isConnected = false;
     const stop = vi.spyOn(enhancer, 'stopEnhancement').mockResolvedValue(undefined);
 
-    await (enhancer as unknown as { reconcileFullscreen(revision: number): Promise<void> })
-      .reconcileFullscreen(enhancer.fullscreenRevision);
+    await enhancer.reconciler.reconcile(enhancer.lifecycle.currentReconcileToken());
 
     expect(stop).not.toHaveBeenCalled();
   });
@@ -385,32 +416,34 @@ describe('VideoEnhancer lifecycle transitions', () => {
     const { enhancer } = createBareEnhancer();
     const clearTimeout = window.clearTimeout as unknown as ReturnType<typeof vi.fn>;
 
-    enhancer.scheduleFullscreenReconcile(90);
-    expect(enhancer.fullscreenDebounceTimer).toBe(72);
-    const revisionBeforeStop = enhancer.fullscreenRevision;
+    enhancer.reconciler.schedule(90);
+    expect(enhancer.reconciler.hasPendingReconcile).toBe(true);
+    const tokenBeforeStop = enhancer.lifecycle.currentReconcileToken();
 
     await enhancer.stopEnhancement();
 
     expect(clearTimeout).toHaveBeenCalledWith(72);
-    expect(enhancer.fullscreenDebounceTimer).toBeUndefined();
-    expect(enhancer.fullscreenRevision).toBeGreaterThan(revisionBeforeStop);
+    expect(enhancer.reconciler.hasPendingReconcile).toBe(false);
+    expect(enhancer.lifecycle.currentReconcileToken()).toBeGreaterThan(tokenBeforeStop);
   });
 
   it('exits the fullscreen layout when an automatic start commits no backend', async () => {
-    const { enhancer, fullscreenLayout } = createBareEnhancer();
+    const { enhancer, video, fullscreenLayout } = createBareEnhancer();
     enhancer.currentSettings = { ...DEFAULT_SETTINGS };
-    enhancer.isPreferredFullscreenVideo = vi.fn(() => true);
     enhancer.startEnhancement = vi.fn(async () => undefined);
+    const preferred = vi.spyOn(fullscreenContext, 'preferredVideo')
+      .mockReturnValue(video as unknown as HTMLVideoElement);
     const hasContext = vi.spyOn(fullscreenContext, 'hasContext').mockReturnValue(true);
     try {
-      await enhancer.reconcileFullscreen(enhancer.fullscreenRevision);
+      await enhancer.reconciler.reconcile(enhancer.lifecycle.currentReconcileToken());
     } finally {
       hasContext.mockRestore();
+      preferred.mockRestore();
     }
 
     expect(fullscreenLayout.enter).toHaveBeenCalledOnce();
     expect(fullscreenLayout.exit).toHaveBeenCalled();
-    expect(enhancer.automaticSession).toBe(false);
+    expect(enhancer.reconciler.isAutomaticSession).toBe(false);
   });
 
   function createRealesrganEnhancer(capHeight: 480 | 432 | 405 = 480) {
@@ -449,7 +482,7 @@ describe('VideoEnhancer lifecycle transitions', () => {
     await vi.waitFor(() => expect(updateConfiguration).toHaveBeenCalledOnce());
     const effects = updateConfiguration.mock.calls[0]![0].effects;
     expect(effects[0]!.params).toMatchObject({ maxInferenceHeight: 432 });
-    expect(enhancer.autoCap?.effectiveCap).toBe(432);
+    expect(enhancer.statsConsumer.effectiveAutoCap).toBe(432);
     // Stored settings keep the user cap: the override is ephemeral.
     expect(enhancer.currentSettings.realesrganCapHeight).toBe(480);
   });
@@ -472,7 +505,7 @@ describe('VideoEnhancer lifecycle transitions', () => {
     const { enhancer, updateConfiguration } = createRealesrganEnhancer(480);
     expect(enhancer.e2eInjectOverloadStats()).toBe(432);
     await vi.waitFor(() => expect(updateConfiguration).toHaveBeenCalledOnce());
-    expect(enhancer.autoCap?.effectiveCap).toBe(432);
+    expect(enhancer.statsConsumer.effectiveAutoCap).toBe(432);
   });
 
   it('drops a queued step after the renderer is released', async () => {

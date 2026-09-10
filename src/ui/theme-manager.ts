@@ -3,7 +3,9 @@
  * 负责主题切换和持久化
  */
 
-export type ThemeMode = 'light' | 'dark' | 'auto';
+import { isThemeMode, type ThemeMode } from '../utils/local-settings';
+
+export type { ThemeMode };
 
 class ThemeManager {
   private static instance: ThemeManager;
@@ -42,22 +44,15 @@ class ThemeManager {
    */
   private applyTheme(): void {
     const root = document.documentElement;
-    
+    const effective: 'light' | 'dark' = this.currentTheme === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : this.currentTheme;
+
     // 移除现有主题类
     root.classList.remove('light', 'dark');
-    
-    if (this.currentTheme === 'auto') {
-      // 自动模式：根据系统偏好设置
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      if (prefersDark) {
-        root.classList.add('dark');
-      } else {
-        root.classList.add('light');
-      }
-    } else {
-      // 手动模式：直接应用选择的主题
-      root.classList.add(this.currentTheme);
-    }
+    root.classList.add(effective);
+    // Kept for selectors/tests that read the resolved theme attribute.
+    root.setAttribute('data-theme', effective);
   }
 
   /**
@@ -66,8 +61,8 @@ class ThemeManager {
   private async loadTheme(): Promise<void> {
     try {
       const result = await chrome.storage.local.get(['theme']);
-      if (result.theme && ['light', 'dark', 'auto'].includes(result.theme)) {
-        this.currentTheme = result.theme as ThemeMode;
+      if (isThemeMode(result.theme)) {
+        this.currentTheme = result.theme;
       }
       this.applyTheme();
     } catch (error) {
@@ -107,16 +102,6 @@ class ThemeManager {
       return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
     return this.currentTheme;
-  }
-
-  /**
-   * 切换到下一个主题
-   */
-  public toggleTheme(): void {
-    const themes: ThemeMode[] = ['light', 'dark', 'auto'];
-    const currentIndex = themes.indexOf(this.currentTheme);
-    const nextIndex = (currentIndex + 1) % themes.length;
-    this.setTheme(themes[nextIndex]);
   }
 }
 

@@ -1,6 +1,8 @@
 import {
+  fullscreenContainsVideo,
   getAuthoritativeFullscreenElement,
   isVideoInFullscreenContext,
+  isWithinFullscreenExitGrace,
   videoFillsOwnViewport,
 } from '../shared/fullscreen-video';
 
@@ -46,19 +48,45 @@ export function electFullscreenCandidate(
 /**
  * The per-document owner of the fullscreen decision: one subscription point
  * for fullscreenchange (including the top-level document seen from guest
- * frames), one authoritative element, one context verdict. Overlay, layout
- * and enhancer consume this instead of each re-deriving it from the DOM.
+ * frames), one authoritative element, one candidate election, one context
+ * verdict. Overlay, layout and enhancer consume this instead of each
+ * re-deriving it from the DOM.
  */
 export class FullscreenContext {
   private readonly listeners = new Set<() => void>();
   private installed = false;
+  /**
+   * The authoritative element observed at the last fullscreenchange (or the
+   * first read). Stored rather than re-probed on every access: the change
+   * event is the mutation source, so consumers read one cached verdict.
+   */
+  private elementCache: Element | null | undefined = undefined;
+  private candidateSource: (() => readonly FullscreenCandidate[]) | null = null;
   private readonly change = () => {
+    this.elementCache = getAuthoritativeFullscreenElement();
     for (const listener of [...this.listeners]) listener();
   };
 
   /** The fullscreen element that governs this document, top-level included. */
   get element(): Element | null {
-    return getAuthoritativeFullscreenElement();
+    if (this.elementCache === undefined) {
+      this.elementCache = getAuthoritativeFullscreenElement();
+    }
+    return this.elementCache;
+  }
+
+  /**
+   * Register the page's candidate source. The population module feeds the
+   * context its managed videos so election has exactly one owner.
+   */
+  setCandidateSource(source: () => readonly FullscreenCandidate[]): void {
+    this.candidateSource = source;
+  }
+
+  /** The single elected video for the current fullscreen context, or null. */
+  preferredVideo(): HTMLVideoElement | null {
+    const candidates = this.candidateSource?.() ?? [];
+    return electFullscreenCandidate(candidates)?.video ?? null;
   }
 
   /**
@@ -68,6 +96,25 @@ export class FullscreenContext {
    */
   hasContext(video: HTMLVideoElement): boolean {
     return isVideoInFullscreenContext(video);
+  }
+
+  /**
+   * Whether the video shows a player-fullscreen signal: it lives in the
+   * explicit fullscreen subtree, or (outside the post-exit grace) it is the
+   * embedded-style full-viewport player. The context owns this derivation so
+   * consumers do not re-read the DOM.
+   */
+  hasPlayerSignal(video: HTMLVideoElement): boolean {
+    const fullscreen = this.element;
+    if (fullscreenContainsVideo(fullscreen, video)) return true;
+    if (isWithinFullscreenExitGrace()) return false;
+    // Deliberately the loose embedded-style signal (not the strict
+    // screen-geometry predicate): top-level CSS-fullscreen players (theater
+    // layouts that never call requestFullscreen) rely on it, and the election
+    // additionally requires preferred-candidate status. Delegating to the full
+    // isVideoInFullscreenContext here would pull its DOM/screen requirements
+    // and exit-grace side effects into every reconcile.
+    return videoFillsOwnViewport(video);
   }
 
   /**
@@ -123,6 +170,8 @@ export class FullscreenContext {
   private install(): void {
     if (this.installed || typeof document?.addEventListener !== 'function') return;
     this.installed = true;
+    // Seed the cached element at install time; the change event refreshes it.
+    this.elementCache = getAuthoritativeFullscreenElement();
     this.installFullscreenChangeListeners();
   }
 }

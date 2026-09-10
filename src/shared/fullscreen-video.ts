@@ -39,8 +39,8 @@ function ensureFullscreenChangeListener(): void {
       // Re-arm the exit stamp: a stale stamp from an earlier cycle must not
       // swallow the next exit's grace window (isVideoInFullscreenContext
       // re-arms on its own non-null observations; the event path does the
-      // same here so hasPlayerFullscreenSignal's standalone grace query
-      // stays correct across cycles).
+      // same here so the context's standalone grace query stays correct
+      // across cycles).
       fullscreenExitAt = 0;
     } else if (fullscreenSeen && fullscreenExitAt === 0) {
       fullscreenExitAt = Date.now();
@@ -143,17 +143,6 @@ export function viewportOccupiesScreen(viewport: ViewportMetrics, display: Scree
     && viewport.height >= displayHeight * 0.95;
 }
 
-/** True while the document is still in the same explicit or frame-level fullscreen context. */
-export function hasFullscreenContext(
-  fullscreen: Element | null,
-  viewport: ViewportMetrics,
-  display: ScreenMetrics,
-  allowGeometryFallback = true,
-): boolean {
-  return Boolean(fullscreen)
-    || allowGeometryFallback && viewportOccupiesScreen(viewport, display);
-}
-
 /**
  * Whether a visible video covers (nearly) all of its own frame's viewport.
  * Embedded hoster players (VOE, Doodstream, Filemoon, Vidmoly, ...) fill
@@ -199,7 +188,7 @@ export function rectOccupiesViewport(rect: ElementRect, viewport: ViewportMetric
     && rect.bottom >= viewport.height - verticalInset;
 }
 
-function isVisibleVideo(video: HTMLVideoElement, allowTransparent = false): boolean {
+function isVisibleVideo(video: HTMLVideoElement, ignoreOpacityVeto = false): boolean {
   if (!video.isConnected) return false;
   const rect = video.getBoundingClientRect();
   const style = getComputedStyle(video);
@@ -207,7 +196,7 @@ function isVisibleVideo(video: HTMLVideoElement, allowTransparent = false): bool
     && rect.height >= 135
     && style.display !== 'none'
     && style.visibility !== 'hidden'
-    && (allowTransparent || Number.parseFloat(style.opacity || '1') > 0);
+    && (ignoreOpacityVeto || Number.parseFloat(style.opacity || '1') > 0);
 }
 
 export function isFullscreenVideoEligible(

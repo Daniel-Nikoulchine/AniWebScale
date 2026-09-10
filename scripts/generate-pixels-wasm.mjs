@@ -8,23 +8,59 @@
  * wasm/pixels.wasm, from where webpack ships it verbatim to
  * chunks/pixels.wasm next to the worker.
  *
- * Idempotent via mtime stamps; --check fails CI when stale. When cargo is
- * missing the script keeps a previously built artifact with a loud warning
- * and fails only when no artifact exists at all.
+ * Idempotent by content hash: `native/wasm-pixels/source-hash.txt` pins the
+ * sha256 of the crate source tree that the committed bytes were built from.
+ * `--check` fails when that pinned hash no longer matches the source tree
+ * (source drift) instead of comparing mtimes. The wasm artifact itself is a
+ * git-ignored build output, so a missing artifact is reported but not fatal in
+ * a fresh checkout; cargo-missing handling is unchanged.
  */
-import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const crateDir = join(repoRoot, 'native', 'wasm-pixels');
 const outDir = join(repoRoot, 'wasm');
 const outFile = join(outDir, 'pixels.wasm');
+const hashFile = join(crateDir, 'source-hash.txt');
 const builtWasm = join(
   crateDir, 'target', 'wasm32-unknown-unknown', 'release', 'aniwebscale_pixels.wasm',
 );
-const sources = [join(crateDir, 'Cargo.toml'), join(crateDir, 'src', 'lib.rs')];
+
+/** All crate source files except the cargo target directory, in stable order. */
+function crateSourceFiles(dir = crateDir) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'target') continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...crateSourceFiles(full));
+    else if (entry.isFile() && entry.name !== 'source-hash.txt') files.push(full);
+  }
+  return files.sort();
+}
+
+/** sha256 over "<repo-relative path>\0<contents>\0" for every crate source file. */
+function crateSourceHash() {
+  const hash = createHash('sha256');
+  for (const file of crateSourceFiles()) {
+    hash.update(relative(repoRoot, file).replaceAll('\\', '/'));
+    hash.update('\0');
+    hash.update(readFileSync(file));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+function pinnedHash() {
+  try {
+    return readFileSync(hashFile, 'utf8').trim();
+  } catch {
+    return null;
+  }
+}
 
 function haveCargo() {
   return spawnSync('cargo', ['--version'], { stdio: 'ignore' }).status === 0;
@@ -52,9 +88,7 @@ function missingWasmTargetHint() {
 }
 
 function isFresh() {
-  if (!existsSync(outFile)) return false;
-  const outStat = statSync(outFile);
-  return sources.every(source => existsSync(source) && outStat.mtimeMs > statSync(source).mtimeMs);
+  return existsSync(outFile) && pinnedHash() === crateSourceHash();
 }
 
 function build() {
@@ -66,16 +100,27 @@ function build() {
   if (!existsSync(builtWasm)) throw new Error(`expected artifact missing: ${builtWasm}`);
   mkdirSync(outDir, { recursive: true });
   copyFileSync(builtWasm, outFile);
+  writeFileSync(hashFile, `${crateSourceHash()}\n`);
 }
 
 async function main() {
   const args = new Set(process.argv.slice(2));
   if (args.has('--check')) {
-    if (!isFresh()) {
-      console.error('pixels-wasm --check: wasm/pixels.wasm missing or stale (run npm run generate:pixels-wasm).');
+    const pinned = pinnedHash();
+    const current = crateSourceHash();
+    if (pinned !== current) {
+      console.error(
+        'pixels-wasm --check: crate source changed since the pinned hash (run npm run generate:pixels-wasm).\n'
+        + `  pinned:  ${pinned ?? '(missing source-hash.txt)'}\n`
+        + `  current: ${current}`,
+      );
       process.exit(1);
     }
-    console.log('pixels-wasm --check: wasm/pixels.wasm fresh.');
+    if (!existsSync(outFile)) {
+      console.warn('pixels-wasm --check: source hash matches; wasm/pixels.wasm is a git-ignored build output not present in this checkout.');
+    } else {
+      console.log('pixels-wasm --check: crate source hash and wasm/pixels.wasm are current.');
+    }
     return;
   }
   const force = args.has('--force');
@@ -107,4 +152,4 @@ if (invokedAsScript) {
   await main();
 }
 
-export { build, isFresh };
+export { build, isFresh, crateSourceHash };

@@ -1,4 +1,5 @@
 import type { AiUpscaleMode, EnhancementEffect, QualityTier, RealEsrganCapHeight } from '../types';
+import { DEFAULT_REALESRGAN_CAP_HEIGHT } from '../shared/presets';
 
 const restore = (quality: QualityTier): EnhancementEffect => ({
   id: `anime4k/Restore/CNN${quality}`,
@@ -56,7 +57,7 @@ export function findEffect(className: string): EnhancementEffect {
 export function resolveAiUpscaleEffect(
   mode: AiUpscaleMode,
   quality: QualityTier,
-  capHeight: RealEsrganCapHeight = 480,
+  capHeight: RealEsrganCapHeight = DEFAULT_REALESRGAN_CAP_HEIGHT,
 ): EnhancementEffect {
   if (mode === 'CNNX2') {
     return { ...findEffect(`CNNx2${quality}`), alwaysApply: true };

@@ -13,4 +13,5 @@
 *.pfx binary
 *.png binary
 *.webp binary
+*.webm binary
 *.zip binary

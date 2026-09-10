@@ -1,9 +1,26 @@
 import { debug } from './utils/debug-log';
 
-const REGISTERED_SCRIPT_IDS = [
-  'aniwebscale-fullscreen-bridge',
-  'aniwebscale-content',
+/**
+ * The one ordered source of the site scripts. The persistent content-script
+ * registration and the immediate injection both derive from this table, so
+ * the files, ids, worlds and run order can never drift apart.
+ */
+const SITE_SCRIPTS = [
+  {
+    id: 'aniwebscale-fullscreen-bridge',
+    file: 'fullscreen-bridge.js',
+    world: 'MAIN',
+    runAt: 'document_start',
+  },
+  {
+    id: 'aniwebscale-content',
+    file: 'content.js',
+    world: 'ISOLATED',
+    runAt: 'document_idle',
+  },
 ] as const;
+
+const REGISTERED_SCRIPT_IDS = SITE_SCRIPTS.map(script => script.id);
 
 function sameStrings(left: string[] | undefined, right: string[]): boolean {
   if (!left || left.length !== right.length) return false;
@@ -13,18 +30,11 @@ function sameStrings(left: string[] | undefined, right: string[]): boolean {
 }
 
 function desiredContentScripts(matches: string[]): chrome.scripting.RegisteredContentScript[] {
-  return [
-    {
-      id: REGISTERED_SCRIPT_IDS[0], matches, js: ['fullscreen-bridge.js'],
-      runAt: 'document_start', allFrames: true, matchOriginAsFallback: true,
-      persistAcrossSessions: true, world: 'MAIN',
-    },
-    {
-      id: REGISTERED_SCRIPT_IDS[1], matches, js: ['content.js'],
-      runAt: 'document_idle', allFrames: true, matchOriginAsFallback: true,
-      persistAcrossSessions: true, world: 'ISOLATED',
-    },
-  ];
+  return SITE_SCRIPTS.map(script => ({
+    id: script.id, matches, js: [script.file],
+    runAt: script.runAt, allFrames: true, matchOriginAsFallback: true,
+    persistAcrossSessions: true, world: script.world,
+  }));
 }
 
 function sameRegistration(
@@ -63,10 +73,10 @@ export class SiteAccessRegistration {
   }
 
   async inject(tabId: number): Promise<boolean> {
-    const injections = [
-      { files: ['fullscreen-bridge.js'], world: 'MAIN' as const },
-      { files: ['content.js'], world: 'ISOLATED' as const },
-    ];
+    const injections = SITE_SCRIPTS.map(script => ({
+      files: [script.file],
+      world: script.world,
+    }));
 
     try {
       for (const injection of injections) {

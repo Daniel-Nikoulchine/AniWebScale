@@ -35,11 +35,8 @@ function installDeps(overrides: {
         && (sender.frameId ?? 0) === SESSION.frameId),
       updateConfiguration: vi.fn(async () => undefined),
       stopSession: vi.fn(async () => undefined),
-      status: vi.fn(() => ({ active: true, state: 'streaming' })),
       sendPlaybackState: vi.fn(async () => undefined),
-      forwardMediaCommand: vi.fn(async () => undefined),
-      forwardPointer: vi.fn(async () => undefined),
-      readConfiguration: vi.fn(async () => ({ mode: 'A', quality: 'M', frameGenerationEnabled: false })),
+      readConfiguration: vi.fn(async () => ({ mode: 'A', quality: 'M', frameGenerationEnabled: false } as const)),
       ...overrides.native,
     },
     platform: {
@@ -48,8 +45,6 @@ function installDeps(overrides: {
       updateSiteAccess: vi.fn(async () => undefined),
       requestFrameSiteAccess: vi.fn(async () => ({ ok: true, outcome: 'injected' as const })),
       resetConsent: vi.fn(async () => undefined),
-      openOptionsPage: vi.fn(async () => undefined),
-      openOnboarding: vi.fn(async () => undefined),
       realEsrganHttpInfo: vi.fn(async (): Promise<RealEsrganHttpEndpoint> => ({ ok: false, message: 'not wired in tests' })),
       ...overrides.platform,
     },
@@ -67,6 +62,8 @@ describe('background router', () => {
     const { handleMessage } = installDeps();
     await expect(handleMessage({ type: 'SOMETHING_ELSE' }, {} as chrome.runtime.MessageSender))
       .resolves.toBeUndefined();
+    await expect(handleMessage({ type: 'NATIVE_STATUS' }, {} as chrome.runtime.MessageSender))
+      .resolves.toBeUndefined();
   });
 
   it('answers malformed payloads with the exact rejection envelope', async () => {
@@ -82,9 +79,7 @@ describe('background router', () => {
     await expect(handleMessage({
       type: 'NATIVE_FALLBACK_REQUEST',
       videoId: 'video-1',
-      reason: 'eme',
       configuration: { mode: 'A', quality: 'M', frameGenerationEnabled: false },
-      output: 'auto',
       videoRect: { x: 0, y: 0, width: 320, height: 180, devicePixelRatio: 1 },
     }, senderFrom())).resolves.toEqual({
       ok: false,
@@ -108,36 +103,38 @@ describe('background router', () => {
     });
   });
 
-  it('rejects native input commands from a different tab or frame', async () => {
+  it('denies a configuration update while the extension is disabled', async () => {
+    const { deps, handleMessage } = installDeps({ platform: { isExtensionEnabled: vi.fn(async () => false) } });
+    await expect(handleMessage({
+      type: 'NATIVE_UPDATE_CONFIGURATION',
+      videoId: SESSION.videoId,
+      configuration: { mode: 'A', quality: 'M', frameGenerationEnabled: false },
+    }, senderFrom())).resolves.toEqual({ ok: false, message: 'AniWebScale is disabled.' });
+    expect(deps.native.updateConfiguration).not.toHaveBeenCalled();
+  });
+
+  it('re-validates and serializes playback state inside the transition', async () => {
     const { deps, handleMessage } = installDeps();
     const outsider = { tab: { id: 99 }, frameId: 4 } as unknown as chrome.runtime.MessageSender;
 
-    await expect(handleMessage({ type: 'NATIVE_MEDIA_COMMAND', command: 'pause' }, outsider))
-      .resolves.toEqual({
-        ok: false,
-        message: 'The native media command did not come from the active session.',
-      });
     await expect(handleMessage({
-      type: 'NATIVE_POINTER', event: 'move', x: 0.5, y: 0.5,
-    }, outsider)).resolves.toEqual({
-      ok: false,
-      message: 'The native pointer event did not come from the active session.',
-    });
-    expect(deps.native.forwardMediaCommand).not.toHaveBeenCalled();
-    expect(deps.native.forwardPointer).not.toHaveBeenCalled();
-  });
+      type: 'NATIVE_PLAYBACK_STATE',
+      sessionId: SESSION.sessionId,
+      videoId: SESSION.videoId,
+      playbackActive: true,
+      mediaTime: 1,
+    }, outsider)).resolves.toEqual({ ok: false, message: 'Invalid native playback state.' });
+    expect(deps.native.sendPlaybackState).not.toHaveBeenCalled();
+    expect(deps.platform.serialized).toHaveBeenCalled();
 
-  it('forwards native input commands only from the owning frame', async () => {
-    const { deps, handleMessage } = installDeps();
-    const owner = senderFrom();
-
-    await expect(handleMessage({ type: 'NATIVE_MEDIA_COMMAND', command: 'pause' }, owner))
-      .resolves.toEqual({ ok: true });
     await expect(handleMessage({
-      type: 'NATIVE_POINTER', event: 'move', x: 0.5, y: 0.5,
-    }, owner)).resolves.toEqual({ ok: true });
-    expect(deps.native.forwardMediaCommand).toHaveBeenCalledWith('pause', undefined);
-    expect(deps.native.forwardPointer).toHaveBeenCalledWith(expect.objectContaining({ event: 'move' }));
+      type: 'NATIVE_PLAYBACK_STATE',
+      sessionId: SESSION.sessionId,
+      videoId: SESSION.videoId,
+      playbackActive: true,
+      mediaTime: 1,
+    }, senderFrom())).resolves.toEqual({ ok: true });
+    expect(deps.native.sendPlaybackState).toHaveBeenCalledWith('session-1', true, 1);
   });
 
   it('stops the session and clears the claim when settings arrive while disabled', async () => {
@@ -185,14 +182,10 @@ describe('background router', () => {
     expect(deps.platform.resetConsent).not.toHaveBeenCalled();
   });
 
-  it('routes site-access sync, options and onboarding to their deps', async () => {
+  it('routes site-access sync to its dep', async () => {
     const { deps, handleMessage } = installDeps();
     await handleMessage({ type: 'SITE_ACCESS_SYNC' }, senderFrom());
     expect(deps.platform.updateSiteAccess).toHaveBeenCalledTimes(1);
-    await handleMessage({ type: 'OPEN_OPTIONS_PAGE' }, senderFrom());
-    expect(deps.platform.openOptionsPage).toHaveBeenCalledTimes(1);
-    await handleMessage({ type: 'OPEN_ONBOARDING' }, senderFrom());
-    expect(deps.platform.openOnboarding).toHaveBeenCalledTimes(1);
   });
 
   it('routes fullscreen player access requests to the manager', async () => {
@@ -212,11 +205,5 @@ describe('background router', () => {
       origin: 'chrome://settings',
     }, senderFrom())).resolves.toEqual({ ok: false, message: 'Invalid player origin.' });
     expect(deps.platform.requestFrameSiteAccess).not.toHaveBeenCalled();
-  });
-
-  it('spreads the mirrored status into the status response', async () => {
-    const { handleMessage } = installDeps();
-    await expect(handleMessage({ type: 'NATIVE_STATUS' }, senderFrom()))
-      .resolves.toEqual({ ok: true, active: true, state: 'streaming' });
   });
 });

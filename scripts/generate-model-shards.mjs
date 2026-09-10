@@ -8,7 +8,6 @@ const sources = [
   {
     path: path.resolve('src/shared/generated-kernels.ts'),
     marker: 'export const GENERATED_KERNELS = ',
-    suffix: ' as const;',
     names: {
       CNNSoftUL: 'cnn-soft-ul',
       DenoiseCNNx2M: 'denoise-cnn-x2-m',
@@ -18,7 +17,6 @@ const sources = [
   {
     path: path.resolve('src/shared/generated-external-glsl-models.ts'),
     marker: 'export const GENERATED_EXTERNAL_GLSL_MODELS = ',
-    suffix: ' as const satisfies',
     names: {
       ArtCNNX2: 'artcnn-x2',
       ACNetX2: 'acnet-x2',
@@ -27,14 +25,45 @@ const sources = [
   },
 ];
 
+/**
+ * Slice the JSON object literal that follows `marker` out of a generated
+ * TypeScript module. Scans balanced braces while skipping double-quoted
+ * strings (the generated output is JSON, so strings are always double-quoted
+ * with backslash escapes), then JSON.parses the exact span. This is robust to
+ * suffixes/annotations after the object and to brace characters inside WGSL
+ * source strings — unlike indexOf/lastIndexOf slicing.
+ */
+function extractJsonObject(source, marker, sourcePath) {
+  const markerIndex = source.indexOf(marker);
+  if (markerIndex === -1) {
+    throw new Error(`Could not find ${JSON.stringify(marker)} in ${sourcePath}.`);
+  }
+  const start = source.indexOf('{', markerIndex + marker.length);
+  if (start === -1) throw new Error(`No object literal after ${JSON.stringify(marker)} in ${sourcePath}.`);
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < source.length; i += 1) {
+    const char = source[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { inString = true; continue; }
+    if (char === '{' || char === '[') depth += 1;
+    else if (char === '}' || char === ']') {
+      depth -= 1;
+      if (depth === 0) return JSON.parse(source.slice(start, i + 1));
+    }
+  }
+  throw new Error(`Unterminated object literal after ${JSON.stringify(marker)} in ${sourcePath}.`);
+}
+
 function parseGeneratedObject(definition) {
   const source = fs.readFileSync(definition.path, 'utf8');
-  const start = source.indexOf(definition.marker);
-  const end = source.lastIndexOf(definition.suffix);
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error(`Could not parse generated model object in ${definition.path}.`);
-  }
-  return JSON.parse(source.slice(start + definition.marker.length, end));
+  return extractJsonObject(source, definition.marker, definition.path);
 }
 
 let changed = false;

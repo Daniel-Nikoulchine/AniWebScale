@@ -1,3 +1,4 @@
+import { createAsyncSerializer } from './async-serializer';
 import { parseNativeConsentResponse } from './native-session-messages';
 import { nativeConsentRequestMessage } from './runtime-messages';
 
@@ -85,13 +86,7 @@ async function loadConsents(): Promise<Record<string, boolean>> {
 /**
  * Serialize consent writes: record/reset are load → mutate → set, so two
  * concurrent writes would both read the pre-write state and the second
- * would clobber the first. The chain preserves call order; the chain
- * itself never rejects (callers still see their own write's error).
+ * would clobber the first. The shared serializer preserves call order and
+ * lets each caller see its own write's error.
  */
-let consentWriteChain: Promise<void> = Promise.resolve();
-
-function serializeConsentWrite(write: () => Promise<void>): Promise<void> {
-  const next = consentWriteChain.then(write, write);
-  consentWriteChain = next.catch(() => undefined);
-  return next;
-}
+const serializeConsentWrite = createAsyncSerializer();

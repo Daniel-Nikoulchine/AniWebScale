@@ -11,6 +11,8 @@
  * Mirrored blocks:
  *   - realesrgan-tile-geometry.js      -> <generated-tile-geometry>
  *   - realesrgan-ort-shape-pinning.js  -> <generated-ort-shape-pinning>
+ *   - realesrgan-pixels.js             -> <generated-pixels>
+ *   - realesrgan-compose-kernels.js    -> <generated-compose-kernels>
  *
  * Usage:
  *   node scripts/generate-worker-tiling.mjs [--check] [--force]
@@ -40,6 +42,22 @@ const BLOCKS = [
     srcEnd: '// <ort-shape-pinning-end>',
     genBegin: '// <generated-ort-shape-pinning>',
     genEnd: '// </generated-ort-shape-pinning>',
+  },
+  {
+    name: 'pixel helpers',
+    source: join(repoRoot, 'src', 'shared', 'realesrgan-pixels.js'),
+    srcBegin: '// <pixels-begin>',
+    srcEnd: '// <pixels-end>',
+    genBegin: '// <generated-pixels>',
+    genEnd: '// </generated-pixels>',
+  },
+  {
+    name: 'compose kernels',
+    source: join(repoRoot, 'src', 'shared', 'realesrgan-compose-kernels.js'),
+    srcBegin: '// <compose-kernels-begin>',
+    srcEnd: '// <compose-kernels-end>',
+    genBegin: '// <generated-compose-kernels>',
+    genEnd: '// </generated-compose-kernels>',
   },
 ];
 

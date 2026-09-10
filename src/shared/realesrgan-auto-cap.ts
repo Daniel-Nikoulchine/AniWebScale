@@ -16,9 +16,20 @@
  * (updateConfiguration with rebuilt effects); the override resets on every
  * settings change, backend switch, stop and destroy.
  */
-import type { RealEsrganCapHeight } from '../types';
+/**
+ * The canonical cap-height ladder. The union type is derived from it so a rung
+ * added or removed here flows through the storage schema, migration and UI
+ * without a second literal list to keep in sync.
+ */
+export const REALESRGAN_CAP_LADDER = [480, 432, 405, 360] as const;
 
-export const REALESRGAN_CAP_LADDER: ReadonlyArray<RealEsrganCapHeight> = [480, 432, 405, 360];
+export type RealEsrganCapHeight = (typeof REALESRGAN_CAP_LADDER)[number];
+
+/** True when a stored value is one of the canonical ladder rungs. */
+export function isRealEsrganCapHeight(value: unknown): value is RealEsrganCapHeight {
+  return typeof value === 'number'
+    && (REALESRGAN_CAP_LADDER as readonly number[]).includes(value);
+}
 
 /** Cooldown between two down-steps (the new cap needs frames to settle). */
 export const AUTO_CAP_DOWN_COOLDOWN_MS = 5000;

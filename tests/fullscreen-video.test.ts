@@ -4,7 +4,6 @@ import {
   FULLSCREEN_EXIT_GRACE_MS,
   fullscreenContainsVideo,
   getAuthoritativeFullscreenElement,
-  hasFullscreenContext,
   isFullscreenVideoEligible,
   isVideoInFullscreenContext,
   isWithinFullscreenExitGrace,
@@ -78,15 +77,6 @@ describe('fullscreen geometry fallback', () => {
       { width: 1920, height: 900 },
       { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040 },
     )).toBe(false);
-  });
-
-  it('keeps a terminal native failure blocked while fullscreen remains active', () => {
-    const viewport = { width: 1920, height: 900 };
-    const display = { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040 };
-    expect(hasFullscreenContext({} as Element, viewport, display)).toBe(true);
-    expect(hasFullscreenContext(null, { width: 1920, height: 1080 }, display)).toBe(true);
-    expect(hasFullscreenContext(null, { width: 1920, height: 1080 }, display, false)).toBe(false);
-    expect(hasFullscreenContext(null, viewport, display)).toBe(false);
   });
 
   it('rejects a video that does not fill the fullscreen frame', () => {

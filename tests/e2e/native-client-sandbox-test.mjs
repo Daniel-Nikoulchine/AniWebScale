@@ -20,11 +20,11 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 
 const workspace = path.resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-// NOTE: 4190 is on Firefox's blocked-port list (managesieve) — the tab would
-// show "Blocked Page" and no content script would ever run. Pick a safe port.
-const PORT = 4191;
-const ORIGIN = `http://127.0.0.1:${PORT}`;
+// Ephemeral loopback port: avoids Firefox's blocked-port list (4190 =
+// managesieve) and stale listeners from a previous run.
+let ORIGIN = '';
 const HOST_BIN = path.join(workspace, 'native/linux-host/build/aniwebscale-ncnn-host');
+const ESBUILD_BIN = path.join(workspace, 'node_modules', '.bin', 'esbuild');
 
 const server = createServer((request, response) => {
   const url = new URL(request.url || '/', ORIGIN);
@@ -37,7 +37,9 @@ const server = createServer((request, response) => {
   response.writeHead(404); response.end();
 });
 
-await new Promise(resolve => server.listen(PORT, '127.0.0.1', resolve));
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const { port: PORT } = server.address();
+ORIGIN = `http://127.0.0.1:${PORT}`;
 
 // --- Start the real host and handshake for port/token ------------------------
 function framedWrite(proc, obj) {
@@ -148,7 +150,7 @@ import { RealEsrganNativeVulkanClient } from '../../src/core/realesrgan-native-v
 `);
 const bundleEntry = path.join(workspace, '.tmp/nativetest/test-entry.ts');
 execSync(
-  `npx esbuild ${bundleEntry} --bundle --format=iife --outfile=.tmp/nativetest/client-bundle.js --define:__ANIME4K_E2E__=true`,
+  `"${ESBUILD_BIN}" ${bundleEntry} --bundle --format=iife --outfile=.tmp/nativetest/client-bundle.js --define:__ANIME4K_E2E__=true`,
   { cwd: workspace, stdio: 'inherit' },
 );
 
@@ -186,14 +188,20 @@ const runner = await webExt.run({
   verbose: false,
 });
 
-await new Promise(resolve => setTimeout(resolve, 25000));
+// Poll the title beacon (NATIVETEST-TRAIL ...) instead of a fixed 25s sleep.
+const deadline = Date.now() + 60_000;
+let titles = [];
 try {
-  const desktopRunner = runner.extensionRunners?.find(c => c.getName?.() === 'Firefox Desktop');
-  const remote = desktopRunner?.remoteFirefox;
-  const root = await remote?.client.request({ to: 'root', type: 'listTabs' }).catch(() => null);
-  const titles = (root?.tabs ?? []).slice(0, 6).map(t => t.title ?? '?');
+  while (Date.now() < deadline) {
+    const desktopRunner = runner.extensionRunners?.find(c => c.getName?.() === 'Firefox Desktop');
+    const remote = desktopRunner?.remoteFirefox;
+    const root = await remote?.client.request({ to: 'root', type: 'listTabs' }).catch(() => null);
+    titles = (root?.tabs ?? []).slice(0, 6).map(t => t.title ?? '?');
+    if (titles.some(title => title.includes('NATIVETEST-TRAIL'))) break;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
   console.log('[nativetest] TITLES:', JSON.stringify(titles));
-  desktopRunner?.remoteFirefox?.disconnect?.();
+  runner.extensionRunners?.find(c => c.getName?.() === 'Firefox Desktop')?.remoteFirefox?.disconnect?.();
   await runner.exit().catch(() => {});
 } finally {
   server.close();

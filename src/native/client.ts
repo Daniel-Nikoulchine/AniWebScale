@@ -22,6 +22,31 @@ export class NativeHostUnavailableError extends Error {
   }
 }
 
+/** A request that did not receive its reply within the timeout. */
+export class NativeRequestTimeoutError extends Error {
+  readonly code = 'native-request-timeout';
+  readonly recoverable = true;
+  constructor(message: string) {
+    super(message);
+    this.name = 'NativeRequestTimeoutError';
+  }
+}
+
+/**
+ * A native host rejection carrying its error taxonomy on the Error itself so
+ * callers can branch on `code`/`recoverable` instead of parsing prose.
+ */
+export class NativeRequestError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly recoverable: boolean,
+  ) {
+    super(message);
+    this.name = 'NativeRequestError';
+  }
+}
+
 /** Promise-oriented wrapper around Chrome/Firefox Native Messaging ports. */
 export class NativeMessagingClient {
   private port: chrome.runtime.Port | null = null;
@@ -64,7 +89,7 @@ export class NativeMessagingClient {
     return new Promise<TEvent>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(request.requestId);
-        reject(new Error(`Native host timed out while handling ${request.type}.`));
+        reject(new NativeRequestTimeoutError(`Native host timed out while handling ${request.type}.`));
       }, timeoutMs);
 
       this.pending.set(request.requestId, {
@@ -119,20 +144,18 @@ export class NativeMessagingClient {
         clearTimeout(pending.timer);
         this.pending.delete(requestId);
         if (nativeError) {
-          pending.reject(new Error(`${nativeError.code}: ${nativeError.message}`));
+          pending.reject(new NativeRequestError(
+            nativeError.code,
+            `${nativeError.code}: ${nativeError.message}`,
+            nativeError.recoverable,
+          ));
         } else {
           pending.resolve(message);
         }
       }
     }
 
-    for (const listener of this.listeners) {
-      try {
-        listener(message);
-      } catch (error) {
-        console.error('[NativeBridge] Native event listener failed.', error);
-      }
-    }
+    this.emit(message);
   };
 
   private readonly handleDisconnect = (): void => {
@@ -148,8 +171,19 @@ export class NativeMessagingClient {
       message: this.disconnectReason,
       recoverable: false,
     };
-    for (const listener of this.listeners) listener(event);
+    this.emit(event);
   };
+
+  /** The single protected listener dispatch used by both handlers. */
+  private emit(event: NativeEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error('[NativeBridge] Native event listener failed.', error);
+      }
+    }
+  }
 
   private rejectPending(error: Error): void {
     for (const pending of this.pending.values()) {

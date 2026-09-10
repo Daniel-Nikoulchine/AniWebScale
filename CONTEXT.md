@@ -126,12 +126,11 @@ Timeout pro Shape). Die tatsächlich genutzte Variante meldet
 `RealEsrganPhaseStats.precision` (Overlay + E2E-Stats).
 
 **Frame-Job** — die Job-Orchestrierung (`src/core/realesrgan-frame-job.ts`)
-über dem Pacing-Scheduler. Sie besitzt zwei verschiedene „newest“-Fragen:
-den Publish-Gate (nur das neueste **eingereichte** Work published — für
-Buchhaltung) und `claimPresentation`, das monotone Wasserzeichen über das
-tatsächlich **Präsentierte** (für out-of-band Präsentation im Drain: ein
-älteres Später-Landean kosmetisch nie über ein neueres Ergebnis malen, ein
-älteres aber neuestes vollendetes wird trotzdem gezeigt). Slot-Bücher und
+über dem Pacing-Scheduler. Sie besitzt das Präsentations-Wasserzeichen
+`claimPresentation`, das monoton über das tatsächlich **Präsentierte** führt
+(für out-of-band Präsentation im Drain: ein älteres Später-Landean kosmetisch
+nie über ein neueres Ergebnis malen, ein älteres aber neuestes vollendetes
+wird trotzdem gezeigt) sowie die Delegation an den Scheduler. Slot-Bücher und
 Adapter-Backpressure bleiben bei ihren Besitzern (Pipeline-Staging, Client).
 
 **Tiling** — die Kachelplanung (`src/shared/realesrgan-tile-geometry.js`

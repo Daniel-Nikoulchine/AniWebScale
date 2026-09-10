@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["@webgpu/types", "node"],
+    "lib": ["es2022", "dom", "dom.iterable"]
+  },
+  "include": ["tests/bench/**/*.ts", "src/types.d.ts", "src/anime4k-modules.d.ts"],
+  "exclude": ["node_modules", "native/**/build", ".tmp"]
+}

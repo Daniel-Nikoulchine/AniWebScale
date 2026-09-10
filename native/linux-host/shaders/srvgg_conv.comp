@@ -1,5 +1,6 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_GOOGLE_include_directive : require
 // E4 phase 1a: naive direct 3x3 conv + bias + PReLU (correctness baseline).
 // One thread per (x, y); output channels sequential inside (register-light).
 // Phase 1b parallelizes oc + shared-memory tiling; THIS kernel gates THAT
@@ -28,6 +29,8 @@ layout (push_constant) uniform parameter
     int hasPrelu;
     int isFirst;
 } p;
+
+#include "srvgg_conv_epilogue.comp"
 
 void main()
 {
@@ -61,10 +64,8 @@ void main()
                 }
             }
         }
-        acc += w_data[p.bBase + oc];
-        // Exact ONNX PReLU: x >= 0 ? x : slope * x (conv17: hasPrelu = 0).
-        if (p.hasPrelu == 1 && acc < 0.0)
-            acc *= w_data[p.sBase + oc];
+        acc += SRVGG_CONV_BIAS(oc);
+        SRVGG_CONV_PRELU(acc, oc);
         out_data[oc * p.outStride + y * p.w + x] = acc;
     }
 }

@@ -1,19 +1,8 @@
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { REQUIRED_LAZY_CHUNKS } from './chunk-names.mjs';
 
 const MAX_LAZY_CHUNK_BYTES = 750 * 1024;
-const REQUIRED_LAZY_CHUNKS = [
-  'anime4k-common.js',
-  'anime4k-quality-m.js',
-  'anime4k-quality-vl.js',
-  'anime4k-quality-ul.js',
-  'model-cnn-soft-ul.js',
-  'model-denoise-cnn-x2-m.js',
-  'model-denoise-cnn-x2-ul.js',
-  'model-artcnn-x2.js',
-  'model-acnet-x2.js',
-  'model-arnet-x2.js',
-];
 
 const buildDirectories = process.argv.slice(2).length > 0
   ? process.argv.slice(2)

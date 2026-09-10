@@ -1,7 +1,6 @@
 import '../common-vars.css';
 import '../form-controls.css';
 import './popup.css';
-import { applySettings } from '../../utils/apply-settings';
 import { getSettings } from '../../utils/settings';
 import {
   describeSiteAccess,
@@ -13,7 +12,7 @@ import { renderEnhancementSelects, renderToggle, renderEnhancementToggles } from
 import { refreshModeUi } from '../mode-ui';
 import { themeManager } from '../theme-manager';
 import { localizeDocument, message, initI18n } from '../i18n';
-import { createSettingsController, syncRenderSettings } from '../settings-controller';
+import { collectRenderSettings, createSettingsController, syncRenderSettings } from '../settings-controller';
 
 async function initPopup(): Promise<void> {
   await initI18n();
@@ -150,28 +149,6 @@ async function initPopup(): Promise<void> {
   statistics.checked = settings.statsEnabled;
   frameGeneration.checked = settings.frameGenerationEnabled;
 
-  extensionEnabled.addEventListener('change', async () => {
-    const enabled = extensionEnabled.checked;
-    extensionEnabled.disabled = true;
-    status.textContent = enabled
-      ? message('enablingExtension', 'Enabling extension...')
-      : message('disablingExtension', 'Disabling extension...');
-    const result = await applySettings({ extensionEnabled: enabled }).catch(() => 'failed' as const);
-    extensionEnabled.disabled = false;
-    if (result === 'failed') {
-      extensionEnabled.checked = !enabled;
-      status.textContent = message('extensionStatusChangeFailed', 'Could not change extension status.');
-      return;
-    }
-    if (result === 'saved-not-applied') {
-      status.textContent = message('extensionStatusSavedNotApplied', 'Extension status saved, but could not be applied.');
-      return;
-    }
-    status.textContent = enabled
-      ? message('extensionEnabledStatus', 'Extension enabled.')
-      : message('extensionDisabledStatus', 'Extension disabled.');
-  });
-
   const updateModeUi = () => refreshModeUi({
     mode,
     quality,
@@ -207,12 +184,30 @@ async function initPopup(): Promise<void> {
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => { status.textContent = ''; }, 3000);
   };
+  // The extension toggle reports its own status ("Extension enabled/disabled.")
+  // instead of the generic settings message. Recorded on change so a render
+  // control change still shows the generic message.
+  let pendingToggleStatus: string | undefined;
+  extensionEnabled.addEventListener('change', () => {
+    pendingToggleStatus = extensionEnabled.checked
+      ? message('extensionEnabledStatus', 'Extension enabled.')
+      : message('extensionDisabledStatus', 'Extension disabled.');
+  });
   createSettingsController({
     controls: { mode, quality, backend, realesrganCap, statistics, frameGeneration },
+    additionalControls: [extensionEnabled],
+    collectSettings: () => ({
+      ...collectRenderSettings({ mode, quality, backend, realesrganCap, statistics, frameGeneration }),
+      extensionEnabled: extensionEnabled.checked,
+    }),
     showStatus,
+    appliedFor: () => {
+      const text = pendingToggleStatus;
+      pendingToggleStatus = undefined;
+      return text;
+    },
     messages: {
       saving: message('saving', 'Saving...'),
-      saved: message('settingsSavedApplied', 'Settings saved and applied.'),
       applied: message('settingsSavedApplied', 'Settings saved and applied.'),
       savedNotApplied: message('settingsSavedNotApplied', 'Settings saved, but could not be applied.'),
       failed: message('settingsSaveFailed', 'Could not save settings.'),

@@ -5,6 +5,22 @@ import {
   isEnhancementMode,
   isQualityTier,
 } from '../shared/presets';
+import {
+  NATIVE_POINTER_EVENT_TYPES,
+  isNativePointerEventPayload,
+  isNativePointerEventType,
+  clampNativePointerCoords,
+  type NativePointerEventType,
+  type NativePointerPayload,
+} from '../shared/native-pointer';
+
+export {
+  NATIVE_POINTER_EVENT_TYPES,
+  isNativePointerEventPayload,
+  isNativePointerEventType,
+  clampNativePointerCoords,
+};
+export type { NativePointerEventType, NativePointerPayload };
 
 /**
  * Wire protocol shared with the Windows Native Messaging host.
@@ -18,12 +34,10 @@ export const NATIVE_PROTOCOL_VERSION = 3 as const;
 
 export type NativeEnhancementMode = EnhancementMode;
 export type NativeQuality = QualityTier;
-type NativeSessionState =
-  | 'starting'
-  | 'capturing'
-  | 'stopping'
-  | 'stopped'
-  | 'failed';
+export const NATIVE_SESSION_STATES = ['starting', 'capturing', 'stopping', 'stopped', 'failed'] as const;
+export type NativeSessionState = (typeof NATIVE_SESSION_STATES)[number];
+
+const NATIVE_SESSION_STATE_SET: ReadonlySet<string> = new Set(NATIVE_SESSION_STATES);
 
 interface NativeRequestBase {
   protocolVersion: typeof NATIVE_PROTOCOL_VERSION;
@@ -90,63 +104,14 @@ export function isNativeMediaCommandName(value: unknown): value is NativeMediaCo
   return typeof value === 'string' && (NATIVE_MEDIA_COMMAND_NAMES as readonly string[]).includes(value);
 }
 
-export const NATIVE_POINTER_EVENT_TYPES = ['move', 'down', 'up', 'wheel'] as const;
-
-export type NativePointerEventType = (typeof NATIVE_POINTER_EVENT_TYPES)[number];
-
-export function isNativePointerEventType(value: unknown): value is NativePointerEventType {
-  return typeof value === 'string' && (NATIVE_POINTER_EVENT_TYPES as readonly string[]).includes(value);
-}
-
-/** The core fields a pointer payload must carry (all optional extras included). */
-export interface NativePointerPayload {
-  event: NativePointerEventType;
-  x: number;
-  y: number;
-  button?: number;
-  buttons?: number;
-  deltaX?: number;
-  deltaY?: number;
-  shiftKey?: boolean;
-  ctrlKey?: boolean;
-  altKey?: boolean;
-}
-
-/** Validate a native pointer payload's core fields (event, x, y in [0,1]). */
-export function isNativePointerEventPayload(value: unknown): value is NativePointerPayload {
-  if (!value || typeof value !== 'object') return false;
-  const payload = value as Record<string, unknown>;
-  return isNativePointerEventType(payload.event)
-    && typeof payload.x === 'number' && Number.isFinite(payload.x) && payload.x >= 0 && payload.x <= 1
-    && typeof payload.y === 'number' && Number.isFinite(payload.y) && payload.y >= 0 && payload.y <= 1;
-}
-
-/** Clamp normalized coordinates into [0,1] (defensive, used on the content side). */
-export function clampNativePointerCoords(x: number, y: number): { x: number; y: number } {
-  return {
-    x: Math.min(1, Math.max(0, Number.isFinite(x) ? x : 0)),
-    y: Math.min(1, Math.max(0, Number.isFinite(y) ? y : 0)),
-  };
-}
-
 interface NativeMediaCommandRequest extends NativeSessionRequestBase {
   type: 'mediaCommand';
   command: NativeMediaCommandName;
   value?: number;
 }
 
-interface NativePointerRequest extends NativeSessionRequestBase {
+interface NativePointerRequest extends NativeSessionRequestBase, NativePointerPayload {
   type: 'pointer';
-  event: 'move' | 'down' | 'up' | 'wheel';
-  x: number;
-  y: number;
-  button?: number;
-  buttons?: number;
-  deltaX?: number;
-  deltaY?: number;
-  shiftKey?: boolean;
-  ctrlKey?: boolean;
-  altKey?: boolean;
 }
 
 export type NativeRequest =
@@ -276,7 +241,7 @@ export function isNativeEvent(value: unknown): value is NativeEvent {
     case 'status':
       return hasRequestId && hasSessionId
         && typeof event.state === 'string'
-        && ['starting', 'capturing', 'stopping', 'stopped', 'failed'].includes(event.state)
+        && NATIVE_SESSION_STATE_SET.has(event.state)
         && (event.message === undefined || typeof event.message === 'string');
     case 'metrics':
       return hasSessionId
@@ -297,21 +262,10 @@ export function isNativeEvent(value: unknown): value is NativeEvent {
         && isNativeMediaCommandName(event.command)
         && (event.value === undefined || (typeof event.value === 'number' && Number.isFinite(event.value)));
     case 'pointer':
+      // Delegate the payload gate to the canonical pointer validator so both
+      // wire directions share one definition of a valid pointer.
       return hasSessionId && typeof event.requestId === 'string'
-        && isNativePointerEventType(event.event)
-        && typeof event.x === 'number' && Number.isFinite(event.x) && event.x >= 0 && event.x <= 1
-        && typeof event.y === 'number' && Number.isFinite(event.y) && event.y >= 0 && event.y <= 1
-        && (event.button === undefined
-          || (typeof event.button === 'number' && Number.isInteger(event.button) && event.button >= -1 && event.button <= 4))
-        && (event.buttons === undefined
-          || (typeof event.buttons === 'number' && Number.isInteger(event.buttons) && event.buttons >= 0))
-        && (event.deltaX === undefined
-          || (typeof event.deltaX === 'number' && Number.isFinite(event.deltaX)))
-        && (event.deltaY === undefined
-          || (typeof event.deltaY === 'number' && Number.isFinite(event.deltaY)))
-        && (event.shiftKey === undefined || typeof event.shiftKey === 'boolean')
-        && (event.ctrlKey === undefined || typeof event.ctrlKey === 'boolean')
-        && (event.altKey === undefined || typeof event.altKey === 'boolean');
+        && isNativePointerEventPayload(event);
     default:
       return false;
   }

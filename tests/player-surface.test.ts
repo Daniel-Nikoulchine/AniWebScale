@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   isPlausiblePlayerSurface,
+  playerAncestorPath,
   selectNativeCaptureSurfaceScope,
 } from '../src/shared/player-surface';
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('fullscreen player surface selection', () => {
   it('accepts a compact player with controls but rejects a whole page', () => {
@@ -25,4 +28,25 @@ describe('fullscreen player surface selection', () => {
       hasLocalFullscreenElement: false,
     })).toBe('player');
   });
+
+  it('walks ancestors from the root up to the fullscreen element', () => {
+    const body = {} as HTMLElement;
+    const documentElement = {} as HTMLElement;
+    vi.stubGlobal('document', { body, documentElement });
+    const fullscreen = { parentElement: body } as unknown as Element;
+    const player = { parentElement: fullscreen } as unknown as HTMLElement;
+    const root = { parentElement: player } as unknown as HTMLElement;
+
+    expect(playerAncestorPath(root, fullscreen)).toEqual([root, player, fullscreen]);
+  });
+
+  it('stops the ancestor walk at the body when there is no fullscreen element', () => {
+    const body = {} as HTMLElement;
+    const documentElement = {} as HTMLElement;
+    vi.stubGlobal('document', { body, documentElement });
+    const child = { parentElement: body } as unknown as HTMLElement;
+
+    expect(playerAncestorPath(child, null)).toEqual([child, body]);
+  });
 });
+

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { electFullscreenCandidate } from '../src/core/fullscreen-context';
+import { electFullscreenCandidate, fullscreenContext } from '../src/core/fullscreen-context';
 import type { FullscreenCandidate } from '../src/core/fullscreen-context';
 import {
   isVideoInFullscreenContext,
@@ -72,6 +72,7 @@ function installCrossOriginHosterFrame(): void {
 
 afterEach(() => {
   resetFullscreenApiTracking();
+  fullscreenContext.setCandidateSource(() => []);
   vi.unstubAllGlobals();
 });
 
@@ -125,5 +126,28 @@ describe('electFullscreenCandidate', () => {
     // enhanceable. Without the area guard it wins via !winner.
     const invisible = videoCandidate('video-1', { left: 0, top: 0, width: 0, height: 0 });
     expect(electFullscreenCandidate([invisible])).toBeNull();
+  });
+});
+
+describe('FullscreenContext election ownership', () => {
+  it('elects the preferred video through the registered candidate source', () => {
+    installCrossOriginHosterFrame();
+    const embedded = videoCandidate('video-1', { left: 0, top: 0, width: 870, height: 490 });
+    fullscreenContext.setCandidateSource(() => [embedded]);
+
+    expect(fullscreenContext.preferredVideo()).toBe(embedded.video);
+  });
+
+  it('returns null with no registered candidates', () => {
+    fullscreenContext.setCandidateSource(() => []);
+
+    expect(fullscreenContext.preferredVideo()).toBeNull();
+  });
+
+  it('derives the player signal for an embedded full-viewport video', () => {
+    installCrossOriginHosterFrame();
+    const embedded = videoCandidate('video-1', { left: 0, top: 0, width: 870, height: 490 });
+
+    expect(fullscreenContext.hasPlayerSignal(embedded.video)).toBe(true);
   });
 });

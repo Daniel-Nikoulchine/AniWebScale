@@ -23,6 +23,12 @@ export declare function singleTileMaxHeightForFrame(
   maxTileSize: number,
 ): number;
 
+export declare function defaultSingleTileMaxHeight(
+  width: number,
+  height: number,
+  maxTileSize: number,
+): number;
+
 export declare function tileAxis(size: number, maxTile: number, overlap: number): number[];
 
 export declare function defaultOverlapFor(maxTileSize: number): number;
@@ -44,6 +50,16 @@ export declare function stackTilesToBatch(
   tiles: Array<{ x: number; y: number; width: number; height: number }>,
 ): Float32Array;
 
+export declare function extractTilePlanar(
+  inputRgb: Float32Array,
+  sourceWidth: number,
+  sourceHeight: number,
+  x: number,
+  y: number,
+  tileWidth: number,
+  tileHeight: number,
+): Float32Array;
+
 export declare function splitBatchedOutput(
   batched: Float32Array,
   tiles: Array<{ x: number; y: number; width: number; height: number }>,
@@ -63,6 +79,60 @@ export declare function composeTilesToRgba8(
 ): Uint8Array;
 
 export declare function rewriteF16Bitcast(code: string): string;
+
+export declare const isLittleEndian: boolean;
+
+export declare function ensureByteToF32(): Float32Array;
+
+export declare function packedRgbaView(bytes: Uint8Array, length?: number): Uint32Array | null;
+
+export declare function packRgbaWord(r: number, g: number, b: number): number;
+
+export declare function installF16RewriteHook(gpu?: GPU): void;
+
+export declare function buildFreeDimensionOverrides(options: {
+  batchSize: number;
+  height: number;
+  width: number;
+  outHeight: number;
+  outWidth: number;
+}): {
+  batch_size: number;
+  height: number;
+  width: number;
+  out_batch_size: number;
+  out_height: number;
+  out_width: number;
+};
+
+export declare function downscaleRgba8Box(
+  rgba: Uint8Array,
+  srcWidth: number,
+  srcHeight: number,
+  dstWidth: number,
+  dstHeight: number,
+): Uint8Array;
+
+export declare function purgeModelSessions(modelUrl: string): void;
+
+export declare function getSession(
+  modelUrl: string,
+  modelUrlFp16: string | null,
+  inputBatch: number,
+  inputHeight: number,
+  inputWidth: number,
+  outputHeight: number,
+  outputWidth: number,
+  wantGpuBuffer?: boolean,
+): Promise<unknown>;
+
+export declare function runShapePinned(
+  session: unknown,
+  inputName: string,
+  tensor: unknown,
+  outputName: string,
+  rebuildSession: () => Promise<unknown>,
+): Promise<Record<string, unknown>>;
 
 export declare function handleInit(message: WorkerInitMessage): Promise<void>;
 

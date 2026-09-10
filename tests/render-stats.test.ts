@@ -4,7 +4,6 @@ import {
   PRESENT_CURRENT_FRAME,
   PRESENT_PREVIOUS_FRAME,
   PRESENT_INTERMEDIATE_FRAME,
-  presentationUniformFor,
   INTERPOLATION_UNIFORM_BINDING,
 } from '../src/core/presentation-protocol';
 
@@ -57,12 +56,6 @@ describe('presentation protocol', () => {
     expect([...PRESENT_CURRENT_FRAME]).toEqual([1, 0, 0, 0]);
     expect([...PRESENT_PREVIOUS_FRAME]).toEqual([0, 0, 0, 0]);
     expect([...PRESENT_INTERMEDIATE_FRAME]).toEqual([0.5, 0, 0, 0]);
-  });
-
-  it('presentationUniformFor resolves each mode', () => {
-    expect(presentationUniformFor('current')).toBe(PRESENT_CURRENT_FRAME);
-    expect(presentationUniformFor('previous')).toBe(PRESENT_PREVIOUS_FRAME);
-    expect(presentationUniformFor('intermediate')).toBe(PRESENT_INTERMEDIATE_FRAME);
   });
 
   it('documents the WGSL binding index the shader must match', () => {

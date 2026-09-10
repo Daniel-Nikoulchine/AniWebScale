@@ -1,18 +1,22 @@
 /**
  * Canonical RealESRGAN worker protocol (single source of truth).
  *
- * Plain JavaScript, zero imports: message shapes are shared with the
- * import-free inference worker by convention (it cannot import this file
- * for the Blob-URL load), while TypeScript consumers (worker client,
- * worker .d.ts mirror, tests) import the types from
- * realesrgan-worker-protocol.d.ts. Add a message field here first; the
- * worker's inline handling follows the same names.
+ * The message shapes are shared with the import-free inference worker by
+ * convention (it cannot import this file for the Blob-URL load), while
+ * TypeScript consumers (worker client, worker .d.ts mirror, tests) import the
+ * types from realesrgan-worker-protocol.d.ts. Add a message field here first;
+ * the worker's inline handling follows the same names.
  *
  * The builders below are the executable half of that contract: the client
  * and every test fake construct messages through them, so adding a field
  * touches this module plus the worker's inline reads — not a scatter of
  * hand-built literals.
+ *
+ * The reply error codes are DERIVED from the canonical taxonomy
+ * (realesrgan-error-codes.ts): the worker inlines the same strings and a
+ * drift test pins them.
  */
+import { REALESRGAN_ERROR_CODES } from './realesrgan-error-codes';
 
 /**
  * Reply guard: true for worker init/infer replies (ok or error shaped).
@@ -24,14 +28,15 @@ export function isWorkerReply(value) {
 }
 
 /**
- * Canonical error codes on `{ ok: false }` infer replies. The worker
- * inlines these literals (it cannot import this file for the Blob-URL
- * load); the client classifies per code — never by parsing error prose —
- * and the Runner-Guard's transient/permanent policy rides the same codes.
+ * Canonical error codes on `{ ok: false }` infer replies, derived from
+ * REALESRGAN_ERROR_CODES. The worker inlines these literals (it cannot import
+ * this file for the Blob-URL load); the client classifies per code — never by
+ * parsing error prose — and the Runner-Guard's transient/permanent policy
+ * rides the same codes.
  */
 export const WORKER_REPLY_ERROR_CODES = {
-  TIMEOUT: 'worker-timeout',
-  FAILED: 'worker-failed',
+  TIMEOUT: REALESRGAN_ERROR_CODES.WORKER_TIMEOUT,
+  FAILED: REALESRGAN_ERROR_CODES.WORKER_FAILED,
 };
 
 /**

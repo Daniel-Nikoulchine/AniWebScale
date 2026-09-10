@@ -1,16 +1,23 @@
 import '../common-vars.css';
 import '../form-controls.css';
 import './options.css';
-import type { EnhancementMode, QualityTier, RenderBackend } from '../../types';
 import { applySettings } from '../../utils/apply-settings';
 import { getSettings, DEFAULT_SETTINGS } from '../../utils/settings';
+import {
+  DEFAULT_THEME,
+  DEFAULT_UI_LANGUAGE,
+  isThemeMode,
+  readTheme,
+  readUiLanguage,
+  readVerboseLogging,
+} from '../../utils/local-settings';
 import { themeManager, type ThemeMode } from '../theme-manager';
 import { renderEnhancementSelects, renderEnhancementToggles, renderToggle } from '../enhancement-controls';
 import { refreshModeUi } from '../mode-ui';
 import { createSettingsController, syncRenderSettings, type SettingsController } from '../settings-controller';
 import { containsRenderSettingChange } from '../../utils/settings-change';
 
-import { localizeDocument, message, initI18n, setUiLanguage, getUiLanguage, type UiLanguage } from '../i18n';
+import { localizeDocument, relocalize, message, initI18n, setUiLanguage, getUiLanguage, type UiLanguage } from '../i18n';
 import { createPermissionController } from './permissions';
 import { renderSystemStatus, runWebGpuTestRender, copyText, setBadge, type CapabilityStatus } from './diagnostics';
 import { buildDiagnosticsText } from './diagnostics-info';
@@ -63,12 +70,10 @@ async function initOptions(): Promise<void> {
   const permissionController = createPermissionController(showStatus);
   const { renderWebsitePermissions, renderNativePermissions } = permissionController;
 
-  const storedTheme = await chrome.storage.local.get(['theme', 'verboseLogging']);
-  const initialTheme: ThemeMode = ['light', 'dark', 'auto'].includes(storedTheme.theme)
-    ? storedTheme.theme as ThemeMode
-    : 'auto';
+  const storedLocal = await chrome.storage.local.get(['theme', 'verboseLogging', 'uiLanguage']);
+  const initialTheme: ThemeMode = readTheme(storedLocal);
   themeManager.setTheme(initialTheme);
-  verboseLogging.checked = storedTheme.verboseLogging === true;
+  verboseLogging.checked = readVerboseLogging(storedLocal);
   version.textContent = chrome.runtime.getManifest().version;
   const settings = await getSettings();
   mode.value = settings.mode;
@@ -82,15 +87,14 @@ async function initOptions(): Promise<void> {
 
   uiLanguage.addEventListener('change', () => {
     void setUiLanguage(uiLanguage.value as UiLanguage).then(() => {
-      // The options surface composes most of its text at render time, so a
-      // reload picks up the new catalog consistently across every part.
-      window.location.reload();
+      // The catalog changed in memory: re-apply it to the live DOM instead of
+      // rebuilding the page.
+      refreshLocalizedContent();
     });
   });
 
   const refreshThemeUi = () => {
     const effectiveTheme = themeManager.getEffectiveTheme();
-    document.documentElement.dataset.theme = effectiveTheme;
     document.querySelector('meta[name="theme-color"]')?.setAttribute(
       'content',
       effectiveTheme === 'dark' ? '#20263a' : '#fffaf3',
@@ -146,7 +150,6 @@ async function initOptions(): Promise<void> {
     showStatus,
     messages: {
       saving: message('saving', 'Saving...'),
-      saved: message('settingsSaved', 'Settings saved.'),
       applied: message('settingsSaved', 'Settings saved.'),
       savedNotApplied: message('optionsSavedNotApplied', 'Settings saved, but could not be applied. Reload the video tab.'),
       failed: message('settingsSaveFailed', 'Could not save settings.'),
@@ -158,6 +161,18 @@ async function initOptions(): Promise<void> {
     'Frame generation increases GPU memory use and processing load.',
   );
   updateModeUi();
+
+  const refreshLocalizedContent = (): void => {
+    relocalize();
+    compatibilityHint.dataset.message = message(
+      'frameGenerationLoad',
+      'Frame generation increases GPU memory use and processing load.',
+    );
+    refreshThemeUi();
+    updateModeUi();
+    void renderWebsitePermissions();
+    void renderNativePermissions();
+  };
 
   theme.addEventListener('change', () => {
     themeManager.setTheme(theme.value as ThemeMode);
@@ -176,11 +191,10 @@ async function initOptions(): Promise<void> {
     const renderChanged = containsRenderSettingChange(changes as Record<string, unknown>);
     if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, statistics, frameGeneration }, { verboseLogging })) updateModeUi();
     else if (renderChanged) updateModeUi();
-    if (typeof changes.theme?.newValue === 'string'
-      && ['light', 'dark', 'auto'].includes(changes.theme.newValue)
+    if (isThemeMode(changes.theme?.newValue)
       && theme.value !== changes.theme.newValue) {
-      theme.value = changes.theme.newValue as ThemeMode;
-      themeManager.setTheme(theme.value as ThemeMode);
+      theme.value = changes.theme.newValue;
+      themeManager.setTheme(changes.theme.newValue);
       refreshThemeUi();
     }
     if ('anime4kNativeConsentByOrigin' in changes) {
@@ -198,62 +212,55 @@ async function initOptions(): Promise<void> {
 
   // ── Reset to defaults ──────────────────────────────────────────────────
 
+  /** Re-read persisted state and drive every control from it. */
+  async function refreshFromStorage(): Promise<void> {
+    const [current, storedLocal] = await Promise.all([
+      getSettings().catch(() => null),
+      chrome.storage.local.get(['theme', 'verboseLogging', 'uiLanguage']).catch(() => null),
+    ]);
+    if (current) {
+      const changes: Record<string, chrome.storage.StorageChange> = {
+        extensionEnabled: { newValue: current.extensionEnabled },
+        mode: { newValue: current.mode },
+        quality: { newValue: current.quality },
+        backend: { newValue: current.backend },
+        realesrganCapHeight: { newValue: current.realesrganCapHeight },
+        statsEnabled: { newValue: current.statsEnabled },
+        autoFullscreenEnabled: { newValue: current.autoFullscreenEnabled },
+        frameGenerationEnabled: { newValue: current.frameGenerationEnabled },
+      };
+      syncRenderSettings(
+        changes,
+        { mode, quality, backend, realesrganCap, statistics, frameGeneration },
+        { verboseLogging },
+      );
+    }
+    if (storedLocal) {
+      verboseLogging.checked = readVerboseLogging(storedLocal);
+      const currentTheme = readTheme(storedLocal);
+      theme.value = currentTheme;
+      themeManager.setTheme(currentTheme);
+      uiLanguage.value = readUiLanguage(storedLocal);
+    }
+    refreshLocalizedContent();
+  }
+
   resetSettings.addEventListener('click', async () => {
     if (!window.confirm(message('resetConfirm', 'Reset all settings to defaults?'))) return;
-    const update = {
-      extensionEnabled: DEFAULT_SETTINGS.extensionEnabled,
-      mode: DEFAULT_SETTINGS.mode as EnhancementMode,
-      quality: DEFAULT_SETTINGS.quality as QualityTier,
-      output: 'auto' as const,
-      backend: DEFAULT_SETTINGS.backend as RenderBackend,
-      statsEnabled: DEFAULT_SETTINGS.statsEnabled,
-      autoFullscreenEnabled: DEFAULT_SETTINGS.autoFullscreenEnabled,
-      frameGenerationEnabled: DEFAULT_SETTINGS.frameGenerationEnabled,
-      realesrganCapHeight: DEFAULT_SETTINGS.realesrganCapHeight,
-    };
-    const result = await applySettings(update, { local: { verboseLogging: false } })
+    const result = await applySettings(DEFAULT_SETTINGS, { local: { verboseLogging: false } })
       .catch(() => 'failed' as const);
     if (result === 'failed') {
       // Keep the controls in sync with storage instead of showing defaults
       // the save never persisted.
-      const current = await getSettings().catch(() => null);
-      if (current) {
-        mode.value = current.mode;
-        quality.value = current.quality;
-        backend.value = current.backend;
-        if (realesrganCap) realesrganCap.value = String(current.realesrganCapHeight);
-        statistics.checked = current.statsEnabled;
-        frameGeneration.checked = current.frameGenerationEnabled;
-      }
-      const stored = await chrome.storage.local.get(['verboseLogging']).catch(() => null);
-      verboseLogging.checked = stored?.verboseLogging === true;
-      const storedTheme = await chrome.storage.local.get(['theme']).catch(() => null);
-      const currentTheme = storedTheme && ['light', 'dark', 'auto'].includes(storedTheme.theme)
-        ? storedTheme.theme as ThemeMode
-        : 'auto';
-      theme.value = currentTheme;
-      themeManager.setTheme(currentTheme);
-      refreshThemeUi();
-      uiLanguage.value = getUiLanguage();
-      updateModeUi();
+      await refreshFromStorage();
       showStatus(message('settingsSaveFailed', 'Could not save settings.'));
       return;
     }
-    mode.value = DEFAULT_SETTINGS.mode;
-    quality.value = DEFAULT_SETTINGS.quality;
-    backend.value = DEFAULT_SETTINGS.backend;
-    if (realesrganCap) realesrganCap.value = String(DEFAULT_SETTINGS.realesrganCapHeight);
-    statistics.checked = DEFAULT_SETTINGS.statsEnabled;
-    frameGeneration.checked = DEFAULT_SETTINGS.frameGenerationEnabled;
-    verboseLogging.checked = false;
     // The confirmation promises a full reset: theme and language are
     // settings too, not just the render keys sent to applySettings.
-    themeManager.setTheme('auto');
-    theme.value = 'auto';
-    refreshThemeUi();
-    await setUiLanguage('auto').catch(() => undefined);
-    uiLanguage.value = 'auto';
-    updateModeUi();
+    themeManager.setTheme(DEFAULT_THEME);
+    await setUiLanguage(DEFAULT_UI_LANGUAGE).catch(() => undefined);
+    await refreshFromStorage();
     if (result === 'saved-not-applied') {
       showStatus(message('optionsSavedNotApplied', 'Settings saved, but could not be applied. Reload the video tab.'));
     } else showStatus(message('settingsReset', 'Settings reset to defaults.'));

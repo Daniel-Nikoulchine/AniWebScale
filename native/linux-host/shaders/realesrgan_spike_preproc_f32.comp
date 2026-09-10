@@ -1,39 +1,9 @@
 #version 450
+#extension GL_GOOGLE_include_directive: require
 
 // GPU preproc for the RealESRGAN fp32-storage path: RGBA8 interleaved ->
 // planar float32 RGB [0,1]. Byte-for-byte the fp16 shader's logic with a
 // 32-bit destination channel type; ncnn's extractor input blob for
 // use_fp16_storage=false is elemsize 4, so the write type must match.
-layout (constant_id = 0) const int bgr = 0;
-
-layout (binding = 0) readonly buffer bottom_blob { uint bottom_blob_data[]; };
-layout (binding = 1) writeonly buffer top_blob { float top_blob_data[]; };
-
-layout (push_constant) uniform parameter
-{
-    int w;
-    int h;
-    int cstep;
-} p;
-
-void main()
-{
-    const int gx = int(gl_GlobalInvocationID.x);
-    const int gy = int(gl_GlobalInvocationID.y);
-    if (gx >= p.w || gy >= p.h)
-        return;
-    const int idx = gy * p.w + gx;
-    const uint rgba = bottom_blob_data[idx];
-    // rgba is little-endian: R in bits 0..7, G 8..15, B 16..23, A 24..31
-    uint r_u = (rgba >> 0)  & 0xFFu;
-    uint g_u = (rgba >> 8)  & 0xFFu;
-    uint b_u = (rgba >> 16) & 0xFFu;
-    if (bgr == 1)
-    {
-        uint t = r_u; r_u = b_u; b_u = t;
-    }
-    const float scale = 1.0f / 255.0f;
-    top_blob_data[0 * p.cstep + idx] = float(r_u) * scale;
-    top_blob_data[1 * p.cstep + idx] = float(g_u) * scale;
-    top_blob_data[2 * p.cstep + idx] = float(b_u) * scale;
-}
+// Shared math lives in realesrgan_spike_preproc_body.comp.
+#include "realesrgan_spike_preproc_body.comp"

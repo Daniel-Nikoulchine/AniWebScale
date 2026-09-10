@@ -40,8 +40,8 @@ import {
 const workspace = path.resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const sourceDir = path.join(workspace, 'dist-firefox');
 const clipPath = path.join(workspace, 'tests/fixtures/one_piece_clip.mp4');
-const PORT = 4188;
-const ORIGIN = `http://127.0.0.1:${PORT}`;
+// Ephemeral loopback port; the content bridge accepts any 127.0.0.1 origin.
+let ORIGIN = '';
 const firefoxBinary = process.env.E2E_FIREFOX_BINARY;
 const firefoxHeadless = process.env.E2E_FIREFOX_HEADLESS === '1';
 const collectSeconds = Number(process.env.E2E_REALESRGAN_SECONDS || 40);
@@ -129,7 +129,9 @@ const server = createServer((request, response) => {
   response.writeHead(404); response.end('not found');
 });
 
-await new Promise(resolve => server.listen(PORT, '127.0.0.1', resolve));
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const { port: PORT } = server.address();
+ORIGIN = `http://127.0.0.1:${PORT}`;
 console.log(`clip server at ${ORIGIN}/clip.html`);
 
 // --- Workspace pre-flight: force the kiosk to spawn on TARGET_WORKSPACE (HDMI) ---
@@ -352,7 +354,14 @@ if (isSandboxed) {
   console.warn(`auto-click failed: ${error.message}`);
 }
 // Give the pipeline time to produce inference replies after fullscreen.
-await new Promise(resolve => setTimeout(resolve, Math.max(15, collectSeconds - clickDelay) * 1000));
+// Collect until the bounded window closes, but bail early on a fatal
+// RealESRGAN error code instead of always sleeping the full window.
+const collectDeadline = Date.now() + Math.max(15, collectSeconds - clickDelay) * 1000;
+const fatalDuringCollect = /\[RealESRGAN:(?:worker-failed|worker-spawn-failed|worker-init-timeout|session-create-failed)\]/;
+while (Date.now() < collectDeadline) {
+  if (fatalDuringCollect.test(consoleLines.join('\n'))) break;
+  await new Promise(resolve => setTimeout(resolve, 500));
+}
 
 // --- Evaluate ----------------------------------------------------------------
 const lines = consoleLines.join('\n');

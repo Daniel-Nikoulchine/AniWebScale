@@ -13,8 +13,9 @@ import path from 'node:path';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 
-const PORT = 4189;
-const ORIGIN = `http://127.0.0.1:${PORT}`;
+// Ephemeral loopback port (avoids Firefox's blocked-port list and stale
+// listeners from a previous run).
+let ORIGIN = '';
 
 const server = createServer((request, response) => {
   const url = new URL(request.url || '/', ORIGIN);
@@ -40,7 +41,9 @@ const server = createServer((request, response) => {
   response.writeHead(404); response.end();
 });
 
-await new Promise(resolve => server.listen(PORT, '127.0.0.1', resolve));
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const { port: PORT } = server.address();
+ORIGIN = `http://127.0.0.1:${PORT}`;
 console.log(`fetch test server at ${ORIGIN}`);
 
 // Minimal extension: content script POSTs to /echo, logs result, sets title.
@@ -96,25 +99,32 @@ const runner = await webExt.run({
   verbose: false,
 });
 
-await new Promise(resolve => setTimeout(resolve, 12000));
+// Poll the tab title beacon instead of sleeping a fixed 12s: return as soon
+// as the content script reports, bounded by a hard timeout.
+const deadline = Date.now() + 45_000;
+let titles = [];
 try {
-  const desktopRunner = runner.extensionRunners?.find(c => c.getName?.() === 'Firefox Desktop');
-  const remote = desktopRunner?.remoteFirefox;
-  if (remote) {
-    // The content script sets document.title as the beacon. Read all tabs'
-    // titles through the remote debugging client's tab list.
-    const root = await remote.client.request({ to: 'root', type: 'listTabs' }).catch(error => ({ error: error.message }));
-    const tabList = root?.tabs ?? [];
-    const titles = [];
-    for (const tabActor of tabList.slice(0, 6)) {
-      try {
-        const tab = await remote.client.request({ to: tabActor.actor, type: 'getTarget' }).catch(() => null);
-        titles.push(tab?.title ?? tabActor.title ?? '?');
-      } catch { titles.push('?'); }
+  while (Date.now() < deadline) {
+    const desktopRunner = runner.extensionRunners?.find(c => c.getName?.() === 'Firefox Desktop');
+    const remote = desktopRunner?.remoteFirefox;
+    if (remote) {
+      // The content script sets document.title as the beacon. Read all tabs'
+      // titles through the remote debugging client's tab list.
+      const root = await remote.client.request({ to: 'root', type: 'listTabs' }).catch(error => ({ error: error.message }));
+      const tabList = root?.tabs ?? [];
+      titles = [];
+      for (const tabActor of tabList.slice(0, 6)) {
+        try {
+          const tab = await remote.client.request({ to: tabActor.actor, type: 'getTarget' }).catch(() => null);
+          titles.push(tab?.title ?? tabActor.title ?? '?');
+        } catch { titles.push('?'); }
+      }
+      if (titles.some(title => title.includes('FETCHTEST-RESULT'))) break;
     }
-    console.log('[fetchtest] TITLES:', JSON.stringify(titles));
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
-  desktopRunner?.remoteFirefox?.disconnect?.();
+  console.log('[fetchtest] TITLES:', JSON.stringify(titles));
+  runner.extensionRunners?.find(c => c.getName?.() === 'Firefox Desktop')?.remoteFirefox?.disconnect?.();
   await runner.exit().catch(() => {});
 } finally {
   server.close();

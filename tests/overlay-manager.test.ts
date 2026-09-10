@@ -11,7 +11,6 @@ function bareOverlay(): any {
   overlay.destroyed = false;
   overlay.positionUpdateFrame = null;
   overlay.setStats = vi.fn();
-  overlay.setWarning = vi.fn();
   overlay.attachGlobalListeners = vi.fn();
   overlay.detachGlobalListeners = vi.fn();
   return overlay;

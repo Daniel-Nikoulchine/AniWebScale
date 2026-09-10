@@ -937,5 +937,44 @@
   },
   "realesrganCap360": {
     "message": "360p · Notfall (~30 fps)"
+  },
+  "grantTitle": {
+    "message": "Diesen Videoplayer aktivieren"
+  },
+  "grantLeadBefore": {
+    "message": "Diese Website bindet ihren Videoplayer von"
+  },
+  "grantLeadAfter": {
+    "message": " ein. Erteile AniWebScale Zugriff auf diesen Player, damit das Video im Vollbild verbessert werden kann."
+  },
+  "grantAction": {
+    "message": "Zugriff erlauben"
+  },
+  "grantInvalid": {
+    "message": "Diese Anfrage ist ungültig. Schließe diesen Tab und versuche es erneut."
+  },
+  "grantAlreadyGranted": {
+    "message": "Zugriff bereits erteilt. Wird auf den geöffneten Tab angewendet..."
+  },
+  "grantApplying": {
+    "message": "Zugriff erteilt. Wird auf den geöffneten Tab angewendet..."
+  },
+  "grantDonePlay": {
+    "message": "Fertig. Wechsle zurück zu deinem Video und starte die Wiedergabe."
+  },
+  "grantDoneFullscreen": {
+    "message": "Fertig. Wechsle zurück zu deinem Video und wechsle in den Vollbildmodus."
+  },
+  "grantRefused": {
+    "message": "Der Browser hat die Anfrage abgelehnt. Erteile den Zugriff stattdessen im Erweiterungs-Popup."
+  },
+  "grantDenied": {
+    "message": "Zugriff wurde verweigert. Du kannst ihn später im Erweiterungs-Popup erteilen."
+  },
+  "grantFine": {
+    "message": "Die Freigabe gilt nur für diese Player-Domain. Du kannst sie jederzeit im Erweiterungs-Popup widerrufen."
+  },
+  "nativeConsentPrompt": {
+    "message": "AniWebScale erlauben, diesen Browser-Tab mit dem lokalen Windows-Renderer für {origin} aufzuzeichnen?\n\nDRM-Wiedergabe erfordert, dass die Hardwarebeschleunigung des Browsers deaktiviert und der Browser neu gestartet wird. Andernfalls kann geschütztes Video schwarz erscheinen. Der Renderer empfängt nur zusammengesetzte Pixel und umgeht DRM nicht."
   }
 }

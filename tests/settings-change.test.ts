@@ -7,17 +7,7 @@ import {
 } from '../src/utils/settings-change';
 
 describe('settings storage change routing', () => {
-  it.each([
-    'extensionEnabled',
-    'mode',
-    'quality',
-    'output',
-    'backend',
-    'statsEnabled',
-    'autoFullscreenEnabled',
-    'frameGenerationEnabled',
-    'selectedModeId',
-  ])('applies relevant local key %s', key => {
+  it.each([...RENDER_SETTING_KEYS])('applies relevant local key %s', key => {
     expect(shouldApplySettingsChange({ [key]: { oldValue: null, newValue: true } }, 'local')).toBe(true);
     expect(isRenderSettingKey(key)).toBe(true);
     expect(RENDER_SETTING_KEYS.has(key)).toBe(true);
@@ -30,6 +20,8 @@ describe('settings storage change routing', () => {
     'theme',
     '_configVersion',
     'verboseLogging',
+    // Read-only legacy key: it must not re-trigger a render apply.
+    'selectedModeId',
   ])('ignores internal local key %s', key => {
     expect(shouldApplySettingsChange({ [key]: { oldValue: null, newValue: true } }, 'local')).toBe(false);
     expect(isRenderSettingKey(key)).toBe(false);

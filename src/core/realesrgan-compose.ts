@@ -5,7 +5,7 @@
  * results, this composer blends them into the output texture with a single
  * compute dispatch instead of the CPU's per-pixel feathering loop. Each
  * output pixel walks the tile descriptors and reproduces the exact
- * separable feathering math of `composeTiledResult` (integer ramps,
+ * separable feathering math of `composeTileResults` (integer ramps,
  * weight = min(fx, fy), weighted average), so the GPU result matches the
  * CPU composer within float32 rounding.
  *

@@ -4,6 +4,8 @@ import type { NativeSessionRecord } from '../src/background-types';
 import { NATIVE_SESSION_VERSION } from '../src/shared/session-recovery';
 import { NATIVE_PROTOCOL_VERSION } from '../src/native/protocol';
 import type { NativeEvent, NativeConfiguration } from '../src/native/protocol';
+import type { NativeMessagingClient } from '../src/native/client';
+import type { NativeSessionTransport, NativeEventHandler } from '../src/background/native-session-transport';
 import { createAsyncSerializer } from '../src/shared/async-serializer';
 
 // ---------------------------------------------------------------------------
@@ -40,7 +42,10 @@ function installChromeStorageMock() {
       query: async () => [],
       sendMessage: async () => undefined,
     },
-    windows: { get: async () => { throw new Error('Not stubbed.'); } },
+    windows: {
+      get: async () => { throw new Error('Not stubbed.'); },
+      getAll: async () => [],
+    },
   } as unknown as typeof chrome);
   return { get, set, remove, store };
 }
@@ -115,6 +120,7 @@ interface MachineOptions {
   requestOriginConsent?: (tabId: number, origin: string) => Promise<boolean>;
   isExtensionEnabled?: () => Promise<boolean>;
   serialized?: <T>(operation: () => Promise<T>) => Promise<T>;
+  createTransport?: (onEvent: NativeEventHandler) => NativeSessionTransport;
 }
 
 const noopSendToFrame: SendToFrame = async () => undefined as never;
@@ -126,6 +132,7 @@ function createMachine(options: MachineOptions = {}): NativeSession {
     requestOriginConsent: options.requestOriginConsent ?? (async () => true),
     isExtensionEnabled: options.isExtensionEnabled ?? (async () => true),
     serialized,
+    ...(options.createTransport ? { createTransport: options.createTransport } : {}),
   });
 }
 
@@ -172,9 +179,7 @@ describe('NativeSession state machine', () => {
       const result = await machine.startNativeFallback({
         type: 'NATIVE_FALLBACK_REQUEST',
         videoId: 'video-1',
-        reason: 'native-selected',
         configuration: config(),
-        output: 'auto',
         videoRect: { x: 0, y: 0, width: 640, height: 360, devicePixelRatio: 1 },
       }, sender());
 
@@ -218,7 +223,16 @@ describe('NativeSession state machine', () => {
 
     it('forwards pointer events only for the active session', async () => {
       const sent: unknown[] = [];
+      const fakeClient = {} as unknown as NativeMessagingClient;
       const machine = createMachine({
+        // Use the transport injection instead of patching bridge.currentClient.
+        createTransport: () => ({
+          connect: async () => fakeClient,
+          disconnect: () => undefined,
+          get currentClient() {
+            return fakeClient;
+          },
+        }),
         sendToFrame: async (_tabId: number, _frameId: number, message: unknown) => {
           sent.push(message);
           return undefined as never;
@@ -227,23 +241,13 @@ describe('NativeSession state machine', () => {
       await machine.store.persistSession(sessionRecord({ frameId: 2 }));
 
       // Wrong session: dropped.
-      const staleClient = {} as unknown as Parameters<typeof machine.routeNativeEvent>[1];
-      await machine.routeNativeEvent(pointerEvent('session-other'), staleClient);
+      await machine.routeNativeEvent(pointerEvent('session-other'), fakeClient);
       expect(sent).toHaveLength(0);
 
       // Correct session: forwarded to source frame + top frame.
-      // The bridge has no current client; routeNativeEvent will drop events
-      // that do not match, so we must assert the sendToFrame path directly.
-      // Use the real bridge currentClient by connecting nothing: it's null,
-      // so the guard drops. Instead, test the session-scoping via a fake
-      // currentClient assignment.
-      const client = machine.bridge.currentClient;
-      // Override the bridge current client to a non-null object.
-      Object.defineProperty(machine.bridge, 'currentClient', { value: {} });
-      await machine.routeNativeEvent(pointerEvent('session-1'), machine.bridge.currentClient ?? ({} as never));
+      await machine.routeNativeEvent(pointerEvent('session-1'), fakeClient);
       expect(sent.length).toBe(2);
-      expect(sent[0]).toMatchObject({ type: 'NATIVE_POINTER_EVENT', sessionId: 'session-1' });
-      void client;
+      expect(sent[0]).toMatchObject({ type: 'NATIVE_POINTER_EVENT', event: 'move', x: 0.5, y: 0.5 });
     });
   });
 
@@ -296,6 +300,97 @@ describe('NativeSession state machine', () => {
         true,
         false,
       );
+    });
+  });
+
+  describe('injected transport', () => {
+    it('starts a fallback through the injected transport connect', async () => {
+      const connect = vi.fn(async () => ({
+        connected: true,
+        request: async () => ({ type: 'status', sessionId: 'session-1', state: 'capturing' }),
+        post: () => undefined,
+        disconnect: () => undefined,
+      } as unknown as NativeMessagingClient));
+      const transport: NativeSessionTransport = {
+        connect,
+        disconnect: () => undefined,
+        get currentClient() {
+          return null;
+        },
+      };
+      const createTransport = vi.fn(() => transport);
+      const machine = createMachine({
+        createTransport,
+        sendToFrame: async (_tabId, _frameId, message) => {
+          const type = (message as { type?: string }).type;
+          if (type === 'NATIVE_PREPARE_FULLSCREEN') {
+            return {
+              ok: true,
+              intrinsicWidth: 1920,
+              intrinsicHeight: 1080,
+              targetWidth: 1920,
+              targetHeight: 1080,
+              originalTitle: 'Title',
+            } as never;
+          }
+          if (type === 'NATIVE_MEASURE_FULLSCREEN') {
+            return {
+              ok: true,
+              videoRect: { x: 0, y: 0, width: 1920, height: 1080, devicePixelRatio: 1 },
+              innerWidth: 1920,
+              innerHeight: 1080,
+              devicePixelRatio: 1,
+            } as never;
+          }
+          return undefined as never;
+        },
+      });
+      chrome.tabs.get = async () => ({ windowId: 10, url: 'https://example.com/watch/1' } as chrome.tabs.Tab);
+      await machine.store.persistActiveEnhancement({ tabId: 1, frameId: 0, videoId: 'video-1' });
+
+      await machine.startNativeFallback({
+        type: 'NATIVE_FALLBACK_REQUEST',
+        videoId: 'video-1',
+        configuration: config(),
+        videoRect: { x: 0, y: 0, width: 640, height: 360, devicePixelRatio: 1 },
+      }, sender());
+
+      expect(createTransport).toHaveBeenCalledTimes(1);
+      expect(connect).toHaveBeenCalled();
+    });
+
+    it('posts playback heartbeats through the injected client with a typed request id', async () => {
+      const posted: Array<Record<string, unknown>> = [];
+      const fakeClient = {
+        connected: true,
+        request: async () => ({ type: 'status' }),
+        post: (message: unknown) => { posted.push(message as Record<string, unknown>); },
+        disconnect: () => undefined,
+      } as unknown as NativeMessagingClient;
+      const connect = vi.fn(async () => fakeClient);
+      const machine = createMachine({
+        createTransport: () => ({
+          connect,
+          disconnect: () => undefined,
+          get currentClient() {
+            return fakeClient;
+          },
+        }),
+      });
+      await machine.store.persistSession(sessionRecord());
+
+      await machine.sendPlaybackState('session-1', true, 12.5);
+
+      expect(connect).toHaveBeenCalled();
+      expect(posted).toHaveLength(1);
+      expect(posted[0]).toMatchObject({
+        type: 'status',
+        sessionId: 'session-1',
+        playbackActive: true,
+        mediaTime: 12.5,
+      });
+      // No `playback-` prefix: the reply is identified by the tracked request id.
+      expect(String(posted[0]!.requestId).startsWith('playback-')).toBe(false);
     });
   });
 

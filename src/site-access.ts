@@ -1,4 +1,5 @@
 import { parseStatusResponse, siteAccessSyncMessage } from './shared/runtime-messages';
+import { parseHttpOrigin } from './shared/native-session-messages';
 import { SiteAccessRegistration } from './site-access-registration';
 export { SiteAccessRegistration } from './site-access-registration';
 
@@ -7,21 +8,18 @@ function isHttpMatchPattern(pattern: string): boolean {
 }
 
 /**
- * Reduce a URL to the origin pattern used for site-access grants. The pattern
- * is always portless: Firefox rejects port numbers in match patterns
+ * Reduce a URL to the origin pattern used for site-access grants. Origin
+ * validation goes through the shared `parseHttpOrigin` parser; the pattern is
+ * then always portless: Firefox rejects port numbers in match patterns
  * (MDN: match patterns, "Port numbers"), which would make every permissions
  * call for ported origins throw, while Chrome reads a portless host as
  * matching any port.
  */
 export function sitePatternForUrl(input: string | undefined): string | null {
-  if (!input) return null;
-  try {
-    const url = new URL(input);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-    return `${url.protocol}//${url.hostname}/*`;
-  } catch {
-    return null;
-  }
+  const origin = parseHttpOrigin(input);
+  if (!origin) return null;
+  const url = new URL(origin);
+  return `${url.protocol}//${url.hostname}/*`;
 }
 
 /** Broad wildcard grants whose host is a bare `*`, covering every site. */
@@ -70,8 +68,10 @@ export async function describeSiteAccess(input: string | undefined): Promise<Sit
   if (!pattern) return null;
   const granted = await getGrantedSitePatterns();
   const covering = granted.filter(isBroadSitePattern);
+  // `pattern` comes from sitePatternForUrl and can never itself be broad, so
+  // only a covering wildcard grant classifies as 'broad'.
   return {
-    access: isBroadSitePattern(pattern) || covering.length > 0 ? 'broad'
+    access: covering.length > 0 ? 'broad'
       : granted.includes(pattern) ? 'own' : 'none',
     covering,
   };
@@ -150,12 +150,6 @@ export async function grantSiteAccess(
 
   const mainPattern = sitePatternForUrl(tab.url);
   if (!mainPattern) return 'denied';
-
-  // Blanket grant already covers everything; just sync and inject.
-  if (isBroadSitePattern(mainPattern)) {
-    await synchronizeSiteAccess();
-    return await injectSiteScripts(tab.id) ? 'injected' : 'reload-required';
-  }
 
   // Collect all origins into one request: the main site plus any cross-origin
   // player frames visible in the tab. Use pre-collected patterns when provided

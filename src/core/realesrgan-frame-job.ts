@@ -4,7 +4,6 @@ export interface RealEsrganFrameJob<TCapture, TResult> {
   frame: number;
   capture: () => Promise<TCapture>;
   infer: (capture: TCapture) => Promise<TResult>;
-  publish: (result: TResult) => void;
 }
 
 /**
@@ -15,33 +14,30 @@ export interface RealEsrganFrameJob<TCapture, TResult> {
  * module owns the orchestration invariant and is intentionally independent
  * of WebGPU/ORT.
  *
- * Two newest-wins questions live here, and they are DIFFERENT questions:
- * - `publish` fires only while a result is still the newest SUBMITTED work
- *   (the job gate). Right for callers whose publish is record keeping.
- * - `claimPresentation` grants the right to touch a presented output — the
- *   monotonic watermark over what has actually been PRESENTED. Right for
- *   callers that present out-of-band (the pipeline writes its output
- *   texture inside infer()): an older result landing late can never paint
- *   over a newer one, while an older-but-newest-completed result still
- *   presents (dropping it would hold an even older frame on the canvas).
+ * One newest-wins gate lives here: `claimPresentation` grants the right to
+ * touch a presented output — the monotonic watermark over what has actually
+ * been PRESENTED. Right for callers that present out-of-band (the pipeline
+ * writes its output texture inside infer()): an older result landing late can
+ * never paint over a newer one, while an older-but-newest-completed result
+ * still presents (dropping it would hold an even older frame on the canvas).
  */
 export class RealEsrganFrameJobRunner<TCapture, TResult> {
-  private activeCount = 0;
-  private newestFrame = -1;
-  /** Newest frame whose result was allowed to present (see claimPresentation). */
+  /**
+   * Newest frame whose result was allowed to present (see claimPresentation).
+   * In-flight accounting is owned by the scheduler (`shouldProcess` gates on
+   * its `inFlight` set); a second local counter would only be able to drift.
+   */
   private presentedFrame = -1;
 
   constructor(private readonly scheduler: RealEsrganFrameScheduler) {}
 
   public submit(job: RealEsrganFrameJob<TCapture, TResult>, depth = 1): boolean {
     const slots = Math.max(1, Math.floor(depth));
-    this.newestFrame = Math.max(this.newestFrame, job.frame);
-    if (this.activeCount >= slots || !this.scheduler.shouldProcess(job.frame, slots)) {
+    if (!this.scheduler.shouldProcess(job.frame, slots)) {
       this.scheduler.noteSkipped(job.frame);
       return false;
     }
 
-    this.activeCount += 1;
     this.scheduler.markStarted(job.frame);
     void this.execute(job);
     return true;
@@ -58,9 +54,27 @@ export class RealEsrganFrameJobRunner<TCapture, TResult> {
     return true;
   }
 
+  /** Record a frame that arrived but was not processed (scheduler delegation). */
+  public noteSkipped(frame: number): void {
+    this.scheduler.noteSkipped(frame);
+  }
+
+  /** Newest submitted-but-unfinished frame, or -1 when idle. */
+  public newestInFlightFrame(): number {
+    return this.scheduler.newestInFlightFrame();
+  }
+
+  /** True when `frame` trails the newest in-flight work by more than `threshold`. */
+  public shouldStaleSkip(frame: number, threshold: number): boolean {
+    return this.scheduler.newestInFlightFrame() - frame > threshold;
+  }
+
+  /** Frames that arrived but were never processed because inference was busy. */
+  public get skippedFrames(): number {
+    return this.scheduler.skippedFrames;
+  }
+
   public reset(): void {
-    this.activeCount = 0;
-    this.newestFrame = -1;
     this.presentedFrame = -1;
     this.scheduler.reset();
   }
@@ -68,12 +82,10 @@ export class RealEsrganFrameJobRunner<TCapture, TResult> {
   private async execute(job: RealEsrganFrameJob<TCapture, TResult>): Promise<void> {
     try {
       const capture = await job.capture();
-      const result = await job.infer(capture);
-      if (this.scheduler.isResultCurrent(job.frame) && job.frame === this.newestFrame) {
-        job.publish(result);
-      }
+      // Result intentionally unused: the drain presents out-of-band through
+      // claimPresentation, not through this runner.
+      await job.infer(capture);
     } finally {
-      this.activeCount -= 1;
       this.scheduler.markCompleted(job.frame);
     }
   }

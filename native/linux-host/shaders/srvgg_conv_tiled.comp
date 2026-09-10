@@ -1,5 +1,6 @@
 #version 450
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_GOOGLE_include_directive : require
 // E4 phase 1b: shared-memory tiled conv3x3 + bias + PReLU (the fast path).
 // Ports the proven WGSL Direct-v4 design to GLSL: each 16x16 workgroup
 // computes one 16x16 output tile x 16 output channels (ocBase selects the
@@ -29,6 +30,8 @@ layout (push_constant) uniform parameter
     int outStride;
     int hasPrelu;
 } p;
+
+#include "srvgg_conv_epilogue.comp"
 
 layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -126,9 +129,8 @@ void main()
         int oc = ocb + i;
         if (oc >= p.outCh)
             break;
-        float acc = accs[i] + w_data[p.bBase + oc];
-        if (p.hasPrelu == 1 && acc < 0.0)
-            acc *= w_data[p.sBase + oc];
+        float acc = accs[i] + SRVGG_CONV_BIAS(oc);
+        SRVGG_CONV_PRELU(acc, oc);
         out_data[oc * p.outStride + oBase] = float16_t(acc);
     }
 }

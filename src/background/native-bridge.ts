@@ -47,6 +47,8 @@ export class NativeBridge {
     try {
       client.connect();
 
+      // The client validates every reply with isNativeEvent before resolving,
+      // so the handshake consumes typed events instead of re-reading shapes.
       const ready = await client.request({
         ...nativeRequestBase(),
         type: 'hello',

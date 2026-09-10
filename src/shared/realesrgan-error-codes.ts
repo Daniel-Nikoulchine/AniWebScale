@@ -37,6 +37,32 @@ export type RealEsrganErrorCode =
   (typeof REALESRGAN_ERROR_CODES)[keyof typeof REALESRGAN_ERROR_CODES];
 
 /**
+ * Native-host transport/protocol error codes (wire strings on the framed
+ * JSON replies and in the HTTP error text). Deliberately a separate table
+ * from RealEsrganErrorCode: these are host-side request/transport verdicts,
+ * not runner failures, and they keep the host's snake_case wire spelling.
+ * The C++ source of truth is native/include/anime4k/native_error_codes.hpp;
+ * tests/native-host-error-codes.test.ts asserts this table against it.
+ */
+export const NATIVE_HOST_ERROR_CODES = {
+  INVALID_JSON: 'invalid_json',
+  UNKNOWN_TYPE: 'unknown_type',
+  MESSAGE_TOO_LARGE: 'message_too_large',
+  INVALID_REQUEST: 'invalid_request',
+  INVALID_DATA: 'invalid_data',
+  INFERENCE_FAILED: 'inference_failed',
+  DMA_BUF_UNSUPPORTED: 'dma_buf_unsupported',
+  SHM_PATH_REJECTED: 'shm_path_rejected',
+  SHM_OPEN_FAILED: 'shm_open_failed',
+  SHM_READ_FAILED: 'shm_read_failed',
+  SHM_WRITE_FAILED: 'shm_write_failed',
+  SHM_WRITE_INCOMPLETE: 'shm_write_incomplete',
+} as const;
+
+export type NativeHostErrorCode =
+  (typeof NATIVE_HOST_ERROR_CODES)[keyof typeof NATIVE_HOST_ERROR_CODES];
+
+/**
  * Codes the Runner-Guard treats as transient: they get the retry budget
  * instead of disabling the runner on first sight. Everything untagged (or
  * tagged otherwise) is permanent — producers tag, the guard decides.

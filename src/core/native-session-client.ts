@@ -1,5 +1,5 @@
 import type { NativeConfiguration } from '../native/protocol';
-import type { NativeFallbackReason } from '../shared/native-fallback-request';
+import type { NativeFallbackReason, NativeFallbackRequest } from '../shared/native-fallback-request';
 import {
   enhancementClaimMessage,
   enhancementReleaseMessage,
@@ -9,21 +9,18 @@ import {
   nativeUpdateConfigurationMessage,
   parseNativeFallbackResponse,
   parseStatusResponse,
+  type ResponseEnvelope,
 } from '../shared/runtime-messages';
 
-/** The capture rect a fallback request reports for the source video. */
-export interface NativeCaptureRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  devicePixelRatio: number;
-}
+/**
+ * The capture rect a fallback request reports for the source video. Derived
+ * from the shared wire request so the client and the protocol validator
+ * cannot drift.
+ */
+export type NativeCaptureRect = NativeFallbackRequest['videoRect'];
 
-export interface NativeFallbackOutcome {
-  ok: boolean;
+export interface NativeFallbackOutcome extends ResponseEnvelope {
   sessionId?: string;
-  message?: string;
 }
 
 /**
@@ -39,7 +36,10 @@ export interface NativeSessionClient {
   claim(videoId: string): Promise<{ ok: boolean; message?: string }>;
   /** Fire-and-forget release of the active-enhancement slot. */
   release(videoId: string): Promise<void>;
-  /** Ask the background to start the native renderer for a video. */
+  /**
+   * Ask the background to start the native renderer for a video. `reason` is
+   * retained for caller-side classification only; it is not part of the wire.
+   */
   requestFallback(input: {
     videoId: string;
     reason: NativeFallbackReason;
@@ -99,9 +99,7 @@ export function createNativeSessionClient(send: Send = message => chrome.runtime
       try {
         const response = parseNativeFallbackResponse(await send(nativeFallbackRequestMessage({
           videoId: input.videoId,
-          reason: input.reason,
           configuration: input.configuration,
-          output: 'auto',
           videoRect: input.rect,
         })));
         if (response.ok && pending.stopRequested) {

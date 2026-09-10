@@ -208,6 +208,52 @@ describe('native client RGBA fast path', () => {
   });
 });
 
+describe('native host inference_failed stage', () => {
+  it('surfaces upload/tile/submit stages from a 500 inference_failed reply', async () => {
+    respondStatus = 500;
+    const client = await createClient();
+    try {
+      for (const stage of ['upload', 'tile', 'submit'] as const) {
+        respondBody = new TextEncoder().encode(`upscale failed (${stage}): simulated host failure`);
+        let caught: unknown;
+        try {
+          await client.runFrameRgba('model', 2, 2, new Uint8Array(2 * 2 * 4));
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(Error);
+        expect((caught as { stage?: string }).stage).toBe(stage);
+        expect((caught as Error).message).toContain(`stage=${stage}`);
+        // The existing transient code/classification is unchanged.
+        expect((caught as { code?: string }).code).toBe('native-frame-failed');
+      }
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it('leaves a stage-less error unchanged', async () => {
+    respondStatus = 500;
+    respondBody = new TextEncoder().encode('upscale failed: simulated host failure');
+    const client = await createClient();
+    try {
+      let caught: unknown;
+      try {
+        await client.runFrameRgba('model', 2, 2, new Uint8Array(2 * 2 * 4));
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as { stage?: string }).stage).toBeUndefined();
+      expect((caught as Error).message).toContain('simulated host failure');
+      expect((caught as Error).message).not.toContain('stage=');
+      expect((caught as { code?: string }).code).toBe('native-frame-failed');
+    } finally {
+      client.dispose();
+    }
+  });
+});
+
 describe('rehomeResponseBuffer', () => {
   it('returns healthy buffers without cloning', () => {
     const raw = new Uint8Array([1, 2, 3, 4, 5]).buffer as ArrayBuffer;

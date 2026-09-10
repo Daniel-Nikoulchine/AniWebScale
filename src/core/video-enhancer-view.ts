@@ -1,19 +1,3 @@
-import { fullscreenContainsVideo, isWithinFullscreenExitGrace, videoFillsOwnViewport } from '../shared/fullscreen-video';
-import { fullscreenContext } from './fullscreen-context';
-
-export function hasPlayerFullscreenSignal(video: HTMLVideoElement): boolean {
-  const fullscreen = fullscreenContext.element;
-  if (fullscreenContainsVideo(fullscreen, video)) return true;
-  if (isWithinFullscreenExitGrace()) return false;
-  // Deliberately the loose embedded-style signal (not the strict
-  // screen-geometry predicate): top-level CSS-fullscreen players (theater
-  // layouts that never call requestFullscreen) rely on it, and the election
-  // additionally requires preferred-candidate status. Delegating to the full
-  // isVideoInFullscreenContext here would pull its DOM/screen requirements
-  // and exit-grace side effects into every reconcile.
-  return videoFillsOwnViewport(video);
-}
-
 /** Repeated identical toasts within this window are dropped (see below). */
 const NOTIFY_REPEAT_MS = 10_000;
 let lastNotifyMessage = '';

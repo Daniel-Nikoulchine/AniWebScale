@@ -4,6 +4,7 @@ import type {
   Anime4KMode as GeneratedAnime4KMode,
   QualityTier as GeneratedQualityTier,
 } from './shared/generated-preset-graph';
+import type { RealEsrganCapHeight } from './shared/realesrgan-auto-cap';
 
 declare global {
   /** Compile-time gate; false in every distributable build. */
@@ -21,14 +22,6 @@ type AiUpscaleMode =
 type EnhancementMode = 'OFF' | Anime4KMode | AiUpscaleMode;
 type QualityTier = GeneratedQualityTier;
 type RenderBackend = 'auto' | 'webgpu' | 'native';
-type OutputMode = 'auto';
-/**
- * RealESRGAN inference cap heights (input px). Gemessene Leiter: 480, 432,
- * 405 plus 360 als Auto-Cap-Notrung. 405-gegen-360 liegt bei 38 dB PSNR auf
- * echtem Material (besser als der heutige 480-gegen-405-Schritt mit 35 dB),
- * also kein starker Qualitaetsverlust fuer die letzte Sprosse.
- */
-type RealEsrganCapHeight = 480 | 432 | 405 | 360;
 
 /**
  * RealESRGAN inference precision (intern, kein User-Setting mehr). Die
@@ -50,7 +43,6 @@ interface Anime4KWebExtSettings {
   extensionEnabled: boolean;
   mode: EnhancementMode;
   quality: QualityTier;
-  output: OutputMode;
   backend: RenderBackend;
   statsEnabled: boolean;
   autoFullscreenEnabled: boolean;
@@ -107,7 +99,6 @@ interface RealEsrganPhaseStats {
 interface VideoEnhancer {
   destroy: () => void;
   stopEnhancement: (options?: { stopNative?: boolean; releaseClaim?: boolean }) => Promise<void>;
-  getCurrentModeId: () => string | null;
   isActive: () => boolean;
   updateSettings: (settings: Anime4KWebExtSettings) => Promise<void>;
   getVideoElement: () => HTMLVideoElement;
@@ -136,7 +127,6 @@ export {
   EnhancementMode,
   QualityTier,
   RenderBackend,
-  OutputMode,
   RealEsrganCapHeight,
   RealEsrganPrecision,
   PerformanceTier,

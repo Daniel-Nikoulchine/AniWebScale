@@ -15,7 +15,6 @@ describe('settings migration', () => {
       extensionEnabled: true,
       mode: 'CA',
       quality: 'UL',
-      output: 'auto',
       backend: 'webgpu',
       statsEnabled: false,
       autoFullscreenEnabled: false,
@@ -36,7 +35,6 @@ describe('settings migration', () => {
       extensionEnabled: true,
       mode: 'BB',
       quality: 'VL',
-      output: 'auto',
       backend: 'auto',
       statsEnabled: false,
       autoFullscreenEnabled: true,
@@ -101,14 +99,14 @@ describe('settings migration', () => {
     expect(normalizeLegacySettings({ mode: 'REALESRGANX4' }, {})).toMatchObject({ mode: 'A' });
   });
 
-  it('falls back to a sync-stored RealESRGAN cap when local has none', () => {
+  it('prefers the merged/sync RealESRGAN cap over a stale local copy', () => {
     expect(normalizeLegacySettings({ realesrganCapHeight: 432 }, {})).toMatchObject({
       realesrganCapHeight: 432,
     });
     expect(normalizeLegacySettings(
       { realesrganCapHeight: 432 },
       { realesrganCapHeight: 405 },
-    )).toMatchObject({ realesrganCapHeight: 405 });
+    )).toMatchObject({ realesrganCapHeight: 432 });
   });
 
   describe('ensureLatestConfig end-to-end', () => {

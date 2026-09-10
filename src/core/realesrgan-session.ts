@@ -65,19 +65,6 @@ export interface RealEsrganSessionConfig {
   execution: RealEsrganExecutionConfig;
 }
 
-// Precision label for the pipeline's phase stats. Written ONCE by the
-// factory constructor (the only legitimate writer — the factory exists
-// before any session and before any pipeline), read by getPhaseStats.
-let activeExecution: RealEsrganExecutionConfig = { preferFloat16: false, preferInt8: false };
-
-export function isRealEsrganFloat16Preferred(): boolean {
-  return activeExecution.preferFloat16;
-}
-
-export function isRealEsrganInt8Preferred(): boolean {
-  return activeExecution.preferInt8;
-}
-
 /**
  * Main-thread fallback sessions are shape-pinned: the model's symbolic dims
  * are fixed via `freeDimensionOverrides` (see the create call below for why),
@@ -86,7 +73,7 @@ export function isRealEsrganInt8Preferred(): boolean {
  * size, which follows the RealESRGAN cap (effects-map `maxInferenceHeight`).
  */
 
-interface CascadeLevel {
+export interface CascadeLevel {
   numThreads: number;
   executionProviders: ReadonlyArray<'webgpu' | 'wasm'>;
 }
@@ -113,7 +100,7 @@ function isInitWasmPoisoned(message: string): boolean {
  * keeping a live candidate for it only invited a configuration nobody can
  * request. Duplicate levels collapse so a conservative config probes once.
  */
-function buildCascadeLevels(numThreads: number): CascadeLevel[] {
+export function buildCascadeLevels(numThreads: number): CascadeLevel[] {
   const webgpu: ReadonlyArray<'webgpu' | 'wasm'> = ['webgpu', 'wasm'];
   const wasmOnly: ReadonlyArray<'webgpu' | 'wasm'> = ['wasm'];
   const candidates: CascadeLevel[] = [
@@ -143,9 +130,12 @@ export class RealEsrganSessionFactory {
   // Index into the cascade of the first level that produced a session. Later
   // sessions start here instead of re-probing known-dead configurations.
   private workingLevelIndex: number | null = null;
+  // Execution config chosen at construction; the pipeline reads it to label
+  // phase stats (int8/fp32) and to gate the worker's fp16 probe.
+  public readonly execution: RealEsrganExecutionConfig;
 
   constructor(private readonly config: RealEsrganSessionConfig) {
-    activeExecution = config.execution;
+    this.execution = config.execution;
   }
 
   /**
@@ -166,11 +156,6 @@ export class RealEsrganSessionFactory {
   if (cached) return cached;
 
   const promise = (async () => {
-    activeExecution = effective === 'int8'
-      ? { preferFloat16: false, preferInt8: true }
-      : effective === 'fp16'
-        ? { preferFloat16: true, preferInt8: false }
-        : { preferFloat16: false, preferInt8: false };
     const fp32FileName = realEsrganModelFileForClass(className);
     const fp16FileName = realEsrganFp16ModelFileForClass(className);
     const int8FileName = realEsrganInt8ModelFileForClass(className);

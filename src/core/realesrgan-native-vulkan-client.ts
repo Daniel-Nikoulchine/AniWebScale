@@ -14,8 +14,14 @@
  * worker/main-thread WASM paths unchanged.
  */
 
-import type { RealEsrganInferenceRunner, RealEsrganFrameResult } from './realesrgan-worker-client';
-import { formatRealEsrganError, REALESRGAN_ERROR_CODES, realEsrganErrorCodeOf, withRealEsrganCode } from '../shared/realesrgan-error-codes';
+import type { RealEsrganInferenceRunner, RealEsrganFrameResult } from './realesrgan-runner';
+import {
+  formatRealEsrganError,
+  REALESRGAN_ERROR_CODES,
+  realEsrganErrorCodeOf,
+  withRealEsrganCode,
+  type RealEsrganCodedError,
+} from '../shared/realesrgan-error-codes';
 
 const CAP_TIMEOUT_MS = 10_000;
 // Wedged-host abort: healthy p90 is ~70 ms, so 6 s is pure hang insurance.
@@ -74,6 +80,29 @@ function isFetchTimeoutError(error: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Host-reported inference stage (native `outcome.stage`): the Linux host tags
+ * `inference_failed` replies — and the matching HTTP 500 detail text — with
+ * the pipeline phase that failed. Threaded onto the client's coded error so
+ * diagnostics can tell upload/tile/submit apart without parsing prose.
+ */
+export type NativeInferenceStage = 'upload' | 'tile' | 'submit';
+
+const NATIVE_INFERENCE_STAGES = ['upload', 'tile', 'submit'] as const;
+
+/**
+ * The host's HTTP 500 detail spells the stage as `upscale failed (upload): …`;
+ * replies without a stage read `upscale failed: …`. Anything else (or an
+ * unknown token) is ignored rather than guessed.
+ */
+export function nativeInferenceStageFromDetail(detail: string): NativeInferenceStage | null {
+  const match = /upscale failed \(([^)]+)\)/.exec(detail);
+  const stage = match?.[1];
+  return stage !== undefined && (NATIVE_INFERENCE_STAGES as readonly string[]).includes(stage)
+    ? (stage as NativeInferenceStage)
+    : null;
 }
 
 interface FetchLike {
@@ -204,6 +233,8 @@ export class RealEsrganNativeVulkanClient implements RealEsrganInferenceRunner {
   private readonly engine: 'ncnn' | 'srvgg';
   private endpoint: HttpEndpointInfo | null = null;
   private endpointPromise: Promise<HttpEndpointInfo | null> | null = null;
+  /** Explicit adapter identity (see RealEsrganInferenceRunner.kind). */
+  public readonly kind = 'native' as const;
   public onFramePath: ((path: string) => void) | null = null;
   private disposed = false;
   private loggedPath = false;
@@ -235,6 +266,12 @@ export class RealEsrganNativeVulkanClient implements RealEsrganInferenceRunner {
    * pipeline decide whether passing it is worth anything.
    */
   public readonly supportsTargetDownscale = true;
+  /**
+   * Explicit input-size capability (see RealEsrganInferenceRunner.maxFrameDim):
+   * the host's transport limit, mirrored above. Policy code reads this instead
+   * of inferring "native" from supportsTargetDownscale.
+   */
+  public readonly maxFrameDim = REALESRGAN_NATIVE_MAX_FRAME_DIM;
 
   /**
    * Upload staging: eight rotating buffers matching maxInFlight, so an
@@ -466,10 +503,15 @@ export class RealEsrganNativeVulkanClient implements RealEsrganInferenceRunner {
           // pressure) must not permanently disable the 10x path — the
           // Runner-Guard's retry budget decides, not the first error.
           const detail = await response.text().then(t => t.slice(0, 200), () => '');
-          throw withRealEsrganCode(
-            new Error(`native host HTTP ${response.status}${detail ? `: ${detail}` : ''}`),
+          const stage = nativeInferenceStageFromDetail(detail);
+          const error: RealEsrganCodedError & { stage?: NativeInferenceStage } = withRealEsrganCode(
+            new Error(`native host HTTP ${response.status}${detail ? `: ${detail}` : ''}${stage ? ` [stage=${stage}]` : ''}`),
             REALESRGAN_ERROR_CODES.NATIVE_FRAME_FAILED,
           );
+          // Thread the host's stage through for diagnostics; the code and
+          // transient classification above stay exactly as before.
+          if (stage) error.stage = stage;
+          throw error;
         }
         runStage = 'headers';
         const outW = Number(response.headers.get('X-Frame-Width')) || width * 4;

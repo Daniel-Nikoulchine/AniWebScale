@@ -29,6 +29,70 @@
  */
 import { RealEsrganSessionFactory, type RealEsrganSessionConfig } from './realesrgan-session';
 
+/**
+ * Primitives the browser wiring needs, so tests can build a factory without
+ * chrome.* or a live ORT runtime. The runtime-import side effect (setting
+ * `env.wasm.wasmPaths`) stays in the singleton wrapper.
+ */
+export interface RealEsrganBrowserSetupPrimitives {
+  /** Resolve an extension-relative model file to a fetchable URL. */
+  resolveModelUrl: (fileName: string) => string;
+  /** HEAD-verify a packaged model asset (production hits the extension URL). */
+  modelAssetExists: (fileName: string) => Promise<boolean>;
+  /** Physical core count; defaults to the navigator value (or 4). */
+  cores?: number;
+}
+
+/**
+ * Build the RealEsrganSessionFactory from the injected primitives. Pure
+ * construction: no chrome.*, no runtime import, so tests drive the whole
+ * threading/precision policy directly.
+ */
+export function createRealEsrganBrowserSession(
+  primitives: RealEsrganBrowserSetupPrimitives,
+): RealEsrganSessionFactory {
+  // Ask for multithreaded WASM. onnxruntime-web falls back to
+  // single-threading on its own (with a console warning) when the page is
+  // not crossOriginIsolated, so this is safe to request unconditionally.
+  //
+  // Cap at 16, not 4. The previous floor of 4 was a holdover from the
+  // RealCUGAN reference path; animevideov3 is a 16-block VGG-style CNN
+  // where the kernel cost is roughly linear in thread count up to the
+  // number of physical cores. The cascade in realesrgan-session.ts still
+  // drops to numThreads=1 on its last level if SharedArrayBuffer is
+  // unavailable, so this is safe on Firefox/Chrome alike.
+  const cores = primitives.cores
+    ?? (typeof navigator !== 'undefined' && navigator.hardwareConcurrency > 0
+      ? navigator.hardwareConcurrency
+      : 4);
+  const threading = { numThreads: Math.min(16, cores) };
+  // Auto-selected precision policy (no user setting):
+  // - WebGPU worker lane: FP32 reference (the model URL handed to the
+  //   worker; QDQ has no WebGPU kernels, so int8 never goes there).
+  // - Main-thread WASM fallback session: INT8 (666K static QDQ model,
+  //   ~1.8x faster than FP32, PSNR 32.5 dB on anime) — the only viable
+  //   realtime option when no GPU runner serves the frame.
+  // - Native Vulkan host: its own fp16-storage model (this config is not
+  //   consulted there).
+  // FP16 stays OFF: ORT-web 1.29's WebGPU EP fails the fp16 model with
+  // "ShaderModule with 'Clip' label is invalid" (the bitcast<vec2<f16>>
+  // pattern the worker hook cannot fully rewrite), and probing it would
+  // burn a session attempt plus a timed-out frame per shape. Flip
+  // preferFloat16 only after the EP ships valid f16 kernels; session
+  // creation still requires the packaged FP16 asset and falls back to
+  // FP32 when missing. The FP16 options were removed from the UI
+  // (REALESRGAN precision is device/EP-auto now).
+  const execution = { preferFloat16: false, preferInt8: true };
+
+  const config: RealEsrganSessionConfig = {
+    resolveModelUrl: primitives.resolveModelUrl,
+    modelAssetExists: primitives.modelAssetExists,
+    threading,
+    execution,
+  };
+  return new RealEsrganSessionFactory(config);
+}
+
 let configured: Promise<RealEsrganSessionFactory> | null = null;
 
 /**
@@ -47,39 +111,7 @@ export function setupRealEsrganBrowserRuntime(): Promise<RealEsrganSessionFactor
     const ort = await import(/* webpackChunkName: "ort" */ 'onnxruntime-web');
     ort.env.wasm.wasmPaths = chrome.runtime.getURL('ort/');
 
-    // Ask for multithreaded WASM. onnxruntime-web falls back to
-    // single-threading on its own (with a console warning) when the page is
-    // not crossOriginIsolated, so this is safe to request unconditionally.
-    //
-    // Cap at 16, not 4. The previous floor of 4 was a holdover from the
-    // RealCUGAN reference path; animevideov3 is a 16-block VGG-style CNN
-    // where the kernel cost is roughly linear in thread count up to the
-    // number of physical cores. The cascade in realesrgan-session.ts still
-    // drops to numThreads=1 on its last level if SharedArrayBuffer is
-    // unavailable, so this is safe on Firefox/Chrome alike.
-    const cores = typeof navigator !== 'undefined' && navigator.hardwareConcurrency > 0
-      ? navigator.hardwareConcurrency
-      : 4;
-    const threading = { numThreads: Math.min(16, cores) };
-    // Auto-selected precision policy (no user setting):
-    // - WebGPU worker lane: FP32 reference (the model URL handed to the
-    //   worker; QDQ has no WebGPU kernels, so int8 never goes there).
-    // - Main-thread WASM fallback session: INT8 (666K static QDQ model,
-    //   ~1.8x faster than FP32, PSNR 32.5 dB on anime) — the only viable
-    //   realtime option when no GPU runner serves the frame.
-    // - Native Vulkan host: its own fp16-storage model (this config is not
-    //   consulted there).
-    // FP16 stays OFF: ORT-web 1.29's WebGPU EP fails the fp16 model with
-    // "ShaderModule with 'Clip' label is invalid" (the bitcast<vec2<f16>>
-    // pattern the worker hook cannot fully rewrite), and probing it would
-    // burn a session attempt plus a timed-out frame per shape. Flip
-    // preferFloat16 only after the EP ships valid f16 kernels; session
-    // creation still requires the packaged FP16 asset and falls back to
-    // FP32 when missing. The FP16 options were removed from the UI
-    // (REALESRGAN precision is device/EP-auto now).
-    const execution = { preferFloat16: false, preferInt8: true };
-
-    const config: RealEsrganSessionConfig = {
+    return createRealEsrganBrowserSession({
       resolveModelUrl: fileName => chrome.runtime.getURL(`models/realesrgan/${fileName}`),
       modelAssetExists: async fileName => {
         try {
@@ -91,10 +123,7 @@ export function setupRealEsrganBrowserRuntime(): Promise<RealEsrganSessionFactor
           return false;
         }
       },
-      threading,
-      execution,
-    };
-    return new RealEsrganSessionFactory(config);
+    });
   })();
   // A failed setup must not poison the singleton; drop it so a retry can
   // re-attempt (mirrors the session cache behaviour).

@@ -1,9 +1,5 @@
-import {
-  isNativeConfiguration,
-  type NativeConfiguration,
-  type NativeMediaCommandName,
-} from '../native/protocol';
-import { parseRuntimeRequest, type NativePointerRequest } from '../shared/runtime-messages';
+import { type NativeConfiguration } from '../native/protocol';
+import { parseRuntimeRequest } from '../shared/runtime-messages';
 import type { NativeFallbackRequest } from '../shared/native-fallback-request';
 import type { FrameAccessReply } from './iframe-site-access';
 import type { RealEsrganHttpEndpoint } from './realesrgan-http-info';
@@ -30,11 +26,9 @@ export interface BackgroundNativeOperations {
   isSenderAuthorized(sender: chrome.runtime.MessageSender): boolean;
   updateConfiguration(configuration: NativeConfiguration): Promise<void>;
   stopSession(reason: string, notify: boolean, restoreTab?: boolean, sessionId?: string): Promise<void>;
-  status(): Record<string, unknown>;
   sendPlaybackState(sessionId: string, playbackActive: boolean, mediaTime: number): Promise<void>;
-  forwardMediaCommand(command: NativeMediaCommandName, value?: number): Promise<void>;
-  forwardPointer(request: NativePointerRequest): Promise<void>;
-  readConfiguration(): Promise<Record<string, unknown>>;
+  /** The persisted configuration, or null when the stored value is not a valid one. */
+  readConfiguration(): Promise<NativeConfiguration | null>;
 }
 
 /** Browser and user-facing operations kept outside request policy. */
@@ -44,8 +38,6 @@ export interface BackgroundPlatformOperations {
   updateSiteAccess(): Promise<void>;
   requestFrameSiteAccess(origin: string, sender: chrome.runtime.MessageSender): Promise<FrameAccessReply>;
   resetConsent(origin?: string): Promise<void>;
-  openOptionsPage(): Promise<void>;
-  openOnboarding(): Promise<void>;
   /** Loopback HTTP endpoint (port/token) of the ncnn native host, or a failure. */
   realEsrganHttpInfo(): Promise<RealEsrganHttpEndpoint>;
 }
@@ -92,6 +84,11 @@ export function createBackgroundRouter(deps: BackgroundRouterDependencies): Back
         return deps.native.startFallback(message, sender);
 
       case 'NATIVE_UPDATE_CONFIGURATION': {
+        // Match NATIVE_FALLBACK_REQUEST: a disabled extension must not reach
+        // the native host even when a session is still mirrored.
+        if (!await deps.platform.isExtensionEnabled()) {
+          return { ok: false, message: 'AniWebScale is disabled.' };
+        }
         try {
           await deps.platform.serialized(async () => {
             if (!deps.native.hasActiveSession() || !deps.native.isControlAuthorized(message, sender)) {
@@ -115,33 +112,17 @@ export function createBackgroundRouter(deps: BackgroundRouterDependencies): Back
           return { ok: true };
         });
 
-      case 'NATIVE_STATUS':
-        return { ok: true, ...deps.native.status() };
-
-      case 'NATIVE_PLAYBACK_STATE': {
-        const session = deps.native.activeSession();
-        if (!session || !deps.native.isPlaybackStateAuthorized(message, sender)) {
-          return { ok: false, message: 'Invalid native playback state.' };
-        }
-        await deps.native.sendPlaybackState(session.sessionId, message.playbackActive, message.mediaTime);
-        return { ok: true };
-      }
-
-      case 'NATIVE_MEDIA_COMMAND': {
-        if (!deps.native.hasActiveSession() || !deps.native.isSenderAuthorized(sender)) {
-          return { ok: false, message: 'The native media command did not come from the active session.' };
-        }
-        await deps.native.forwardMediaCommand(message.command, message.value);
-        return { ok: true };
-      }
-
-      case 'NATIVE_POINTER': {
-        if (!deps.native.hasActiveSession() || !deps.native.isSenderAuthorized(sender)) {
-          return { ok: false, message: 'The native pointer event did not come from the active session.' };
-        }
-        await deps.native.forwardPointer(message);
-        return { ok: true };
-      }
+      case 'NATIVE_PLAYBACK_STATE':
+        // Re-validate inside the serialized section: a session swap between
+        // the check and the forward would otherwise target the replacement.
+        return deps.platform.serialized(async () => {
+          const session = deps.native.activeSession();
+          if (!session || !deps.native.isPlaybackStateAuthorized(message, sender)) {
+            return { ok: false, message: 'Invalid native playback state.' };
+          }
+          await deps.native.sendPlaybackState(session.sessionId, message.playbackActive, message.mediaTime);
+          return { ok: true };
+        });
 
       case 'NATIVE_RESET_CONSENT':
         await deps.platform.resetConsent(message.origin);
@@ -161,7 +142,7 @@ export function createBackgroundRouter(deps: BackgroundRouterDependencies): Back
         }
         if (current && deps.native.hasActiveSession()) {
           const configuration = await deps.native.readConfiguration();
-          if (isNativeConfiguration(configuration)) {
+          if (configuration) {
             await deps.platform.serialized(() => deps.native.updateConfiguration(configuration));
           }
         }
@@ -174,14 +155,6 @@ export function createBackgroundRouter(deps: BackgroundRouterDependencies): Back
 
       case 'SITE_ACCESS_IFRAME_REQUEST':
         return deps.platform.requestFrameSiteAccess(message.origin, sender);
-
-      case 'OPEN_OPTIONS_PAGE':
-        await deps.platform.openOptionsPage();
-        return undefined;
-
-      case 'OPEN_ONBOARDING':
-        await deps.platform.openOnboarding();
-        return undefined;
 
       case 'REALESRGAN_HTTP_INFO':
         return deps.platform.realEsrganHttpInfo();

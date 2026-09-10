@@ -47,6 +47,8 @@
 #include <random>
 
 #include "anime4k/json.hpp"
+#include "anime4k/native_error_codes.hpp"
+#include "anime4k/protocol_version.hpp"
 #include "net.h"
 #include "gpu.h"
 #include "http-transport.h"
@@ -56,6 +58,35 @@
 #if NCNN_VULKAN
 #include "srvgg_traffic.comp.hex.h"
 #endif
+
+// Wire protocol version echoed on every framed reply (hello/capabilities/
+// result/error). The value comes from the shared native header
+// (native/include/anime4k/protocol_version.hpp) so the Windows and Linux
+// hosts cannot drift; this alias only adapts it to the double the JSON
+// builder takes. A TS drift test keeps the shared constant aligned with
+// NATIVE_PROTOCOL_VERSION in src/native/protocol.ts.
+static constexpr double kProtocolVersion = static_cast<double>(anime4k::protocol::kProtocolVersion);
+
+// Canonical native-host error codes (shared header, TS mirror and drift test).
+namespace native_errors = anime4k::protocol::native_errors;
+
+// HTTP transport adapter: one upscale per request over the shared core. The
+// core serializes GPU ownership; a successful frame also bumps the idle clock
+// (the stdin loop does the same on message receipt).
+struct CoreUpscaleHandler final : aniwebscale::UpscaleHandler {
+    explicit CoreUpscaleHandler(aniwebscale::UpscaleCore& core) : core_(core) {}
+    int handle_frame(const unsigned char* rgba_in, int in_w, int in_h,
+                     int target_w, int target_h,
+                     std::vector<unsigned char>& out, int& out_w, int& out_h,
+                     std::string& emsg, std::string& err_stage,
+                     const std::string& engine) override {
+        const bool ok = core_.run_upscale(rgba_in, in_w, in_h, target_w, target_h,
+                                          out, out_w, out_h, emsg, engine, &err_stage);
+        if (ok) core_.note_activity();
+        return ok ? 0 : 1;
+    }
+    aniwebscale::UpscaleCore& core_;
+};
 
 // ---------- base64 ----------
 // Fast table-driven Base64 (scalar, ~2.5x faster than branchy version).
@@ -283,29 +314,82 @@ static double get_number(const Object& o, const char* key, double def = 0) {
 }
 
 // ---------- framed error JSON ----------
-// All error objects share the same shape; only the invalid_json error (no
-// requestId field yet) stays hand-built in the main loop. Code strings and
-// messages are wire protocol — do not change.
-static std::string error_json(const std::string& requestId, const char* code, const std::string& message) {
+// Recoverability by error class: a malformed, invalid or unsupported request
+// can never succeed by retrying the same bytes (permanent, so the client
+// falls back), while an inference or shm-I/O hiccup may clear on the next
+// frame (transient). Mirrors the Windows host's recoverable semantics.
+static bool error_code_recoverable(const char* code) {
+    return code == native_errors::kInferenceFailed
+        || code == native_errors::kShmOpenFailed
+        || code == native_errors::kShmReadFailed
+        || code == native_errors::kShmWriteFailed
+        || code == native_errors::kShmWriteIncomplete;
+}
+
+// All error objects share the same shape. `stage` is emitted only for
+// inference_failed (upload/tile/submit); empty means "omit the field".
+static std::string error_json(const std::string& requestId, const char* code,
+                              const std::string& message, const std::string& stage = "") {
     Object err;
     err["type"] = Value("error");
-    err["protocolVersion"] = Value(3.0);
+    err["protocolVersion"] = Value(kProtocolVersion);
     err["requestId"] = Value(requestId);
     err["code"] = Value(code);
     err["message"] = Value(message);
-    err["recoverable"] = Value(true);
+    err["recoverable"] = Value(error_code_recoverable(code));
+    if (!stage.empty()) err["stage"] = Value(stage);
     return anime4k::json::stringify(Value(err));
+}
+
+// The one error shape without a requestId: invalid_json and message_too_large
+// fire before/without a parsed request, so there is no id to echo.
+static std::string error_json_unaddressed(const char* code, const std::string& message) {
+    Object err;
+    err["type"] = Value("error");
+    err["protocolVersion"] = Value(kProtocolVersion);
+    err["code"] = Value(code);
+    err["message"] = Value(message);
+    err["recoverable"] = Value(error_code_recoverable(code));
+    return anime4k::json::stringify(Value(err));
+}
+
+// Strict field gate: every recognized framed request type has an exact
+// allow-list, so a typo or a forward-dated field is rejected instead of
+// silently ignored (the Windows host's check_keys semantics, without
+// enforcing presence — optional fields the client omits simply stay absent).
+// Returns the first unexpected key, or nullptr when the frame is clean.
+static const char* first_unknown_key(const Object& o,
+                                     std::initializer_list<const char*> allowed) {
+    for (const auto& [key, unused] : o) {
+        (void)unused;
+        bool known = false;
+        for (const char* candidate : allowed) {
+            if (key == candidate) { known = true; break; }
+        }
+        if (!known) return key.c_str();
+    }
+    return nullptr;
 }
 
 // ---------- shm file I/O ----------
 // The shm transport moves throwaway frame files; it must never become a
 // file-overwrite primitive: confine both directions to the shared-memory
 // filesystem, reject traversal, and never follow symlinks (a planted
-// /dev/shm link must fail closed, not redirect the frame into it).
+// /dev/shm link must fail closed, not redirect the frame into it). Traversal
+// is checked segment-wise: only a whole segment of "." or ".." is rejected,
+// so a legitimate filename like "frame..bin" still passes.
 static bool is_safe_shm_path(const std::string& path) {
     if (path.compare(0, 9, "/dev/shm/") != 0) return false;
-    if (path.find("..") != std::string::npos) return false;
     if (path.size() >= 1024) return false;
+    size_t start = 9; // after "/dev/shm/"
+    while (start <= path.size()) {
+        const size_t slash = path.find('/', start);
+        const size_t end = slash == std::string::npos ? path.size() : slash;
+        const std::string segment = path.substr(start, end - start);
+        if (segment == "." || segment == "..") return false;
+        if (slash == std::string::npos) break;
+        start = slash + 1;
+    }
     return true;
 }
 // Read w*h*4 bytes of RGBA8 from a shm file path. On failure fills err_code /
@@ -314,13 +398,13 @@ static bool read_shm_rgba(const std::string& path, size_t need,
                            std::vector<unsigned char>& rgba,
                            const char*& err_code, std::string& err_msg) {
     if (!is_safe_shm_path(path)) {
-        err_code = "shm_path_rejected";
+        err_code = native_errors::kShmPathRejected;
         err_msg = "shmIn must live under /dev/shm/";
         return false;
     }
     int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW);
     if (fd < 0) {
-        err_code = "shm_open_failed";
+        err_code = native_errors::kShmOpenFailed;
         err_msg = std::string("failed to open shmIn: ") + strerror(errno);
         return false;
     }
@@ -336,7 +420,7 @@ static bool read_shm_rgba(const std::string& path, size_t need,
     }
     ::close(fd);
     if (off != need) {
-        err_code = "shm_read_failed";
+        err_code = native_errors::kShmReadFailed;
         err_msg = "shmIn size mismatch";
         return false;
     }
@@ -347,13 +431,13 @@ static bool read_shm_rgba(const std::string& path, size_t need,
 static bool write_shm_rgba(const std::string& path, const std::vector<unsigned char>& rgba,
                            const char*& err_code, std::string& err_msg) {
     if (!is_safe_shm_path(path)) {
-        err_code = "shm_path_rejected";
+        err_code = native_errors::kShmPathRejected;
         err_msg = "shmOut must live under /dev/shm/";
         return false;
     }
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     if (fd < 0) {
-        err_code = "shm_write_failed";
+        err_code = native_errors::kShmWriteFailed;
         err_msg = std::string("failed to open shmOut: ") + strerror(errno);
         return false;
     }
@@ -369,7 +453,7 @@ static bool write_shm_rgba(const std::string& path, const std::vector<unsigned c
     }
     ::close(fd);
     if (off != need) {
-        err_code = "shm_write_incomplete";
+        err_code = native_errors::kShmWriteIncomplete;
         err_msg = "shmOut write incomplete";
         return false;
     }
@@ -435,9 +519,6 @@ static std::string find_model_file(const char* def, const char* env) {
             p = p.parent_path();
         }
     }
-    // fallback absolute repo path
-    std::string fallback = "/home/daniel/Projects/anime4kBrowser/models/realesrgan/ncnn/" + std::string(std::filesystem::path(def).filename());
-    if (std::filesystem::exists(fallback)) return fallback;
     return def;
 }
 
@@ -723,16 +804,10 @@ int main(int argc, char** argv) {
     // Millisekunden seit einem beliebigen steady_clock-Nullpunkt, nur für
     // Differenzen benutzt.
     core.note_activity();
-    aniwebscale::HttpTransport http_transport([&core](const unsigned char* rgba_in, int in_w, int in_h,
-                                                      int target_w, int target_h,
-                                                      std::vector<unsigned char>& out, int& out_w, int& out_h,
-                                                      std::string& emsg, const std::string& engine) -> int {
-        // Shared upscale core (p7): identical GPU path for stdin and HTTP
-        // transports; the core serializes GPU ownership between them.
-        const bool ok = core.run_upscale(rgba_in, in_w, in_h, target_w, target_h, out, out_w, out_h, emsg, engine);
-        if (ok) core.note_activity();
-        return ok ? 0 : 1;
-    });
+    // Shared upscale core (p7): identical GPU path for stdin and HTTP
+    // transports; the core serializes GPU ownership between them.
+    CoreUpscaleHandler http_handler(core);
+    aniwebscale::HttpTransport http_transport(http_handler);
     {
         std::string http_err;
         if (http_transport.start(http_err)) {
@@ -786,40 +861,38 @@ int main(int argc, char** argv) {
             break; // EOF (Browser weg) oder Deadline: in beiden Fällen raus
         }
         if (oversize) {
-            // Same shape as the invalid_json error below (no requestId —
-            // the oversize body was discarded unread).
-            Object err;
-            err["type"] = Value("error");
-            err["protocolVersion"] = Value(3.0);
-            err["code"] = Value("message_too_large");
-            err["message"] = Value("framed message exceeds 100 MiB");
-            err["recoverable"] = Value(true);
-            write_framed(anime4k::json::stringify(Value(err)));
+            // No requestId — the oversize body was discarded unread.
+            write_framed(error_json_unaddressed(native_errors::kMessageTooLarge,
+                                                "framed message exceeds 100 MiB"));
             continue;
         }
         core.note_activity();
         auto parsed = anime4k::json::parse(payload);
         if (!parsed.value || !parsed.value->is_object()) {
             fprintf(stderr, "[host] invalid json: %s\n", parsed.error.c_str());
-            // send error (no requestId yet — the one error object without the field)
-            Object err;
-            err["type"] = Value("error");
-            err["protocolVersion"] = Value(3.0);
-            err["code"] = Value("invalid_json");
-            err["message"] = Value(parsed.error);
-            err["recoverable"] = Value(true);
-            std::string out = anime4k::json::stringify(Value(err));
-            write_framed(out);
+            // No requestId yet — the frame never parsed.
+            write_framed(error_json_unaddressed(native_errors::kInvalidJson, parsed.error));
             continue;
         }
         Object req = *parsed.value->as_object();
         std::string type = get_string(req, "type");
         std::string requestId = get_string(req, "requestId");
+        // Strict per-type field gate: reject an unknown key before dispatch so
+        // a typo cannot be silently ignored. Absent optional fields stay
+        // absent — this only rejects what the client never sends.
+        auto reject_unknown = [&](std::initializer_list<const char*> allowed) {
+            const char* unexpected = first_unknown_key(req, allowed);
+            if (unexpected == nullptr) return false;
+            write_framed(error_json(requestId, native_errors::kInvalidRequest,
+                                    std::string("unexpected property: ") + unexpected));
+            return true;
+        };
         // hello
         if (type == "hello") {
+            if (reject_unknown({"type", "protocolVersion", "requestId"})) continue;
             Object resp;
             resp["type"] = Value("ready");
-            resp["protocolVersion"] = Value(3.0);
+            resp["protocolVersion"] = Value(kProtocolVersion);
             resp["requestId"] = Value(requestId);
             resp["httpPort"] = Value((double)http_transport.port());
             resp["httpToken"] = Value(http_transport.token());
@@ -827,9 +900,10 @@ int main(int argc, char** argv) {
             continue;
         }
         if (type == "capabilities") {
+            if (reject_unknown({"type", "protocolVersion", "requestId"})) continue;
             Object resp;
             resp["type"] = Value("capabilities");
-            resp["protocolVersion"] = Value(3.0);
+            resp["protocolVersion"] = Value(kProtocolVersion);
             resp["requestId"] = Value(requestId);
             resp["windowsCapture"] = Value(false);
             resp["d3d11"] = Value(false);
@@ -853,6 +927,9 @@ int main(int argc, char** argv) {
             continue;
         }
         if (type == "realesrganUpscale" || type == "upscale") {
+            if (reject_unknown({"type", "protocolVersion", "requestId",
+                                "width", "height", "targetWidth", "targetHeight",
+                                "data", "shmIn", "shmOut", "dmaBufIn", "engine", "fp16"})) continue;
             int width = (int)get_number(req, "width", 0);
             int height = (int)get_number(req, "height", 0);
             int target_w = (int)get_number(req, "targetWidth", 0);
@@ -864,7 +941,7 @@ int main(int argc, char** argv) {
                 // p5 stub: DMA-BUF import (VK_EXT_external_memory_dma_buf) needs a
                 // browser-side capture path that exports frames as DMA-BUF fds.
                 // No WebExtension API exposes this today; see artifacts report.
-                write_framed(error_json(requestId, "dma_buf_unsupported",
+                write_framed(error_json(requestId, native_errors::kDmaBufUnsupported,
                     "DMA-BUF import not available: browser capture cannot export DMA-BUF fds (no WebExtension API). Use shmIn/shmOut instead."));
                 continue;
             }
@@ -884,7 +961,7 @@ int main(int argc, char** argv) {
             }
             // width/height sanity
             if (width <= 0 || height <= 0 || width > 4096 || height > 4096 || (b64.empty() && !useShmIn)) {
-                write_framed(error_json(requestId, "invalid_request", "missing width/height/data"));
+                write_framed(error_json(requestId, native_errors::kInvalidRequest, "missing width/height/data"));
                 continue;
             }
             std::vector<unsigned char> rgba;
@@ -897,7 +974,7 @@ int main(int argc, char** argv) {
                 }
             } else {
                 if (!base64_decode(b64, rgba) || rgba.size() != (size_t)width*height*4) {
-                    write_framed(error_json(requestId, "invalid_data", "base64 decode failed or size mismatch"));
+                    write_framed(error_json(requestId, native_errors::kInvalidData, "base64 decode failed or size mismatch"));
                     continue;
                 }
             }
@@ -906,12 +983,14 @@ int main(int argc, char** argv) {
             std::vector<unsigned char> out_rgba;
             int out_w = 0, out_h = 0;
             std::string err_msg;
+            std::string err_stage;
             // Shared upscale core (p7): identical GPU path for stdin and HTTP
             // transports; the core serializes GPU ownership between them and
             // counts served frames.
-            bool ok = core.run_upscale(rgba.data(), width, height, target_w, target_h, out_rgba, out_w, out_h, err_msg, reqEngine);
+            bool ok = core.run_upscale(rgba.data(), width, height, target_w, target_h, out_rgba, out_w, out_h, err_msg, reqEngine, &err_stage);
             if (!ok) {
-                write_framed(error_json(requestId, "inference_failed", err_msg.empty() ? "unknown" : err_msg));
+                write_framed(error_json(requestId, native_errors::kInferenceFailed,
+                                        err_msg.empty() ? "unknown" : err_msg, err_stage));
                 continue;
             }
             auto t1 = std::chrono::steady_clock::now();
@@ -926,7 +1005,7 @@ int main(int argc, char** argv) {
                 }
                 Object resp;
                 resp["type"] = Value("realesrganResult");
-                resp["protocolVersion"] = Value(3.0);
+                resp["protocolVersion"] = Value(kProtocolVersion);
                 resp["requestId"] = Value(requestId);
                 resp["width"] = Value((double)out_w);
                 resp["height"] = Value((double)out_h);
@@ -938,7 +1017,7 @@ int main(int argc, char** argv) {
             std::string out_b64 = base64_encode(out_rgba.data(), out_rgba.size());
             Object resp;
             resp["type"] = Value("realesrganResult");
-            resp["protocolVersion"] = Value(3.0);
+            resp["protocolVersion"] = Value(kProtocolVersion);
             resp["requestId"] = Value(requestId);
             resp["width"] = Value((double)out_w);
             resp["height"] = Value((double)out_h);
@@ -948,7 +1027,7 @@ int main(int argc, char** argv) {
             continue;
         }
         // unknown type
-        write_framed(error_json(requestId, "unknown_type", "unknown request type: " + type));
+        write_framed(error_json(requestId, native_errors::kUnknownType, "unknown request type: " + type));
     }
 
     http_transport.stop();

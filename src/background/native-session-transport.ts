@@ -5,7 +5,14 @@ import { NativeBridge } from './native-bridge';
 export type NativeEventHandler = (event: NativeEvent, client: NativeMessagingClient) => Promise<void>;
 
 /** Keeps native-session orchestration independent from connection mechanics. */
-export class NativeSessionTransport {
+export interface NativeSessionTransport {
+  connect(): Promise<NativeMessagingClient>;
+  disconnect(): void;
+  readonly currentClient: NativeMessagingClient | null;
+}
+
+/** The real transport backed by the native messaging bridge. */
+export class NativeBridgeTransport implements NativeSessionTransport {
   constructor(
     private readonly bridge: NativeBridge,
     private readonly onEvent: NativeEventHandler,

@@ -8,47 +8,12 @@
  * are invisible.
  */
 import { adaptiveRealEsrganTiling, featherWindowForOverlap, planRealEsrganTiles } from './realesrgan-tile-geometry.js';
+import { ensureByteToF32, packedRgbaView } from './realesrgan-pixels.js';
 
 export interface PlanarRgb {
   /** Channel-major floats in [0,1], length 3 * width * height. */
   data: Float32Array;
   channels: 3;
-}
-
-/** Byte -> [0,1] float with the exact `/ 255` rounding of the converters. */
-let byteToF32Table: Float32Array | null = null;
-function ensureByteToF32(): Float32Array {
-  if (!byteToF32Table) {
-    const table = new Float32Array(256);
-    for (let i = 0; i < 256; i += 1) table[i] = i / 255;
-    byteToF32Table = table;
-  }
-  return byteToF32Table;
-}
-
-const IS_LITTLE_ENDIAN: boolean = (() => {
-  try {
-    const probe = new ArrayBuffer(2);
-    new DataView(probe).setUint16(0, 1, true);
-    return new Uint16Array(probe)[0] === 1;
-  } catch {
-    return false;
-  }
-})();
-
-/**
- * Uint32 view over an RGBA8 target for the pack loops: one 32-bit store per
- * pixel instead of four byte stores. Requires little-endian and a 4-aligned
- * view; callers fall back to the byte loop when this returns null. `length`
- * is in u32 elements.
- */
-function packedRgbaView(bytes: Uint8Array, length: number): Uint32Array | null {
-  try {
-    if (!IS_LITTLE_ENDIAN || bytes.byteOffset % 4 !== 0) return null;
-    return new Uint32Array(bytes.buffer, bytes.byteOffset, length);
-  } catch {
-    return null;
-  }
 }
 
 export function rgbaToPlanarRgb(rgba: Uint8Array, width: number, height: number): PlanarRgb {
@@ -83,117 +48,30 @@ export function rgbaToPlanarRgb(rgba: Uint8Array, width: number, height: number)
   return { data, channels: 3 };
 }
 
-export function rgbPlanarToRgba(planar: Float32Array, width: number, height: number): Uint8Array {
-  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
-    throw new Error(`rgbPlanarToRgba: invalid dimensions ${width}x${height}.`);
-  }
-  if (planar.length < 3 * width * height) {
-    throw new Error(`rgbPlanarToRgba: expected at least ${3 * width * height} floats, got ${planar.length}.`);
-  }
+/**
+ * Single pack implementation behind `rgbPlanarToRgba` and
+ * `rgbPlanarToPaddedRgba`: tightly packed rows are the
+ * `bytesPerRow === width * 4` special case, so the branchless clamp +
+ * truncate-pack rule exists once. `result` is caller-owned and exactly
+ * `bytesPerRow * height` bytes.
+ */
+function packPlanarRgba(
+  planar: Float32Array,
+  width: number,
+  height: number,
+  bytesPerRow: number,
+  result: Uint8Array,
+): Uint8Array {
   const pixels = width * height;
-  const out = new Uint8Array(4 * pixels);
   const r = planar.subarray(0, pixels);
   const g = planar.subarray(pixels, 2 * pixels);
   const b = planar.subarray(2 * pixels, 3 * pixels);
-  const words = packedRgbaView(out, pixels);
   // Branchless clamp + truncate-pack: bit-identical to
   // Math.round(min(1, max(0, v)) * 255) for every float64 input (NaN and
   // infinities included — NaN fails both comparisons and packs to 0). The
   // u32 lane collapses four byte stores into one 32-bit store per pixel; the
   // branch is hoisted out of the loop because a per-pixel check is slower
   // than the stores it guards.
-  if (words) {
-    for (let i = 0; i < pixels; i += 1) {
-      const vr = r[i]!;
-      const vg = g[i]!;
-      const vb = b[i]!;
-      const cr = vr <= 0 ? 0 : vr >= 1 ? 1 : vr;
-      const cg = vg <= 0 ? 0 : vg >= 1 ? 1 : vg;
-      const cb = vb <= 0 ? 0 : vb >= 1 ? 1 : vb;
-      words[i] = ((((cr * 255 + 0.5) | 0))
-        | ((((cg * 255 + 0.5) | 0)) << 8)
-        | ((((cb * 255 + 0.5) | 0)) << 16)
-        | 0xff000000) >>> 0;
-    }
-    return out;
-  }
-  for (let i = 0; i < pixels; i += 1) {
-    const o = i * 4;
-    const vr = r[i]!;
-    const vg = g[i]!;
-    const vb = b[i]!;
-    const cr = vr <= 0 ? 0 : vr >= 1 ? 1 : vr;
-    const cg = vg <= 0 ? 0 : vg >= 1 ? 1 : vg;
-    const cb = vb <= 0 ? 0 : vb >= 1 ? 1 : vb;
-    out[o] = (cr * 255 + 0.5) | 0;
-    out[o + 1] = (cg * 255 + 0.5) | 0;
-    out[o + 2] = (cb * 255 + 0.5) | 0;
-    out[o + 3] = 255;
-  }
-  return out;
-}
-
-/**
- * Fused pack + row-pad: write planar RGB floats directly into an RGBA byte
- * array whose rows are padded to `bytesPerRow` (WebGPU's writeTexture
- * alignment). One pass instead of `rgbPlanarToRgba` followed by a separate
- * padding copy. When `bytesPerRow` equals the tight row size the result is
- * exactly `rgbPlanarToRgba`.
- */
-export function rgbPlanarToPaddedRgba(
-  planar: Float32Array,
-  width: number,
-  height: number,
-  bytesPerRow: number,
-  out?: Uint8Array,
-): Uint8Array {
-  const pixels = width * height;
-  const tightRowBytes = width * 4;
-  if (bytesPerRow === tightRowBytes) {
-    // Same out-buffer contract as the padded branch below: a caller-owned
-    // buffer of the wrong size is an error, never a silent fresh allocation
-    // (the caller would keep releasing/reading its stale buffer).
-    if (out && out.length !== 4 * pixels) {
-      throw new Error(`rgbPlanarToPaddedRgba: out buffer must hold ${4 * pixels} bytes, got ${out.length}.`);
-    }
-    if (out) {
-      const r = planar.subarray(0, pixels);
-      const g = planar.subarray(pixels, 2 * pixels);
-      const b = planar.subarray(2 * pixels, 3 * pixels);
-      const words = packedRgbaView(out, pixels);
-      if (words) {
-        for (let i = 0; i < pixels; i += 1) {
-          const vr = r[i]!;
-          const vg = g[i]!;
-          const vb = b[i]!;
-          words[i] = ((((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0)
-            | ((((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0) << 8)
-            | ((((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0) << 16)
-            | 0xff000000) >>> 0;
-        }
-        return out;
-      }
-      for (let i = 0; i < pixels; i += 1) {
-        const o = i * 4;
-        const vr = r[i]!;
-        const vg = g[i]!;
-        const vb = b[i]!;
-        out[o] = ((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0;
-        out[o + 1] = ((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0;
-        out[o + 2] = ((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0;
-        out[o + 3] = 255;
-      }
-      return out;
-    }
-    return rgbPlanarToRgba(planar, width, height);
-  }
-  const result = out ?? new Uint8Array(bytesPerRow * height);
-  if (result.length !== bytesPerRow * height) {
-    throw new Error(`rgbPlanarToPaddedRgba: out buffer must hold ${bytesPerRow * height} bytes, got ${result.length}.`);
-  }
-  const r = planar.subarray(0, pixels);
-  const g = planar.subarray(pixels, 2 * pixels);
-  const b = planar.subarray(2 * pixels, 3 * pixels);
   const words = packedRgbaView(result, (bytesPerRow * height) / 4);
   if (words) {
     const rowWords = bytesPerRow / 4;
@@ -231,6 +109,43 @@ export function rgbPlanarToPaddedRgba(
   return result;
 }
 
+export function rgbPlanarToRgba(planar: Float32Array, width: number, height: number): Uint8Array {
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new Error(`rgbPlanarToRgba: invalid dimensions ${width}x${height}.`);
+  }
+  if (planar.length < 3 * width * height) {
+    throw new Error(`rgbPlanarToRgba: expected at least ${3 * width * height} floats, got ${planar.length}.`);
+  }
+  return packPlanarRgba(planar, width, height, width * 4, new Uint8Array(4 * width * height));
+}
+
+/**
+ * Fused pack + row-pad: write planar RGB floats directly into an RGBA byte
+ * array whose rows are padded to `bytesPerRow` (WebGPU's writeTexture
+ * alignment). One pass instead of `rgbPlanarToRgba` followed by a separate
+ * padding copy. When `bytesPerRow` equals the tight row size the result is
+ * exactly `rgbPlanarToRgba`.
+ *
+ * A caller-owned `out` buffer of the wrong size is an error, never a silent
+ * fresh allocation (the caller would keep releasing/reading its stale buffer):
+ * tight rows need `4 * width * height` bytes, padded rows
+ * `bytesPerRow * height`.
+ */
+export function rgbPlanarToPaddedRgba(
+  planar: Float32Array,
+  width: number,
+  height: number,
+  bytesPerRow: number,
+  out?: Uint8Array,
+): Uint8Array {
+  const expected = bytesPerRow * height;
+  const result = out ?? new Uint8Array(expected);
+  if (result.length !== expected) {
+    throw new Error(`rgbPlanarToPaddedRgba: out buffer must hold ${expected} bytes, got ${result.length}.`);
+  }
+  return packPlanarRgba(planar, width, height, bytesPerRow, result);
+}
+
 export type TileInference = (
   tileRgb: Float32Array,
   tileWidth: number,
@@ -260,6 +175,11 @@ export interface ComposedResult {
   height: number;
 }
 
+/**
+ * Extract a rectangular tile from a channel-major planar frame. Exported
+ * because bench/tensor.bench.ts drives it directly (the worker has its own
+ * generated equivalent).
+ */
 export function extractTileRgb(
   inputRgb: Float32Array,
   sourceWidth: number,
@@ -335,7 +255,7 @@ export interface TiledInferenceResult {
 /**
  * Plan the tiles, extract each source tile, and run inference, returning the
  * per-tile upscaled results without composing them. Split out from
- * `composeTiledResult` so the caller can hand the tile results to either the
+ * `composeTileResults` so the caller can hand the tile results to either the
  * GPU composer or the CPU feathering pass without running inference twice.
  */
 export async function inferTiledResults(options: ComposeOptions): Promise<TiledInferenceResult> {
@@ -462,7 +382,3 @@ export function composeTileResults(
   return { rgb: acc, width: outWidth, height: outHeight };
 }
 
-export async function composeTiledResult(options: ComposeOptions): Promise<ComposedResult> {
-  const tiled = await inferTiledResults(options);
-  return composeTileResults(tiled, options.accumulator, options.weightSum);
-}

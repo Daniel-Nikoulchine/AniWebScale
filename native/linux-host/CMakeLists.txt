@@ -50,14 +50,34 @@ set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 set(SHADER_GEN_DIR "${CMAKE_BINARY_DIR}/generated/shaders")
 file(MAKE_DIRECTORY "${SHADER_GEN_DIR}")
 
+# Shared GLSL bodies pulled in with #include (glslang needs the
+# GL_GOOGLE_include_directive extension in the shader and -I<dir> here) and
+# parameterized per shader with -DCHANNEL_TYPE=<float16_t|float>. They are not
+# compiled standalone; every shader lists them as dependencies so editing a
+# body recompiles its users.
+set(SHADER_COMMON_BODIES
+    "${SHADER_DIR}/realesrgan_spike_preproc_body.comp"
+    "${SHADER_DIR}/realesrgan_spike_postproc_body.comp"
+    "${SHADER_DIR}/srvgg_conv_epilogue.comp"
+)
+
 set(SHADER_HEADERS "")
 foreach(shader_name IN ITEMS realesrgan_spike_postproc realesrgan_spike_preproc realesrgan_spike_preproc_f32 realesrgan_spike_postproc_f32 realesrgan_spike_preproc_down2 srvgg_conv srvgg_tail srvgg_conv_tiled srvgg_traffic)
     set(spv "${SHADER_GEN_DIR}/${shader_name}.spv")
     set(hex_header "${SHADER_GEN_DIR}/${shader_name}.comp.hex.h")
+    # Precision-parameterized body shaders select their storage channel type.
+    set(shader_defines "")
+    if(shader_name STREQUAL "realesrgan_spike_preproc" OR shader_name STREQUAL "realesrgan_spike_postproc")
+        set(shader_defines "-DCHANNEL_TYPE=float16_t")
+    elseif(shader_name STREQUAL "realesrgan_spike_preproc_f32" OR shader_name STREQUAL "realesrgan_spike_postproc_f32")
+        set(shader_defines "-DCHANNEL_TYPE=float")
+    endif()
     add_custom_command(
         OUTPUT "${spv}"
-        COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1 -e main -o "${spv}" "${SHADER_DIR}/${shader_name}.comp"
-        DEPENDS "${SHADER_DIR}/${shader_name}.comp"
+        COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.1 -e main
+                "-I${SHADER_DIR}" ${shader_defines}
+                -o "${spv}" "${SHADER_DIR}/${shader_name}.comp"
+        DEPENDS "${SHADER_DIR}/${shader_name}.comp" ${SHADER_COMMON_BODIES}
         VERBATIM
     )
     add_custom_command(
@@ -75,6 +95,10 @@ set(JSON_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 
 add_executable(aniwebscale-ncnn-host
     main.cpp
+    http-transport.cpp
+    gpu-runtime.cpp
+    gpu-frame.cpp
+    tiled-composer.cpp
     srvgg-vulkan.cpp
     ${JSON_SRC}
     ${SHADER_HEADERS}

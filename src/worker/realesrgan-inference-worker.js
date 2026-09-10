@@ -51,10 +51,10 @@ export function rewriteF16Bitcast(code) {
   );
 }
 
-export function installF16RewriteHook() {
-  if (typeof navigator === 'undefined' || !navigator.gpu) return;
-  const origRequestAdapter = navigator.gpu.requestAdapter.bind(navigator.gpu);
-  navigator.gpu.requestAdapter = async (...args) => {
+export function installF16RewriteHook(gpu = (typeof navigator === 'undefined' ? undefined : navigator.gpu)) {
+  if (!gpu) return;
+  const origRequestAdapter = gpu.requestAdapter.bind(gpu);
+  gpu.requestAdapter = async (...args) => {
     const adapter = await origRequestAdapter(...args);
     if (!adapter) return adapter;
     const origRequestDevice = adapter.requestDevice.bind(adapter);
@@ -199,7 +199,65 @@ export function buildFreeDimensionOverrides(options) {
 }
 // </generated-ort-shape-pinning>
 
-function extractTilePlanar(inputRgb, sourceWidth, sourceHeight, x, y, tileWidth, tileHeight) {
+// <generated-pixels>
+// GENERATED from src/shared/realesrgan-pixels.js — do not edit.
+// Run `node scripts/generate-worker-tiling.mjs` after changing the source.
+/**
+ * Little-endian probe. The RGBA8 pack loops store one 32-bit word per pixel
+ * (four byte stores collapsed), which only reproduces the byte-lane result on
+ * a little-endian host; big-endian callers fall back to the byte loop.
+ */
+export const isLittleEndian = (() => {
+  try {
+    const probe = new ArrayBuffer(2);
+    new DataView(probe).setUint16(0, 1, true);
+    return new Uint16Array(probe)[0] === 1;
+  } catch {
+    return false;
+  }
+})();
+
+/** Byte -> [0,1] float with the exact `/ 255` rounding of the converters. */
+let byteToF32Table = null;
+export function ensureByteToF32() {
+  if (!byteToF32Table) {
+    const table = new Float32Array(256);
+    for (let i = 0; i < 256; i += 1) table[i] = i / 255;
+    byteToF32Table = table;
+  }
+  return byteToF32Table;
+}
+
+/**
+ * Uint32 view over an RGBA8 byte target for the pack loops: one 32-bit store
+ * per pixel instead of four byte stores. Requires little-endian and a
+ * 4-aligned view; callers fall back to the byte loop when this returns null.
+ * `length` is in u32 elements; when omitted it views the whole buffer and
+ * requires a 4-byte-multiple byteLength.
+ */
+export function packedRgbaView(bytes, length) {
+  try {
+    if (!isLittleEndian || bytes.byteOffset % 4 !== 0) return null;
+    if (length === undefined) {
+      if (bytes.byteLength % 4 !== 0) return null;
+      length = bytes.byteLength >>> 2;
+    }
+    return new Uint32Array(bytes.buffer, bytes.byteOffset, length);
+  } catch {
+    return null;
+  }
+}
+
+/** Pack one RGBA pixel into a little-endian u32 word (alpha forced opaque). */
+export function packRgbaWord(r, g, b) {
+  return (r | (g << 8) | (b << 16) | 0xff000000) >>> 0;
+}
+// </generated-pixels>
+
+// <generated-compose-kernels>
+// GENERATED from src/shared/realesrgan-compose-kernels.js — do not edit.
+// Run `node scripts/generate-worker-tiling.mjs` after changing the source.
+export function extractTilePlanar(inputRgb, sourceWidth, sourceHeight, x, y, tileWidth, tileHeight) {
   const sourcePixels = sourceWidth * sourceHeight;
   const tilePixels = tileWidth * tileHeight;
   const out = new Float32Array(3 * tilePixels);
@@ -250,29 +308,7 @@ export function stackTilesToBatch(inputRgb, sourceWidth, sourceHeight, tiles) {
 
 // --- CPU compose -------------------------------------------------------------
 
-// Little-endian RGBA8 word packing for the compose pack loops: one 32-bit
-// store per pixel instead of four byte stores. Returns null (caller keeps the
-// byte lane) on big-endian or a 4-unaligned target.
-const IS_LITTLE_ENDIAN = (() => {
-  try {
-    const probe = new ArrayBuffer(2);
-    new DataView(probe).setUint16(0, 1, true);
-    return new Uint16Array(probe)[0] === 1;
-  } catch {
-    return false;
-  }
-})();
-function packedRgbaView(bytes, length) {
-  try {
-    if (!IS_LITTLE_ENDIAN || bytes.byteOffset % 4 !== 0) return null;
-    return new Uint32Array(bytes.buffer, bytes.byteOffset, length);
-  } catch {
-    return null;
-  }
-}
-function packRgbaWord(r, g, b) {
-  return (r | (g << 8) | (b << 16) | 0xff000000) >>> 0;
-}
+
 
 /**
  * CPU compose with the exact separable feathering math of
@@ -485,6 +521,7 @@ export function downscaleRgba8Box(rgba, srcWidth, srcHeight, dstWidth, dstHeight
   }
   return out;
 }
+// </generated-compose-kernels>
 
 /** Fetch a tensor's floats regardless of its location (gpu-buffer or cpu). */
 async function tensorFloats(tensor) {
@@ -497,13 +534,18 @@ async function tensorFloats(tensor) {
 // --- ORT session management -------------------------------------------------
 
 let ort = null;
-// cacheKey -> { session, ep, preferGpuOutputs, url }. Geometries per video
-// are few (fixed frame size + hysteretic crops), but the worker outlives
+// cacheKey -> { session, ep, preferGpuOutputs, url, lastUsed }. Geometries per
+// video are few (fixed frame size + hysteretic crops), but the worker outlives
 // pipelines across SPA navigations, so cap the map: evict the stalest entry
 // past the cap (a revisit just rebuilds it — cost, never incorrectness).
+// Sessions idle longer than the TTL are dropped on their next lookup so a
+// navigated-away video's GPU session (and its shape-pinned buffer) is not held
+// for the worker's whole life.
 const sessions = new Map();
 const MAX_CACHED_SESSIONS = 16;
+const SESSION_IDLE_TTL_MS = 5 * 60 * 1000;
 function cacheSession(cacheKey, entry) {
+  entry.lastUsed = Date.now();
   if (sessions.has(cacheKey)) sessions.delete(cacheKey);
   sessions.set(cacheKey, entry);
   while (sessions.size > MAX_CACHED_SESSIONS) {
@@ -601,10 +643,18 @@ export async function getSession(modelUrl, modelUrlFp16, inputBatch, inputHeight
   ].join('|');
   const cached = sessions.get(cacheKey);
   if (cached) {
-    // Refresh recency so the steady-state session is never the eviction pick.
-    sessions.delete(cacheKey);
-    sessions.set(cacheKey, cached);
-    return cached;
+    // Idle-TTL eviction: a session untouched for the TTL is dropped (the next
+    // request rebuilds it) so a navigated-away video's GPU session does not
+    // linger. Otherwise refresh recency so the steady-state session is never
+    // the cap-eviction pick.
+    if (Date.now() - (cached.lastUsed ?? 0) > SESSION_IDLE_TTL_MS) {
+      sessions.delete(cacheKey);
+    } else {
+      cached.lastUsed = Date.now();
+      sessions.delete(cacheKey);
+      sessions.set(cacheKey, cached);
+      return cached;
+    }
   }
   if (!ort) throw new Error('worker not initialised');
 
@@ -719,15 +769,22 @@ export async function handleInit(message) {
   }
 }
 
+// Bound for one `session.run` (ms). Module scope so the timeout classifier
+// and reply text share one live number instead of a hard-coded "8s".
+const RUN_TIMEOUT_MS = 8000;
+
 /**
  * ORT-boundary classifier (the ONLY prose match on this path): the runtime
- * tags nothing, so the shape-pinned output-buffer hit and the run-timeout we
- * armed ourselves with are recognized by message here, once, and converted
- * into control flow. Everything downstream of this helper decides per
- * replyCode, never per prose.
+ * tags nothing, so the shape-pinned output-buffer hit is recognized by its
+ * message here, once, and converted into control flow. Our own run timeout is
+ * recognized against the live RUN_TIMEOUT_MS in the message the timer built
+ * (not a hard-coded "8s"); other timeout-coded failures are NOT rebuild
+ * triggers and flow to the caller's batch/timeout policy.
  */
 function isShapePinnedBufferError(error) {
-  return /Shape mismatch attempting to re-use buffer|timed out after 8s/i.test(String(error));
+  if (/Shape mismatch attempting to re-use buffer/i.test(String(error))) return true;
+  const message = error && typeof error.message === 'string' ? error.message : '';
+  return message.includes(`timed out after ${RUN_TIMEOUT_MS}ms`);
 }
 
 /**
@@ -743,14 +800,13 @@ async function runShapePinned(session, inputName, tensor, outputName, rebuildSes
   // Timeout guard: ORT WebGPU can hang after a poisoned gpu-buffer shape.
   // Don't wedge the worker for 30s; fail fast so pipeline can retry.
   // The timer is cleared on settle so successful runs don't retain its
-  // closure for the full 8 s each.
-  const RUN_TIMEOUT_MS = 8000;
+  // closure for the full RUN_TIMEOUT_MS each.
   const runWithTimeout = (sess) => {
     let timer;
     const result = Promise.race([
       sess.run({ [inputName]: tensor }),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(workerError(WORKER_REPLY_TIMEOUT, 'RealESRGAN session.run timed out after 8s')), RUN_TIMEOUT_MS);
+        timer = setTimeout(() => reject(workerError(WORKER_REPLY_TIMEOUT, `RealESRGAN session.run timed out after ${RUN_TIMEOUT_MS}ms`)), RUN_TIMEOUT_MS);
       }),
     ]);
     return result.finally(() => clearTimeout(timer));
@@ -784,8 +840,7 @@ const BATCHED_TIMEOUT_STRIKES = 3;
 
 /** Timeout-coded failures (transient slowness) vs batch-breaking ones. */
 function isBatchTimeout(error) {
-  return !!error && (error.replyCode === WORKER_REPLY_TIMEOUT
-    || (typeof error.message === 'string' && /timed out after \d+s/i.test(error.message)));
+  return !!error && error.replyCode === WORKER_REPLY_TIMEOUT;
 }
 
 // --- WASM-SIMD compose (Hebel E5) --------------------------------------------

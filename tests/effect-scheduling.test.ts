@@ -95,4 +95,19 @@ describe('scheduledEffectPipelineKey', () => {
     const b = scheduledEffectPipelineKey([withParams], { width: 960, height: 540 }, { width: 3840, height: 2160 });
     expect(a).not.toBe(b);
   });
+
+  it('is canonical for params whose keys are inserted in a different order', () => {
+    const source = { width: 960, height: 540 };
+    const target = { width: 3840, height: 2160 };
+    const first: EnhancementEffect = {
+      ...upscaleX2,
+      params: { maxInferenceHeight: 480, quality: 'M' },
+    };
+    const reordered: EnhancementEffect = {
+      ...upscaleX2,
+      params: { quality: 'M', maxInferenceHeight: 480 },
+    };
+    expect(scheduledEffectPipelineKey([first], source, target))
+      .toBe(scheduledEffectPipelineKey([reordered], source, target));
+  });
 });

@@ -8,6 +8,8 @@
  * and are quantised to 8-bit here, which is what the ONNX model consumes.
  */
 
+import { ensureByteToF32, isLittleEndian, packedRgbaView } from './realesrgan-pixels.js';
+
 export type ReadbackFormat = 'rgba8unorm' | 'rgba16float';
 
 export interface ReadbackPlan {
@@ -107,48 +109,16 @@ function ensureF16Tables(): F16Tables {
   return f16Tables;
 }
 
-/** Byte -> [0,1] float with the exact `/ 255` rounding of the converters. */
-let byteToF32Table: Float32Array | null = null;
-function ensureByteToF32(): Float32Array {
-  if (!byteToF32Table) {
-    const table = new Float32Array(256);
-    for (let i = 0; i < 256; i += 1) table[i] = i / 255;
-    byteToF32Table = table;
-  }
-  return byteToF32Table;
-}
-
 /**
  * Uint16 fast view over the padded bytes when the compartment and alignment
  * allow it (little-endian host, even byteOffset/length). Falls back to null
  * and the caller uses the DataView path — same values, slower.
  */
-const IS_LITTLE_ENDIAN: boolean = (() => {
-  try {
-    const probe = new ArrayBuffer(2);
-    new DataView(probe).setUint16(0, 1, true);
-    return new Uint16Array(probe)[0] === 1;
-  } catch {
-    return false;
-  }
-})();
-
 function uint16ViewOf(padded: Uint8Array): Uint16Array | null {
   try {
-    if (!IS_LITTLE_ENDIAN) return null;
+    if (!isLittleEndian) return null;
     if (padded.byteOffset % 2 !== 0 || padded.byteLength % 2 !== 0) return null;
     return new Uint16Array(padded.buffer, padded.byteOffset, padded.byteLength / 2);
-  } catch {
-    return null;
-  }
-}
-
-/** 4-aligned uint32 view for the packed-rgba read lanes (little-endian). */
-function uint32ViewOf(padded: Uint8Array): Uint32Array | null {
-  try {
-    if (!IS_LITTLE_ENDIAN) return null;
-    if (padded.byteOffset % 4 !== 0 || padded.byteLength % 4 !== 0) return null;
-    return new Uint32Array(padded.buffer, padded.byteOffset, padded.byteLength / 4);
   } catch {
     return null;
   }
@@ -194,7 +164,7 @@ export function unpackReadback(
   // the Uint16 lane, then the DataView fallback — all through the same table
   // so every lane agrees bit for bit.
   const lut = ensureF16Tables().u8;
-  const u32 = uint32ViewOf(padded);
+  const u32 = packedRgbaView(padded);
   if (u32) {
     const strideU32 = bytesPerRow / 4;
     for (let row = 0; row < height; row += 1) {
@@ -317,7 +287,7 @@ export function unpackReadbackToPlanarRgb(
 
   if (format === 'rgba8unorm') {
     const byteToF32 = ensureByteToF32();
-    const words = uint32ViewOf(padded);
+    const words = packedRgbaView(padded);
     if (words) {
       const strideWords = bytesPerRow / 4;
       for (let row = 0; row < height; row += 1) {
@@ -351,7 +321,7 @@ export function unpackReadbackToPlanarRgb(
   // rule as unpackReadback: NaN -> 1, clamp to [0,1], quantised through 8-bit
   // first so the result stays bit-identical to the two-step chain).
   const qlut = ensureF16Tables().qf32;
-  const u32f = uint32ViewOf(padded);
+  const u32f = packedRgbaView(padded);
   if (u32f) {
     const strideU32 = bytesPerRow / 4;
     for (let row = 0; row < height; row += 1) {

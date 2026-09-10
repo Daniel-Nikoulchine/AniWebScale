@@ -26,11 +26,13 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 
 const workspace = path.resolve(dirname(fileURLToPath(import.meta.url)), '..');
-// NOTE: 4190 is on Firefox's blocked-port list (managesieve). Safe port.
-const PORT = 4193;
-const ORIGIN = `http://127.0.0.1:${PORT}`;
+// Ephemeral loopback port (avoids Firefox's blocked-port list and stale
+// listeners from a previous run).
+let ORIGIN = '';
 const HOST_BIN = path.join(workspace, 'native/linux-host/build/aniwebscale-ncnn-host');
+const ESBUILD_BIN = path.join(workspace, 'node_modules', '.bin', 'esbuild');
 const FRAMES = Number(process.env.SOAK_FRAMES || 300);
+const SOAK_TIMEOUT_MS = Number(process.env.SOAK_TIMEOUT_MS || 600_000);
 
 const server = createServer((request, response) => {
   const url = new URL(request.url || '/', ORIGIN);
@@ -43,7 +45,9 @@ const server = createServer((request, response) => {
   response.writeHead(404); response.end();
 });
 
-await new Promise(resolve => server.listen(PORT, '127.0.0.1', resolve));
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const { port: PORT } = server.address();
+ORIGIN = `http://127.0.0.1:${PORT}`;
 
 // --- Start the real host and handshake for port/token ------------------------
 function framedWrite(proc, obj) {
@@ -142,7 +146,7 @@ function safeText(error: unknown): string {
 `);
 const bundleEntry = path.join(workspace, '.tmp/soaktest/soak-entry.ts');
 execSync(
-  `npx esbuild ${bundleEntry} --bundle --format=iife --outfile=.tmp/soaktest/client-bundle.js --define:__ANIME4K_E2E__=true`,
+  `"${ESBUILD_BIN}" ${bundleEntry} --bundle --format=iife --outfile=.tmp/soaktest/client-bundle.js --define:__ANIME4K_E2E__=true`,
   { cwd: workspace, stdio: 'inherit' },
 );
 
@@ -169,15 +173,23 @@ const runner = await webExt.run({
   verbose: false,
 });
 
-await new Promise(resolve => setTimeout(resolve, 120000));
+// Poll the soak beacon until the frame loop reports DONE/FAIL, bounded by
+// SOAK_TIMEOUT_MS (default 10 min), instead of sleeping a fixed 120s.
+const deadline = Date.now() + SOAK_TIMEOUT_MS;
+let titles = [];
+let done = false;
 try {
-  const desktopRunner = runner.extensionRunners?.find(c => c.getName?.() === 'Firefox Desktop');
-  const remote = desktopRunner?.remoteFirefox;
-  const root = await remote?.client.request({ to: 'root', type: 'listTabs' }).catch(() => null);
-  const titles = (root?.tabs ?? []).slice(0, 6).map(t => t.title ?? '?');
+  while (Date.now() < deadline) {
+    const desktopRunner = runner.extensionRunners?.find(c => c.getName?.() === 'Firefox Desktop');
+    const remote = desktopRunner?.remoteFirefox;
+    const root = await remote?.client.request({ to: 'root', type: 'listTabs' }).catch(() => null);
+    titles = (root?.tabs ?? []).slice(0, 6).map(t => t.title ?? '?');
+    done = titles.some(t => t.startsWith('SOAK DONE') || t.startsWith('SOAK FAIL'));
+    if (done) break;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
   console.log('[soak] TITLES:', JSON.stringify(titles));
-  const done = titles.some(t => t.startsWith('SOAK DONE') || t.startsWith('SOAK FAIL'));
-  desktopRunner?.remoteFirefox?.disconnect?.();
+  runner.extensionRunners?.find(c => c.getName?.() === 'Firefox Desktop')?.remoteFirefox?.disconnect?.();
   await runner.exit().catch(() => {});
   process.exit(done ? 0 : 2);
 } finally {

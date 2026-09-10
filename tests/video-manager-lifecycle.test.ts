@@ -80,7 +80,7 @@ describe('video manager initialization', () => {
     // capturing one (population observes roots during initialization).
     vi.stubGlobal('MutationObserver', FakeMutationObserver);
     const manager = await import('../src/core/video-manager');
-    const enhancerMap = await import('../src/core/enhancer-map');
+    const enhancerMap = await import('../src/core/video-population');
 
     const video = new FakeVideoElement();
     const destroy = vi.fn(() => { throw new Error('teardown boom'); });

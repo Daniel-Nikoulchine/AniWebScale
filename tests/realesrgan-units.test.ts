@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RealEsrganBufferPool } from '../src/shared/realesrgan-buffer-pool';
 import { adaptiveRealEsrganTiling, defaultSingleTileMaxHeight, planRealEsrganTiles } from '../src/shared/realesrgan-tile-geometry.js';
 import { planReadback, decodeFloat16, unpackReadback, unpackReadbackToPlanarRgb, copyMappedRange } from '../src/shared/realesrgan-readback';
 import { RealEsrganFrameScheduler } from '../src/shared/realesrgan-pacing';
 import { RealEsrganFrameJobRunner } from '../src/core/realesrgan-frame-job';
 import { buildComposeBuffers } from '../src/core/realesrgan-compose';
-import { DEFAULT_REALESRGAN_TILING } from '../src/core/realesrgan-pipeline';
+import { DEFAULT_REALESRGAN_TILING, createRealEsrganPipelineClass } from '../src/core/realesrgan-pipeline';
 import { RealEsrganSessionFactory } from '../src/core/realesrgan-session';
 
 vi.mock('onnxruntime-web', () => ({
@@ -303,15 +303,6 @@ describe('RealEsrganFrameScheduler', () => {
     expect(s.shouldProcess(3, 2)).toBe(false);
   });
 
-  it('isResultCurrent drops stale results', () => {
-    const s = new RealEsrganFrameScheduler();
-    s.markStarted(1);
-    s.noteSkipped(2);
-    expect(s.isResultCurrent(1)).toBe(false);
-    expect(s.droppedResults).toBe(1);
-    expect(s.isResultCurrent(2)).toBe(true);
-  });
-
   it('newestInFlightFrame tracks unfinished work for stale-skip', () => {
     const s = new RealEsrganFrameScheduler();
     expect(s.newestInFlightFrame()).toBe(-1);
@@ -335,56 +326,62 @@ describe('RealEsrganFrameScheduler', () => {
 });
 
 describe('RealEsrganFrameJobRunner', () => {
-  it('serializes to latest-frame-wins', async () => {
+  it('serializes to latest-frame-wins and never infers refused frames', async () => {
     const scheduler = new RealEsrganFrameScheduler();
     const runner = new RealEsrganFrameJobRunner(scheduler);
-    const published: number[] = [];
+    const inferred: number[] = [];
     // Start job 1 (slow)
-    const slowInfer = () => new Promise<string>(resolve => setTimeout(() => resolve('1'), 30));
-    runner.submit({ frame: 1, capture: async () => 'c1', infer: slowInfer, publish: () => published.push(1) });
+    const slowInfer = () => new Promise<string>(resolve => setTimeout(() => {
+      inferred.push(1);
+      resolve('1');
+    }, 30));
+    runner.submit({ frame: 1, capture: async () => 'c1', infer: slowInfer });
     // Submit newer frames while busy: they should be skipped, not run
-    expect(runner.submit({ frame: 2, capture: async () => 'c2', infer: async () => '2', publish: () => published.push(2) })).toBe(false);
-    expect(runner.submit({ frame: 3, capture: async () => 'c3', infer: async () => '3', publish: () => published.push(3) })).toBe(false);
-    // Wait for first to finish: its result is stale because 3 is newer, so it should be dropped (latest wins)
+    expect(runner.submit({ frame: 2, capture: async () => 'c2', infer: async () => { inferred.push(2); return '2'; } })).toBe(false);
+    expect(runner.submit({ frame: 3, capture: async () => 'c3', infer: async () => { inferred.push(3); return '3'; } })).toBe(false);
     await new Promise(r => setTimeout(r, 50));
-    expect(published).toEqual([]);
+    expect(inferred).toEqual([1]);
     expect(scheduler.skippedFrames).toBe(2);
-    expect(scheduler.droppedResults).toBe(1);
-    // Now next frame should run and publish because it is the newest
-    expect(runner.submit({ frame: 4, capture: async () => 'c4', infer: async () => '4', publish: () => published.push(4) })).toBe(true);
+    // Now the slot is free, the next frame runs.
+    expect(runner.submit({ frame: 4, capture: async () => 'c4', infer: async () => { inferred.push(4); return '4'; } })).toBe(true);
     await new Promise(r => setTimeout(r, 10));
-    expect(published).toEqual([4]);
+    expect(inferred).toEqual([1, 4]);
   });
 
-  it('Hebel 2.4: depth 2 overlaps two jobs, newest completion publishes', async () => {
+  it('Hebel 2.4: depth 2 overlaps two jobs and infers both', async () => {
     const scheduler = new RealEsrganFrameScheduler();
     const runner = new RealEsrganFrameJobRunner(scheduler);
-    const published: number[] = [];
-    const slowInfer = () => new Promise<string>(resolve => setTimeout(() => resolve('1'), 30));
-    const fastInfer = () => new Promise<string>(resolve => setTimeout(() => resolve('2'), 5));
-    expect(runner.submit({ frame: 1, capture: async () => 'c1', infer: slowInfer, publish: () => published.push(1) }, 2)).toBe(true);
-    expect(runner.submit({ frame: 2, capture: async () => 'c2', infer: fastInfer, publish: () => published.push(2) }, 2)).toBe(true);
+    const inferred: number[] = [];
+    const slowInfer = () => new Promise<string>(resolve => setTimeout(() => {
+      inferred.push(1);
+      resolve('1');
+    }, 30));
+    const fastInfer = () => new Promise<string>(resolve => setTimeout(() => {
+      inferred.push(2);
+      resolve('2');
+    }, 5));
+    expect(runner.submit({ frame: 1, capture: async () => 'c1', infer: slowInfer }, 2)).toBe(true);
+    expect(runner.submit({ frame: 2, capture: async () => 'c2', infer: fastInfer }, 2)).toBe(true);
     await new Promise(r => setTimeout(r, 50));
-    // Frame 2 completed first while newest: published. Frame 1 landed stale: dropped.
-    expect(published).toEqual([2]);
+    expect(inferred.sort((a, b) => a - b)).toEqual([1, 2]);
     expect(scheduler.skippedFrames).toBe(0);
-    expect(scheduler.droppedResults).toBe(1);
   });
 
-  it('Hebel 2.4: rejected submissions poison newness like at depth 1', async () => {
+  it('Hebel 2.4: rejected submissions are skipped, never inferred', async () => {
     const scheduler = new RealEsrganFrameScheduler();
     const runner = new RealEsrganFrameJobRunner(scheduler);
-    const published: number[] = [];
-    const slowInfer = (tag: string) => () => new Promise<string>(resolve => setTimeout(() => resolve(tag), 30));
-    expect(runner.submit({ frame: 1, capture: async () => 'c1', infer: slowInfer('1'), publish: () => published.push(1) }, 2)).toBe(true);
-    expect(runner.submit({ frame: 2, capture: async () => 'c2', infer: slowInfer('2'), publish: () => published.push(2) }, 2)).toBe(true);
-    // Both slots busy: third frame is skipped, not run — but it still
-    // advances newest-seen, so both in-flight results land stale.
-    expect(runner.submit({ frame: 3, capture: async () => 'c3', infer: async () => '3', publish: () => published.push(3) }, 2)).toBe(false);
+    const inferred: number[] = [];
+    const slowInfer = (tag: string) => () => new Promise<string>(resolve => setTimeout(() => {
+      inferred.push(Number(tag));
+      resolve(tag);
+    }, 30));
+    expect(runner.submit({ frame: 1, capture: async () => 'c1', infer: slowInfer('1') }, 2)).toBe(true);
+    expect(runner.submit({ frame: 2, capture: async () => 'c2', infer: slowInfer('2') }, 2)).toBe(true);
+    // Both slots busy: third frame is skipped, not run.
+    expect(runner.submit({ frame: 3, capture: async () => 'c3', infer: async () => { inferred.push(3); return '3'; } }, 2)).toBe(false);
     await new Promise(r => setTimeout(r, 50));
-    expect(published).toEqual([]);
+    expect(inferred.sort((a, b) => a - b)).toEqual([1, 2]);
     expect(scheduler.skippedFrames).toBe(1);
-    expect(scheduler.droppedResults).toBe(2);
   });
 
   it('claimPresentation is the monotonic watermark for out-of-band presenters', () => {
@@ -441,6 +438,11 @@ describe('RealEsrganSessionFactory precision selection', () => {
     });
   }
 
+  it('exposes the construction-time execution config as instance state', () => {
+    const factory = makeFactory();
+    expect(factory.execution).toEqual({ preferFloat16: false, preferInt8: true });
+  });
+
   it('resolves the int8 model for int8 and the fp32 model for fp32', async () => {
     const create = await ortCreateMock();
     create.mockClear();
@@ -474,5 +476,139 @@ describe('RealEsrganSessionFactory precision selection', () => {
     expect(create).toHaveBeenCalledTimes(1);
     expect(create.mock.calls[0][0] as string)
       .toBe('url:RealESR-AnimeVideo-v3_x4.int8.static.onnx');
+  });
+});
+
+describe('RealEsrganPipeline through the fake GPU port', () => {
+  function makeTexture(width: number, height: number, format: GPUTextureFormat = 'rgba8unorm'): GPUTexture {
+    return {
+      width,
+      height,
+      format,
+      createView: vi.fn(() => ({})),
+      destroy: vi.fn(),
+    } as unknown as GPUTexture;
+  }
+
+  function makeFakeDevice() {
+    const buffers: Array<{ label?: string; mapAsync: ReturnType<typeof vi.fn> }> = [];
+    const device = {
+      createBindGroupLayout: vi.fn(() => ({})),
+      createBindGroup: vi.fn(() => ({})),
+      createPipelineLayout: vi.fn(() => ({})),
+      createRenderPipeline: vi.fn(() => ({})),
+      // Throwing here makes RealEsrganGpuComposer.tryCreate fail closed to
+      // null, so this fake exercises the CPU-only path.
+      createComputePipeline: vi.fn(() => { throw new Error('no compute support'); }),
+      createShaderModule: vi.fn(() => ({})),
+      createSampler: vi.fn(() => ({})),
+      createTexture: vi.fn((descriptor: GPUTextureDescriptor) => {
+        const size = descriptor.size as [number, number, number];
+        return makeTexture(size[0], size[1], descriptor.format as GPUTextureFormat);
+      }),
+      createBuffer: vi.fn((descriptor: GPUBufferDescriptor) => {
+        const buffer = {
+          label: descriptor.label,
+          // Never resolves: the first drain parks here, holding its slot, so
+          // the second submission exercises the scheduler's busy-skip path.
+          mapAsync: vi.fn(() => new Promise<never>(() => undefined)),
+          getMappedRange: vi.fn(() => new ArrayBuffer(descriptor.size)),
+          unmap: vi.fn(),
+          destroy: vi.fn(),
+        };
+        buffers.push(buffer);
+        return buffer;
+      }),
+      pushErrorScope: vi.fn(),
+      popErrorScope: vi.fn(() => Promise.resolve(null)),
+      queue: {
+        writeTexture: vi.fn(),
+        writeBuffer: vi.fn(),
+        submit: vi.fn(),
+        onSubmittedWorkDone: vi.fn(() => Promise.resolve()),
+      },
+    };
+    return { device, buffers };
+  }
+
+  function makeEncoder(copy: ReturnType<typeof vi.fn> = vi.fn()): GPUCommandEncoder {
+    const renderPass = {
+      setPipeline: vi.fn(),
+      setBindGroup: vi.fn(),
+      draw: vi.fn(),
+      end: vi.fn(),
+    };
+    return {
+      beginRenderPass: vi.fn(() => renderPass),
+      copyTextureToBuffer: copy,
+      finish: vi.fn(),
+    } as unknown as GPUCommandEncoder;
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('GPUTextureUsage', {
+      RENDER_ATTACHMENT: 1,
+      COPY_SRC: 2,
+      COPY_DST: 4,
+      TEXTURE_BINDING: 8,
+      STORAGE_BINDING: 16,
+    });
+    vi.stubGlobal('GPUBufferUsage', { COPY_DST: 1, MAP_READ: 2, STORAGE: 4, UNIFORM: 8 });
+    vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
+    vi.stubGlobal('GPUMapMode', { READ: 1 });
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function buildPipeline(device: ReturnType<typeof makeFakeDevice>['device']) {
+    const Ctor = createRealEsrganPipelineClass(null, null, null);
+    return new Ctor({ device: device as unknown as GPUDevice, inputTexture: makeTexture(32, 32) });
+  }
+
+  it('encodes the readback copy and primes through the fake device', () => {
+    const { device } = makeFakeDevice();
+    const pipeline = buildPipeline(device);
+    const copy = vi.fn();
+    pipeline.pass(makeEncoder(copy));
+    expect(copy).toHaveBeenCalledOnce();
+    // The copy carries the inference (== input here) dimensions.
+    expect(copy.mock.calls[0][2]).toEqual([32, 32, 1]);
+    // The prime pass ran through the output writer's fake device port.
+    expect(device.pushErrorScope).toHaveBeenCalledOnce();
+    pipeline.destroy?.();
+  });
+
+  it('releases the staging slot when the readback encode throws, then accepts the next frame', () => {
+    const { device, buffers } = makeFakeDevice();
+    const pipeline = buildPipeline(device);
+    const throwing = vi.fn(() => { throw new Error('validation failed'); });
+    expect(() => pipeline.pass(makeEncoder(throwing))).toThrow('validation failed');
+
+    const copy = vi.fn();
+    expect(() => pipeline.pass(makeEncoder(copy))).not.toThrow();
+    expect(copy).toHaveBeenCalledOnce();
+    // 8 staging slots were allocated once; no extra allocation on recovery.
+    expect(buffers.filter(buffer => buffer.label?.includes('staging'))).toHaveLength(8);
+    pipeline.destroy?.();
+  });
+
+  it('skips a frame while inference is busy and releases its claimed slot', async () => {
+    const { device } = makeFakeDevice();
+    const pipeline = buildPipeline(device);
+    pipeline.pass(makeEncoder());
+    pipeline.afterSubmit?.();
+    // Flush microtasks so the first drain parks on mapAsync, holding its slot.
+    await vi.advanceTimersByTimeAsync(0);
+
+    pipeline.pass(makeEncoder());
+    pipeline.afterSubmit?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(pipeline.getSkippedFrames?.() ?? 0).toBeGreaterThanOrEqual(1);
+    pipeline.destroy?.();
   });
 });

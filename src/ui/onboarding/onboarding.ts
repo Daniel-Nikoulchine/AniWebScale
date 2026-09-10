@@ -5,13 +5,14 @@ import type { EnhancementMode, QualityTier, RenderBackend } from '../../types';
 import { renderEnhancementSelects, refreshEnhancementControlLabels, renderEnhancementToggles } from '../enhancement-controls';
 import { refreshModeUi } from '../mode-ui';
 import { DEFAULT_SETTINGS, getSettings } from '../../utils/settings';
+import { readTheme, type ThemeMode } from '../../utils/local-settings';
 import { themeManager } from '../theme-manager';
 import { applySettings } from '../../utils/apply-settings';
-import { localizeDocument, message, initI18n, setUiLanguage, getUiLanguage, type UiLanguage } from '../i18n';
+import { relocalize, message, initI18n, setUiLanguage, getUiLanguage, type UiLanguage } from '../i18n';
 
 document.addEventListener('DOMContentLoaded', async () => {
   await initI18n();
-  localizeDocument();
+  relocalize();
   themeManager.getTheme();
   const finish = document.getElementById('finish') as HTMLButtonElement;
   // Prefill with the stored settings: onboarding reopens on update for
@@ -41,19 +42,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   language.value = getUiLanguage();
   language.addEventListener('change', () => {
     void setUiLanguage(language.value as UiLanguage).then(() => {
-      localizeDocument();
+      relocalize();
       refreshEnhancementControlLabels(controls);
     });
   });
 
   const storedTheme = await chrome.storage.local.get(['theme']);
-  const initialTheme = ['light', 'dark', 'auto'].includes(storedTheme.theme)
-    ? storedTheme.theme as 'light' | 'dark' | 'auto'
-    : 'auto';
+  const initialTheme: ThemeMode = readTheme(storedTheme);
   themeManager.setTheme(initialTheme);
   theme.value = initialTheme;
   theme.addEventListener('change', () => {
-    themeManager.setTheme(theme.value as 'light' | 'dark' | 'auto');
+    themeManager.setTheme(theme.value as ThemeMode);
   });
 
   if (stored) {
@@ -76,7 +75,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const update = {
       mode: mode.value as EnhancementMode,
       quality: quality.value as QualityTier,
-      output: 'auto' as const,
       backend: backend.value as RenderBackend,
       statsEnabled: DEFAULT_SETTINGS.statsEnabled,
       frameGenerationEnabled: frameGeneration.checked,

@@ -7,8 +7,15 @@ import { createAnime4KShaderDevice } from '../shared/wgsl-fidelity';
 import { RendererInitializationError, RendererRuntimeError } from './errors';
 import { loadPipelineConstructor } from './pipeline-loader';
 import type { Anime4KPipeline } from './pipeline-types';
+import {
+  pipelineAfterSubmit,
+  pipelineDestroy,
+  pipelineOutputDimensions,
+  pipelinePhaseStats,
+  pipelineSkippedFrames,
+} from './pipeline-types';
 import { OverloadTracker } from './render-stats';
-import { FrameGeneration, type FrameGenerationHost } from './frame-generation';
+import { FrameGeneration, type FrameGenerationHost, type FrameGenerationHistory } from './frame-generation';
 import { diffRendererConfig } from './renderer-config';
 import { EventScope } from '../shared/event-scope';
 
@@ -197,6 +204,10 @@ fn fragmentMain(@location(0) uv: vec2f) -> @location(0) vec4f {
 export interface RendererGpuProvider {
   requestAdapter(options?: GPURequestAdapterOptions): Promise<GPUAdapter | null>;
   getPreferredCanvasFormat?(): GPUTextureFormat;
+  /** Create the device for an adapter; defaults to adapter.requestDevice(). */
+  requestDevice?(adapter: GPUAdapter): Promise<GPUDevice>;
+  /** Snapshot constructor for the bit-depth probe; defaults to new VideoFrame(video). */
+  createVideoFrame?(video: HTMLVideoElement): VideoFrame;
 }
 
 export interface RendererOptions {
@@ -243,6 +254,11 @@ export class Renderer {
   private sampler!: GPUSampler;
   private presentationUniform!: GPUBuffer;
   private readonly frameGeneration: FrameGeneration;
+  // Two-texture frame history, owned here (not by the generator) so the
+  // generator's FrameGenerationHost port never sees textures or bind groups.
+  private historyTextures: [GPUTexture, GPUTexture] | null = null;
+  private historyBindGroups: [GPUBindGroup, GPUBindGroup] | null = null;
+  private historyIndex = 0;
   private pipelineTextures = new Set<GPUTexture>();
   private buildingPipelineTextures: Set<GPUTexture> | null = null;
   private pipelineEffectKey = '';
@@ -306,19 +322,21 @@ export class Renderer {
     // after construction (device recovery, source rebuilds) are always live.
     const thisRef = this;
     const host: FrameGenerationHost = {
-      get device() { return thisRef.device; },
-      get presentationUniform() { return thisRef.presentationUniform; },
-      get renderBindGroupLayout() { return thisRef.renderBindGroupLayout; },
-      get sampler() { return thisRef.sampler; },
       get video() { return thisRef.video; },
-      get finalTexture() { return thisRef.finalTexture; },
       get frameBudgetMs() { return thisRef.frameBudgetMs; },
       get frameGenerationEnabled() { return thisRef.frameGenerationEnabled; },
       isDestroyed: () => thisRef.isDestroyed(),
       isRebuilding: () => thisRef.rebuilding,
       isFrameProcessing: () => thisRef.frameProcessing,
-      refreshPresentationBindGroup: () => thisRef.createPresentationBindGroup(),
-      encodePresentation: encoder => thisRef.encodePresentation(encoder),
+      ensureHistory: () => thisRef.ensureFrameHistory(),
+      releaseHistory: () => thisRef.releaseFrameHistory(),
+      writePresentationFactor: factor => thisRef.device.queue.writeBuffer(thisRef.presentationUniform, 0, factor),
+      presentFrame: (factor, label) => {
+        thisRef.device.queue.writeBuffer(thisRef.presentationUniform, 0, factor);
+        const encoder = thisRef.device.createCommandEncoder({ label });
+        thisRef.encodePresentation(encoder);
+        thisRef.device.queue.submit([encoder.finish()]);
+      },
     };
     this.frameGeneration = new FrameGeneration(host);
   }
@@ -368,7 +386,6 @@ export class Renderer {
     this.context = this.canvas.getContext('webgpu') as unknown as GPUCanvasContext;
     if (!this.context) throw new RendererInitializationError('Could not create a WebGPU canvas context.');
     this.format = this.gpu.getPreferredCanvasFormat?.()
-      ?? navigator.gpu?.getPreferredCanvasFormat?.()
       ?? 'bgra8unorm';
     this.configureContext();
     this.createSourceTexture();
@@ -404,7 +421,9 @@ export class Renderer {
       // Anime4K only needs the WebGPU default limits. Requesting every maximum
       // reported by the adapter can make requestDevice() fail on fallback and
       // software adapters, especially with browser hardware acceleration off.
-      this.device = await adapter.requestDevice();
+      this.device = this.gpu.requestDevice
+        ? await this.gpu.requestDevice(adapter)
+        : await adapter.requestDevice();
     } catch (error) {
       throw new RendererInitializationError(
         'WebGPU could not create a device. Use the Auto or Native backend when browser hardware acceleration is disabled.',
@@ -512,7 +531,9 @@ export class Renderer {
   private async detectSourceTextureFormat(): Promise<GPUTextureFormat> {
     if (this.video.readyState < this.video.HAVE_CURRENT_DATA) return this.sourceTextureFormat;
     try {
-      const frame = new VideoFrame(this.video);
+      const frame = this.gpu.createVideoFrame
+        ? this.gpu.createVideoFrame(this.video)
+        : new VideoFrame(this.video);
       try {
         return isHighBitVideoFrameFormat(frame.format) ? 'rgba16float' : 'rgba8unorm';
       } finally {
@@ -588,7 +609,7 @@ export class Renderer {
         });
         pipelines.push(pipeline);
         currentTexture = pipeline.getOutputTexture();
-        const out = pipeline.getOutputDimensions?.();
+        const out = pipelineOutputDimensions(pipeline);
         if (out) {
           width = out.width;
           height = out.height;
@@ -606,7 +627,7 @@ export class Renderer {
 
     this.pipelines.forEach(pipeline => {
       try {
-        pipeline.destroy?.();
+        pipelineDestroy(pipeline);
       } catch {
         // A lost device may already have released this allocation; the
         // texture set below is released independently either way.
@@ -678,7 +699,10 @@ export class Renderer {
   }
 
   private createPresentationBindGroup(): void {
-    const historyBindGroup = this.frameGeneration.activeBindGroup;
+    // The history orientation bind groups are owned here; when frame
+    // generation is active they carry the previous/current pair. Otherwise
+    // the final texture is bound to both samplers (identical inputs).
+    const historyBindGroup = this.historyBindGroups?.[this.historyIndex] ?? null;
     if (historyBindGroup) {
       this.renderBindGroup = historyBindGroup;
       return;
@@ -692,6 +716,89 @@ export class Renderer {
         { binding: 3, resource: { buffer: this.presentationUniform } },
       ],
     });
+  }
+
+  /**
+   * Build (or rebuild) the two-texture history for the frame generator. The
+   * returned handle is opaque to the generator: textures and bind groups stay
+   * private here. `capture` writes the active orientation's `current` texture
+   * (binding 2 of the active bind group), which is why the target flips with
+   * the index.
+   */
+  private ensureFrameHistory(): FrameGenerationHistory | null {
+    if (!this.frameGenerationEnabled || !this.finalTexture) return null;
+    this.releaseFrameHistory();
+    const descriptor: GPUTextureDescriptor = {
+      label: 'Frame generation history',
+      size: [this.finalTexture.width, this.finalTexture.height, 1],
+      // copyTextureToTexture requires identical formats on both ends; the
+      // history source is the final pipeline output (or, with no pipelines
+      // scheduled, the 8-bit video frame texture), so inherit its format.
+      format: this.finalTexture.format,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    };
+    const first = this.device.createTexture(descriptor);
+    const second = this.device.createTexture(descriptor);
+    this.historyTextures = [first, second];
+    this.historyBindGroups = [
+      this.createHistoryBindGroup(first, second),
+      this.createHistoryBindGroup(second, first),
+    ];
+    this.historyIndex = 0;
+    const thisRef = this;
+    return {
+      seed: encoder => {
+        thisRef.copyFinalTextureTo(encoder, first);
+        thisRef.copyFinalTextureTo(encoder, second);
+      },
+      capture: encoder => {
+        const textures = thisRef.historyTextures;
+        if (!textures) return;
+        // Bind group [0] presents (previous=first, current=second); bind
+        // group [1] presents (previous=second, current=first). Capture into
+        // whichever is that orientation's current.
+        thisRef.copyFinalTextureTo(encoder, thisRef.historyIndex === 0 ? textures[1] : textures[0]);
+      },
+      swap: () => {
+        thisRef.historyIndex = thisRef.historyIndex === 0 ? 1 : 0;
+        thisRef.createPresentationBindGroup();
+      },
+    };
+  }
+
+  private releaseFrameHistory(): void {
+    for (const texture of this.historyTextures ?? []) {
+      try {
+        texture.destroy();
+      } catch {
+        // A lost device may already have released this allocation.
+      }
+    }
+    this.historyTextures = null;
+    this.historyBindGroups = null;
+    this.historyIndex = 0;
+  }
+
+  private createHistoryBindGroup(previous: GPUTexture, current: GPUTexture): GPUBindGroup {
+    return this.device.createBindGroup({
+      layout: this.renderBindGroupLayout,
+      entries: [
+        { binding: 0, resource: this.sampler },
+        { binding: 1, resource: previous.createView() },
+        { binding: 2, resource: current.createView() },
+        { binding: 3, resource: { buffer: this.presentationUniform } },
+      ],
+    });
+  }
+
+  private copyFinalTextureTo(encoder: GPUCommandEncoder, target: GPUTexture): void {
+    // A DMA copy leaves the compute units free for the enhancement passes,
+    // unlike the shader-based copy it replaces.
+    encoder.copyTextureToTexture(
+      { texture: this.finalTexture },
+      { texture: target },
+      [this.finalTexture.width, this.finalTexture.height, 1],
+    );
   }
 
   private isSecurityError(error: unknown): boolean {
@@ -900,28 +1007,41 @@ export class Renderer {
    * here; skipping it on failure paths would leak claimed slots.
    */
   private runAfterSubmit(): void {
-    this.pipelines.forEach(pipeline => pipeline.afterSubmit?.());
+    this.pipelines.forEach(pipeline => pipelineAfterSubmit(pipeline));
   }
 
   /**
-   * Pull per-phase timings from any active pipeline that implements
-   * `getPhaseStats()` (RealESRGAN today; other ONNX pipelines can follow).
-   * Merged by CAPABILITY, not position: whichever pipeline reports phase
-   * stats is the presentation-producing one — a future effect scheduled
-   * after RealESRGAN must not silently null the stats.
+   * Pull per-phase timings from the pipeline that actually produced the
+   * presented texture (`finalTexture` is the last pipeline's output), so a
+   * future effect scheduled after RealESRGAN reporting its own stats cannot
+   * shadow the presenter, and a RealESRGAN placed before another effect does
+   * not misattribute its timings to that effect's output. Falls back to the
+   * first pipeline that reports phase stats when no pipeline matches the
+   * presented texture (e.g. a test double without getOutputTexture).
    */
   private collectRealesrganPhaseStats(): RealEsrganPhaseStats | null {
+    let firstReported: RealEsrganPhaseStats | null = null;
     for (const pipeline of this.pipelines) {
-      const stats = pipeline.getPhaseStats?.();
-      if (stats) return stats;
+      const stats = pipelinePhaseStats(pipeline);
+      if (!stats) continue;
+      if (pipeline.getOutputTexture() === this.finalTexture) return stats;
+      firstReported ??= stats;
     }
-    return null;
+    return firstReported;
   }
 
+  /**
+   * Cumulative skipped/dropped frames across the active pipelines. A rebuild
+   * swaps in a fresh pipeline whose counters restart at 0, so the raw sum can
+   * decrease; the high-water mark keeps the reported total monotonic (the
+   * renderer's `droppedFrames` baseline is monotonic too, and a decreasing
+   * "dropped" readout flickers). This deliberately reports a session
+   * high-water, not a per-stats-window delta.
+   */
   private collectRealesrganSkipped(): number {
     let total = 0;
     for (const pipeline of this.pipelines) {
-      total += pipeline.getSkippedFrames?.() ?? 0;
+      total += pipelineSkippedFrames(pipeline);
     }
     if (total > this.realesrganSkippedHighWater) this.realesrganSkippedHighWater = total;
     return this.realesrganSkippedHighWater;
@@ -932,7 +1052,7 @@ export class Renderer {
     this.frameCallbackId = this.video.requestVideoFrameCallback(this.videoFrameHandler);
   }
 
-    private stopFrameCallbacks(): void {
+  private stopFrameCallbacks(): void {
     if (this.frameCallbackId !== null) {
       this.video.cancelVideoFrameCallback(this.frameCallbackId);
       this.frameCallbackId = null;
@@ -1011,25 +1131,25 @@ export class Renderer {
     return metadata;
   }
 
-  private async waitForFrameIdle(): Promise<void> {
+  // Never hang destroy/recovery forever on a wedged frame: 5s is far
+  // beyond a normal frame, after which cleanup proceeds and the
+  // in-flight frame's guards (destroyed flag) keep it from touching
+  // released resources.
+  private async waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
     const start = Date.now();
-    while (this.frameProcessing) {
-      // Never hang destroy/recovery forever on a wedged frame: 5s is far
-      // beyond a normal frame, after which cleanup proceeds and the
-      // in-flight frame's guards (destroyed flag) keep it from touching
-      // released resources.
-      if (Date.now() - start > 5_000) return;
+    while (predicate()) {
+      if (Date.now() - start > timeoutMs) return;
       await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
   }
 
+  private async waitForFrameIdle(): Promise<void> {
+    return this.waitForCondition(() => this.frameProcessing);
+  }
+
   /** Wait until neither a frame nor a rebuild holds GPU resources. */
   private async waitForIdle(): Promise<void> {
-    const start = Date.now();
-    while (this.frameProcessing || this.rebuilding) {
-      if (Date.now() - start > 5_000) return;
-      await new Promise<void>(resolve => setTimeout(resolve, 0));
-    }
+    return this.waitForCondition(() => this.frameProcessing || this.rebuilding);
   }
 
   /**
@@ -1054,6 +1174,17 @@ export class Renderer {
     return result;
   }
 
+  private async rebuildPipelineResources(): Promise<void> {
+    await this.buildPipelines();
+    this.frameGeneration.createResources();
+    this.createPresentationBindGroup();
+  }
+
+  private refreshFrameGenerationResources(): void {
+    this.frameGeneration.createResources();
+    this.createPresentationBindGroup();
+  }
+
   private async rebuildForSourceResize(): Promise<void> {
     if (this.rebuilding || this.destroyed) return;
     this.rebuilding = true;
@@ -1065,9 +1196,7 @@ export class Renderer {
       this.sourceTextureFormat = await this.detectSourceTextureFormat();
       if (this.destroyed) return;
       this.createSourceTexture();
-      await this.buildPipelines();
-      this.frameGeneration.createResources();
-      this.createPresentationBindGroup();
+      await this.rebuildPipelineResources();
     } finally {
       this.rebuilding = false;
       this.frameGeneration.flush();
@@ -1122,15 +1251,15 @@ export class Renderer {
       this.frameGenerationEnabled = options.frameGenerationEnabled;
       if (diff.needsPipelineRebuild) {
         await this.waitForQueueIdle();
+        // Keep the inline sequence: gpuStateChanged must be set between
+        // buildPipelines and frameGeneration.createResources (test-pinned).
         await this.buildPipelines();
         gpuStateChanged = true;
-        this.frameGeneration.createResources();
-        this.createPresentationBindGroup();
+        this.refreshFrameGenerationResources();
       } else if (diff.frameGenerationChanged) {
         await this.waitForQueueIdle();
         gpuStateChanged = true;
-        this.frameGeneration.createResources();
-        this.createPresentationBindGroup();
+        this.refreshFrameGenerationResources();
       }
       this.canvas.width = options.targetDimensions.width;
       this.canvas.height = options.targetDimensions.height;
@@ -1311,7 +1440,7 @@ export class Renderer {
     // leak every resource listed after it.
     const releases: Array<() => void> = [
       () => this.frameGeneration.destroyResources(),
-      ...this.pipelines.map(pipeline => () => pipeline.destroy?.()),
+      ...this.pipelines.map(pipeline => () => pipelineDestroy(pipeline)),
       () => this.destroyPipelineTextures(this.pipelineTextures),
       ...(this.buildingPipelineTextures
         ? [() => this.destroyPipelineTextures(this.buildingPipelineTextures as Set<GPUTexture>)]

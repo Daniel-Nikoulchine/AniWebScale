@@ -19,20 +19,5 @@ export const PRESENT_CURRENT_FRAME: Float32Array<ArrayBuffer> = new Float32Array
 export const PRESENT_PREVIOUS_FRAME: Float32Array<ArrayBuffer> = new Float32Array([0, 0, 0, 0]);
 export const PRESENT_INTERMEDIATE_FRAME: Float32Array<ArrayBuffer> = new Float32Array([0.5, 0, 0, 0]);
 
-/** Human-readable name of a presentation mode for diagnostics. */
-export type PresentationMode = 'current' | 'previous' | 'intermediate';
-
-/** Resolve the presentation uniform for a mode (for tests/diagnostics). */
-export function presentationUniformFor(mode: PresentationMode): Float32Array<ArrayBuffer> {
-  switch (mode) {
-    case 'current':
-      return PRESENT_CURRENT_FRAME;
-    case 'previous':
-      return PRESENT_PREVIOUS_FRAME;
-    case 'intermediate':
-      return PRESENT_INTERMEDIATE_FRAME;
-  }
-}
-
 /** The WGSL binding index of the interpolation uniform (must match the shader). */
 export const INTERPOLATION_UNIFORM_BINDING = 3 as const;

@@ -53,10 +53,6 @@ export class BackendState {
     return this.phase === 'starting';
   }
 
-  get phaseName(): BackendPhase {
-    return this.phase;
-  }
-
   /** Mark a transition as in flight. Revision ownership stays in the lifecycle. */
   beginTransition(): void {
     this.phase = 'starting';

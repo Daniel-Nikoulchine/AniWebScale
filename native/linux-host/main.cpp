@@ -553,6 +553,14 @@ int main(int argc, char** argv) {
     // MSG_NOSIGNAL for the same reason.
     std::signal(SIGPIPE, SIG_IGN);
     bool use_fp16 = true;
+    // fp32-storage mode opt-in (quality reference): numeric env for tooling
+    // (benchmarks, the wall probe) plus the --no-fp16 flag below. The
+    // extension cannot pass env through a native-messaging manifest, so this
+    // stays a process-launch option until a runtime precision message lands.
+    if (const char* e = std::getenv("ANIWEBSCALE_NO_FP16")) {
+        use_fp16 = std::atoi(e) == 0;
+        fprintf(stderr, "[host] ANIWEBSCALE_NO_FP16=%s -> fp16=%d\n", e, use_fp16);
+    }
     // Idle reaper (Zombie-Fix, 2.9.): exit after N seconds without any frame
     // on EITHER transport so a forgotten host stops pinning GPU allocations.
     // The browser re-spawns the host via Native Messaging on the next frame;
@@ -588,6 +596,20 @@ int main(int argc, char** argv) {
         inferDiv = (v == 2) ? 2 : 1;
         fprintf(stderr, "[host] ANIWEBSCALE_INFER_DIV=%s -> div=%d\n", e, inferDiv);
     }
+    // fp32 governor: keeps the fp32-storage path inside a frame budget by
+    // reducing the inference scale (postproc upscales to the target). On by
+    // default only in fp32 mode; the ~44 ms net budget leaves ~22 ms of head
+    // room under the 15 fps (66.7 ms) wall-probe budget for p95 jitter. Set
+    // the env to 0 to disable the governor (full-resolution fp32 reference).
+    double fp32BudgetMs = 44.0;
+    double fp32MsPerPx = 3.0e-4;
+    double fp32MinScale = 0.5;
+    if (const char* e = std::getenv("ANIWEBSCALE_FP32_BUDGET_MS")) {
+        fp32BudgetMs = std::atof(e);
+        fprintf(stderr, "[host] ANIWEBSCALE_FP32_BUDGET_MS=%s -> %.1f\n", e, fp32BudgetMs);
+    }
+    if (const char* e = std::getenv("ANIWEBSCALE_FP32_MS_PER_PX")) fp32MsPerPx = std::atof(e);
+    if (const char* e = std::getenv("ANIWEBSCALE_FP32_MIN_SCALE")) fp32MinScale = std::atof(e);
     // Stufe 5: Session-Warmup an (Opt-out ANIWEBSCALE_NO_WARMUP=1); der
     // --traffic-test misst bewusst kalt und bleibt ohne Vorwaermung.
     bool noWarmup = false;
@@ -603,12 +625,10 @@ int main(int argc, char** argv) {
     for (int i=1;i<argc;i++) {
         std::string a = argv[i];
         if (a == "--no-fp16") {
-            // The shared upscale core is fp16-storage GPU-only: with fp16 off
-            // the pre/postproc pipelines are never created and every frame
-            // fails with "gpu postproc pipeline unavailable". Refuse at
-            // startup instead of reporting ready and failing per frame.
-            fprintf(stderr, "[host] --no-fp16 is not supported: the GPU path is fp16-storage-only\n");
-            return 2;
+            // fp32-storage mode: the network, GPU preproc and GPU postproc all
+            // run with 32-bit channels. Numerically exact (no fp16 rounding),
+            // ~2.5x slower on NAVI22; the hand-written srvgg engine is disabled.
+            use_fp16 = false;
         }
         else if (a == "--fp16") use_fp16 = true;
         else if (a == "--param" && i+1 < argc) param_path = argv[++i];
@@ -675,6 +695,9 @@ int main(int argc, char** argv) {
     core_cfg.use_int8 = use_int8;
     core_cfg.use_srvgg_engine = useSrvggEngine;
     core_cfg.infer_div = inferDiv;
+    core_cfg.fp32_budget_ms = fp32BudgetMs;
+    core_cfg.fp32_ms_per_px = fp32MsPerPx;
+    core_cfg.fp32_min_scale = fp32MinScale;
     core_cfg.param_path = param_path;
     core_cfg.bin_path = bin_path;
     core_cfg.int8_param = int8_param;

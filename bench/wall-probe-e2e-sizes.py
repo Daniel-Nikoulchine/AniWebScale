@@ -5,6 +5,14 @@ Starts the host once, warms up, then reports median HTTP roundtrip ms for
 the inference sizes the browser pipeline actually sends (capped clip
 geometries) with presentation targets. No Python reference, no giant
 frames. Exits 0 when every probed size is under the fps budget.
+
+Honors the host's process env (inherited by the spawned binary), so the
+fp32-storage path is probeable directly:
+
+  ANIWEBSCALE_NO_FP16=1 python3 bench/wall-probe-e2e-sizes.py
+
+The fp32 governor is on by default in that mode (44 ms net budget); set
+ANIWEBSCALE_FP32_BUDGET_MS=0 for the ungouverned full-resolution reference.
 """
 import statistics
 import subprocess

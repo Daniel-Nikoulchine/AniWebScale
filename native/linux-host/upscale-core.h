@@ -49,6 +49,8 @@
 #if NCNN_VULKAN
 #include "realesrgan_spike_postproc.comp.hex.h"
 #include "realesrgan_spike_preproc.comp.hex.h"
+#include "realesrgan_spike_preproc_f32.comp.hex.h"
+#include "realesrgan_spike_postproc_f32.comp.hex.h"
 #include "realesrgan_spike_preproc_down2.comp.hex.h"
 #endif
 
@@ -61,6 +63,10 @@ struct UpscaleCoreConfig {
     bool use_int8 = false;
     bool use_srvgg_engine = false;
     int infer_div = 1; // Stufe 1: 1 voll, 2 infer at ceil(W/2) (Gate-PASS); Rest -> 1
+    // fp32 governor tuning (see UpscaleCore members). budget 0 = disabled.
+    double fp32_budget_ms = 0.0;
+    double fp32_ms_per_px = 3.0e-4;
+    double fp32_min_scale = 0.5;
     std::string param_path;
     std::string bin_path;
     std::string int8_param;
@@ -134,9 +140,21 @@ public:
     // the gpu instance back down (mirrors the original early return).
     bool load_models(const UpscaleCoreConfig& cfg) {
         use_srvgg_engine_ = cfg.use_srvgg_engine;
+        // fp32-storage mode: the network, preproc and postproc all run with
+        // 32-bit channels (elemsize 4) instead of fp16 storage (elemsize 2).
+        // ~2.5x slower on NAVI22 but numerically exact; the hand-written srvgg
+        // engine is fp16-only and is disabled for the whole process here.
+        use_fp16_ = cfg.use_fp16;
+        if (!use_fp16_) fprintf(stderr, "[host] fp32 storage mode (no fp16)\n");
         // Stufe 1: nur div=2 freigegeben (Gate 30.4 dB PASS); alles andere -> 1.
         infer_div_ = (cfg.infer_div == 2) ? 2 : 1;
         if (infer_div_ != 1) fprintf(stderr, "[host] infer-div=%d (Stufe 1)\n", infer_div_);
+        fp32_budget_ms_ = cfg.fp32_budget_ms;
+        fp32_ms_per_px_ = cfg.fp32_ms_per_px > 0 ? cfg.fp32_ms_per_px : 3.0e-4;
+        fp32_min_scale_ = cfg.fp32_min_scale > 0 ? cfg.fp32_min_scale : 0.5;
+        if (!use_fp16_ && fp32_budget_ms_ > 0)
+            fprintf(stderr, "[host] fp32 governor: budget=%.1fms cost=%.2e ms/px minscale=%.2f\n",
+                    fp32_budget_ms_, fp32_ms_per_px_, fp32_min_scale_);
 
         net_.opt.use_vulkan_compute = true;
         net_.opt.num_threads = 4;
@@ -204,6 +222,35 @@ public:
             } else {
                 fprintf(stderr, "[host] GPU preproc_down2 ready\n");
             }
+        } else {
+            // fp32-storage pipelines: same layout and push constants as the
+            // fp16 shaders, 32-bit channel type. No down2 variant — the
+            // infer-div=2 CPU box pass feeds the small frame to the fp32
+            // preproc (the down2 shader is an fp16-only optimization).
+            postproc_f32_ = new ncnn::Pipeline(device_);
+            postproc_f32_->set_optimal_local_size_xyz(32, 32, 1);
+            std::vector<ncnn::vk_specialization_type> specs(1);
+            specs[0].i = 0;
+            if (postproc_f32_->create(realesrgan_spike_postproc_f32_comp_data,
+                                      sizeof(realesrgan_spike_postproc_f32_comp_data), specs) != 0) {
+                fprintf(stderr, "[host] failed to create fp32 postproc pipeline\n");
+                delete postproc_f32_;
+                postproc_f32_ = nullptr;
+            } else {
+                fprintf(stderr, "[host] GPU fp32 postproc ready\n");
+            }
+            preproc_f32_ = new ncnn::Pipeline(device_);
+            preproc_f32_->set_optimal_local_size_xyz(32, 32, 1);
+            std::vector<ncnn::vk_specialization_type> pre_specs(1);
+            pre_specs[0].i = 0;
+            if (preproc_f32_->create(realesrgan_spike_preproc_f32_comp_data,
+                                     sizeof(realesrgan_spike_preproc_f32_comp_data), pre_specs) != 0) {
+                fprintf(stderr, "[host] failed to create fp32 preproc pipeline\n");
+                delete preproc_f32_;
+                preproc_f32_ = nullptr;
+            } else {
+                fprintf(stderr, "[host] GPU fp32 preproc ready\n");
+            }
         }
 #endif
 
@@ -222,14 +269,7 @@ public:
         staging_ = device_->acquire_staging_allocator();
         if (!blob_ || !staging_) {
             fprintf(stderr, "[host] failed to acquire Vulkan allocators\n");
-#if NCNN_VULKAN
-            delete postproc_;
-            postproc_ = nullptr;
-            delete preproc_;
-            preproc_ = nullptr;
-            delete preproc_down2_;
-            preproc_down2_ = nullptr;
-#endif
+            destroy_pipelines();
             // Same ordering rule as shutdown(): the Net must release its GPU
             // resources BEFORE the instance dies, or ~Net() SIGSEGVs later in
             // the driver. (Latent since HEAD — the failure path skipped it.)
@@ -344,12 +384,7 @@ public:
 #if NCNN_VULKAN
         delete srvgg_;
         srvgg_ = nullptr;
-        delete postproc_;
-        postproc_ = nullptr;
-        delete preproc_;
-        preproc_ = nullptr;
-        delete preproc_down2_;
-        preproc_down2_ = nullptr;
+        destroy_pipelines();
 #endif
         // Lifetime rule from the spike: the Net must release its GPU resources
         // BEFORE the instance dies. net.clear() destroys the layers now, while
@@ -382,6 +417,18 @@ public:
     uint32_t heap_budget_start_mb() const { return heap_budget_start_mb_; }
 
 private:
+    // Delete every custom pre/postproc pipeline (both precisions). Used by the
+    // load-failure path and shutdown(); null-safe and idempotent.
+    void destroy_pipelines() {
+#if NCNN_VULKAN
+        delete postproc_; postproc_ = nullptr;
+        delete postproc_f32_; postproc_f32_ = nullptr;
+        delete preproc_; preproc_ = nullptr;
+        delete preproc_f32_; preproc_f32_ = nullptr;
+        delete preproc_down2_; preproc_down2_ = nullptr;
+#endif
+    }
+
     static void report_device(const ncnn::VulkanDevice* dev) {
         const auto& info = dev->info;
         fprintf(stderr, "[host] device=%s api=%u.%u.%u driver=%s fp16_packed=%d fp16_storage=%d fp16_arith=%d rebar=%d\n",
@@ -455,6 +502,60 @@ private:
             height = sh;
             } // else: CPU-loop fallback (tiled or no down2 pipeline)
         }
+        // fp32 governor (quality-gated speed lever): true fp32 storage is
+        // ~2.5x slower than fp16 and misses the 15 fps budget at the full cap
+        // on NAVI22. With a known presentation target and a single-pass frame,
+        // pick a fractional inference scale that fits fp32_budget_ms_ and let
+        // the postproc bilinear-upscale the network output to the target.
+        // Quality loss is bounded by the budget and fp32_min_scale_; fp16 mode
+        // is untouched. Single-pass only: the tiled compose path keeps its
+        // full-resolution seam math (and the product cap never tiles).
+        if (!use_fp16_ && fp32_budget_ms_ > 0 && target_w > 0 && target_h > 0) {
+            const long long full_px = (long long)width * height;
+            if (full_px > 0 && full_px <= (long long)1280 * 720) {
+                const double budget_px = (double)fp32_budget_ms_ / fp32_ms_per_px_;
+                double s = std::sqrt(budget_px / (double)full_px);
+                if (s > 1.0) s = 1.0;
+                if (s < fp32_min_scale_) s = fp32_min_scale_;
+                const int nw = std::max(2, (int)std::lround((double)width * s));
+                const int nh = std::max(2, (int)std::lround((double)height * s));
+                if (nw < width || nh < height) {
+                    fp32_scaled_.assign((size_t)nw * nh * 4, 0);
+                    for (int y = 0; y < nh; ++y) {
+                        const float y0f = (float)y * height / nh;
+                        const float y1f = (float)(y + 1) * height / nh;
+                        const int y0 = (int)floorf(y0f), y1 = (int)ceilf(y1f);
+                        for (int x = 0; x < nw; ++x) {
+                            const float x0f = (float)x * width / nw;
+                            const float x1f = (float)(x + 1) * width / nw;
+                            const int x0 = (int)floorf(x0f), x1 = (int)ceilf(x1f);
+                            float ar = 0, ag = 0, ab = 0, wsum = 0;
+                            for (int sy = y0; sy < y1; ++sy) {
+                                const float wy = std::min(y1f, (float)sy + 1) - std::max(y0f, (float)sy);
+                                if (wy <= 0) continue;
+                                for (int sx = x0; sx < x1; ++sx) {
+                                    const float wx = std::min(x1f, (float)sx + 1) - std::max(x0f, (float)sx);
+                                    if (wx <= 0) continue;
+                                    const float wgt = wx * wy;
+                                    const unsigned char* px4 = rgba + (((size_t)sy * width) + sx) * 4;
+                                    ar += px4[0] * wgt; ag += px4[1] * wgt; ab += px4[2] * wgt;
+                                    wsum += wgt;
+                                }
+                            }
+                            const float inv = 1.0f / std::max(wsum, 1e-6f);
+                            unsigned char* d = fp32_scaled_.data() + (((size_t)y * nw) + x) * 4;
+                            d[0] = (unsigned char)std::min(255.0f, floorf(ar * inv + 0.5f));
+                            d[1] = (unsigned char)std::min(255.0f, floorf(ag * inv + 0.5f));
+                            d[2] = (unsigned char)std::min(255.0f, floorf(ab * inv + 0.5f));
+                            d[3] = 255;
+                        }
+                    }
+                    rgba = fp32_scaled_.data();
+                    width = nw;
+                    height = nh;
+                }
+            }
+        }
         const long long px = (long long)width * height;
         const bool tiled = px > (long long)1280 * 720;
         // E4 selection: explicit per-request engine wins; otherwise the
@@ -482,6 +583,10 @@ private:
             // been validated with tiles, so use it everywhere.
             ncnn::VkCompute cmd(device_);
             ncnn::Option topt = opt;
+            // fp32 storage runs the whole chain with 32-bit channels; fp16
+            // uses 16-bit. Selected once per frame from the process mode.
+            const size_t act_elemsize = use_fp16_ ? (size_t)2 : (size_t)4;
+            ncnn::Pipeline* postproc = use_fp16_ ? postproc_ : postproc_f32_;
             ncnn::VkMat rgba_gpu;
             ncnn::VkMat in_gpu_pre;
             ncnn::Mat tile_rgba_cpu;
@@ -496,7 +601,7 @@ private:
                                           (size_t)4, 1);
                 rgba_gpu.create(full_w, full_h, (size_t)4, 1, blob_);
                 cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
-                in_gpu_pre.create(iw, ih, 3, (size_t)2, 1, blob_);
+                in_gpu_pre.create(iw, ih, 3, act_elemsize, 1, blob_);
                 std::vector<ncnn::VkMat> binds(2);
                 binds[0] = rgba_gpu;
                 binds[1] = in_gpu_pre;
@@ -519,11 +624,13 @@ private:
             // No local re-declaration here: it would shadow the outer
             // in_gpu_pre that the extractor/srvgg path below actually uses,
             // leaving that outer mat empty (SIGFPE deep in ncnn's Padding).
-            in_gpu_pre.create(iw, ih, 3, (size_t)2, 1, blob_);
+            in_gpu_pre.create(iw, ih, 3, act_elemsize, 1, blob_);
             if (!in_gpu_pre.data) { emsg = "gpu input alloc failed"; return false; }
             // A failed preproc pipeline creation (logged at load) must fail
-            // the frame, not dereference a null pipeline below.
-            if (!preproc_ || !postproc_) { emsg = "gpu pre/postproc pipeline unavailable"; return false; }
+            // the frame, not dereference a null pipeline below. The pipelines
+            // are precision-matched to the network storage mode.
+            ncnn::Pipeline* preproc = use_fp16_ ? preproc_ : preproc_f32_;
+            if (!preproc || !postproc) { emsg = "gpu pre/postproc pipeline unavailable"; return false; }
             {
                 std::vector<ncnn::VkMat> binds(2);
                 binds[0] = rgba_gpu;
@@ -533,7 +640,7 @@ private:
                 consts[1].i = ih;
                 consts[2].i = (int)in_gpu_pre.cstep; // real padded cstep from the blob
                 ncnn::VkMat disp; disp.w = iw; disp.h = ih; disp.c = 1;
-                cmd.record_pipeline(preproc_, binds, consts, disp);
+                cmd.record_pipeline(preproc, binds, consts, disp);
             }
             }
             ncnn::VkMat out_gpu;
@@ -543,7 +650,9 @@ private:
             // shared: tailOut is fp16 planar exactly like extractor output.
             bool srvggServed = false;
             bool srvggAttempted = false;
-            if (allowSrvgg && wantSrvgg) {
+            // The hand-written engine consumes/produces fp16 planar only, so
+            // it is unavailable in fp32-storage mode (ncnn serves the frame).
+            if (allowSrvgg && wantSrvgg && use_fp16_) {
                 srvggAttempted = true;
                 if (!srvgg_) srvgg_ = new SrvggVulkan(device_, blob_, staging_);
                 std::string srvggErr;
@@ -568,10 +677,12 @@ private:
                 int ret = ex.extract("output", out_gpu, cmd);
                 if (ret != 0) { emsg = "extractor extract failed"; return false; }
             }
-            // Clamp the presentation target to the network output; the shader
-            // falls back to identity taps on any axis it does not shrink.
-            const int pw = std::min(fw > 0 ? fw : out_gpu.w, out_gpu.w);
-            const int ph = std::min(fh > 0 ? fh : out_gpu.h, out_gpu.h);
+            // Presentation target: exact when given (the shader picks identity,
+            // box-downscale or bilinear-upscale per axis), else the network
+            // output. fp32 mode can hand the postproc a target larger than the
+            // (governor-reduced) network output, so do NOT clamp to out_gpu.
+            const int pw = fw > 0 ? fw : out_gpu.w;
+            const int ph = fh > 0 ? fh : out_gpu.h;
             ncnn::VkMat out_rgba_gpu;
             out_rgba_gpu.create(pw, ph, (size_t)4, 1, blob_);
             if (!out_rgba_gpu.data) { emsg = "gpu output alloc failed"; return false; }
@@ -586,7 +697,7 @@ private:
                 consts[3].i = pw;
                 consts[4].i = ph;
                 ncnn::VkMat disp; disp.w = pw; disp.h = ph; disp.c = 1;
-                cmd.record_pipeline(postproc_, binds, consts, disp);
+                cmd.record_pipeline(postproc, binds, consts, disp);
             }
             ncnn::Mat dst;
             // Stufe 3 (Zero-Copy-Download): Zielvektor vorab auf pw x ph
@@ -855,14 +966,24 @@ private:
     ncnn::VkAllocator* blob_ = nullptr;
     ncnn::VkAllocator* staging_ = nullptr;
 #if NCNN_VULKAN
-    ncnn::Pipeline* postproc_ = nullptr;
-    ncnn::Pipeline* preproc_ = nullptr;
+    ncnn::Pipeline* postproc_ = nullptr;      // fp16 storage
+    ncnn::Pipeline* preproc_ = nullptr;       // fp16 storage
+    ncnn::Pipeline* postproc_f32_ = nullptr;  // fp32 storage
+    ncnn::Pipeline* preproc_f32_ = nullptr;   // fp32 storage
     ncnn::Pipeline* preproc_down2_ = nullptr; // Stufe 2: div2 in-preproc downscale
 #endif
     SrvggVulkan* srvgg_ = nullptr; // lazy, created on the first E4 frame
     std::string srvgg_models_dir_;
     bool use_srvgg_engine_ = false;
+    bool use_fp16_ = true; // false = fp32 storage (elemsize 4 everywhere)
     int infer_div_ = 1; // Stufe 1: 1 voll, 2 halb (Rest faellt auf 1)
+    // fp32 governor: target frame budget (ms), calibrated net cost (ms per
+    // input pixel) and the lowest allowed inference scale. 0 budget disables
+    // the governor (full-resolution fp32, used for A/B and quality gates).
+    double fp32_budget_ms_ = 0.0;
+    double fp32_ms_per_px_ = 3.0e-4;
+    double fp32_min_scale_ = 0.5;
+    std::vector<unsigned char> fp32_scaled_; // governor's downsampled input
     // Persistent tiled-path staging (mutex-held, see the tiled branch):
     // compose output, tile input gathering and per-tile network output.
     // Reused across frames to avoid per-frame big mallocs + the full-frame

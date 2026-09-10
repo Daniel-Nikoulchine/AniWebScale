@@ -1,18 +1,13 @@
 #version 450
-#extension GL_EXT_shader_16bit_storage: require
 
-// AniWebScale ncnn-Vulkan: GPU post-process for the RealESRGAN path.
-// Reads the network's planar fp16 RGB output (cstep-strided channels) and
-// writes packed RGBA8 bytes. When tw/th (presentation target) are smaller
-// than the network output, the shader performs an exact area average (box
-// filter with fractional edge weights) per axis BEFORE the download, so the
-// host ships only target-size bytes instead of the full 4x frame. Rounding
-// matches the reference implementation (x * 255 + 0.5, floor, clamp); the
-// identity path (tw >= w && th >= h) is bit-identical to the previous shader.
-
+// AniWebScale ncnn-Vulkan: GPU post-process for the RealESRGAN fp32-storage
+// path. 32-bit read of the network's planar float RGB output (cstep-strided
+// channels) writing packed RGBA8; identical math to the fp16 postproc shader
+// (identity + exact fractional-edge box average), only the source channel
+// type differs. The fp32 output of a use_fp16_storage=false net is elemsize 4.
 layout (constant_id = 0) const int bgr = 0;
 
-layout (binding = 0) readonly buffer bottom_blob { float16_t bottom_blob_data[]; };
+layout (binding = 0) readonly buffer bottom_blob { float bottom_blob_data[]; };
 layout (binding = 1) writeonly buffer top_blob { uint top_blob_data[]; };
 
 layout (push_constant) uniform parameter
@@ -24,12 +19,10 @@ layout (push_constant) uniform parameter
     int th;   // presentation target height (<= h: box downscale on this axis)
 } p;
 
-// Byte-domain tap: clamp to [0,1], scale to 0..255 and quantize exactly like
-// the identity path. Shared by the box (downscale) and bilinear (upscale)
-// branches so every path quantizes its taps the same way.
+// Byte-domain tap, identical to the fp16 postproc helper.
 float tap(int c, int x, int y)
 {
-    return floor(clamp(float(bottom_blob_data[c * p.cstep + y * p.w + x]) * 255.0 + 0.5, 0.0, 255.0));
+    return floor(clamp(bottom_blob_data[c * p.cstep + y * p.w + x] * 255.0 + 0.5, 0.0, 255.0));
 }
 
 void main()
@@ -48,16 +41,15 @@ void main()
 
     if (p.tw == p.w && p.th == p.h)
     {
-        // Identity: one tap, quantized exactly like the original shader.
+        // Identity: one tap, quantized exactly like the fp16 shader.
         r = tap(0, gx, gy);
         g = tap(1, gx, gy);
         b = tap(2, gx, gy);
     }
     else if (p.tw > p.w || p.th > p.h)
     {
-        // Bilinear upscale: a presentation target larger than the network
-        // output. Only reachable when the host reduced the inference scale
-        // (fp32 governor); sampled at pixel centres with clamped edges.
+        // Bilinear upscale (fp32 governor reduced the inference scale below
+        // the presentation target). Pixel-centre sampling, clamped edges.
         const float sx = (float(gx) + 0.5) * float(p.w) / float(p.tw) - 0.5;
         const float sy = (float(gy) + 0.5) * float(p.h) / float(p.th) - 0.5;
         const int fx0 = int(floor(sx));
@@ -80,20 +72,8 @@ void main()
     }
     else
     {
-        // Exact box filter. Source footprint of output pixel gx on the x
-        // axis is [gx*w/tw, (gx+1)*w/tw); each covered source pixel
-        // contributes its overlap length.
-        //
-        // Byte-domain averaging: each tap is quantized EXACTLY like the
-        // identity path BEFORE accumulating, and the final average rounds
-        // once. This matches (a) the tiled CPU downscale pass in the host
-        // and (b) the browser presentation sampler, which area-averages the
-        // already-quantized rgba8 texture. Averaging the raw fp16 values
-        // instead would quantize only once (marginally cleaner) but diverge
-        // from all three existing consumers at network-overshoot pixels.
-        // An axis whose target is >= the source falls back to a single
-        // identity tap so mixed cases (one axis downscaled, one not) stay
-        // deterministic.
+        // Exact box filter, same byte-domain accumulation as the fp16 shader
+        // (quantize each tap first, round once at the end).
         float x0f = (float(gx) * float(p.w)) / float(p.tw);
         float x1f = (float(gx + 1) * float(p.w)) / float(p.tw);
         float y0f = (float(gy) * float(p.h)) / float(p.th);
@@ -120,9 +100,9 @@ void main()
                 if (wx <= 0.0)
                     continue;
                 const float wgt = wx * wy;
-                ar += floor(clamp(float(bottom_blob_data[0 * p.cstep + row + x]) * 255.0 + 0.5, 0.0, 255.0)) * wgt;
-                ag += floor(clamp(float(bottom_blob_data[1 * p.cstep + row + x]) * 255.0 + 0.5, 0.0, 255.0)) * wgt;
-                ab += floor(clamp(float(bottom_blob_data[2 * p.cstep + row + x]) * 255.0 + 0.5, 0.0, 255.0)) * wgt;
+                ar += floor(clamp(bottom_blob_data[0 * p.cstep + row + x] * 255.0 + 0.5, 0.0, 255.0)) * wgt;
+                ag += floor(clamp(bottom_blob_data[1 * p.cstep + row + x] * 255.0 + 0.5, 0.0, 255.0)) * wgt;
+                ab += floor(clamp(bottom_blob_data[2 * p.cstep + row + x] * 255.0 + 0.5, 0.0, 255.0)) * wgt;
                 wsum += wgt;
             }
         }
@@ -132,9 +112,6 @@ void main()
         b = ab * inv;
     }
 
-    // Single final round (identity values are exact integers, so this is a
-    // no-op there and the output stays bit-identical to the original shader).
-    // bgr flag mirrors the reference preproc convention (0 on non-Windows).
     uint ur = clamp(uint(floor(r + 0.5f)), 0u, 255u);
     uint ug = clamp(uint(floor(g + 0.5f)), 0u, 255u);
     uint ub = clamp(uint(floor(b + 0.5f)), 0u, 255u);

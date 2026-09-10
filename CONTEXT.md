@@ -152,6 +152,15 @@ keine der beiden Mengen). Produzenten taggen, der Guard entscheidet —
 Produzentenseitige Klassifikation per Code, nie per Prosa (Worker-Replies
 tragen `code`, der Native-Client taggt selbst).
 
+**Fp32-Governor** — der Lastregler des Linux-ncnn-Hosts im fp32-Speichermodus
+(`--no-fp16`/`ANIWEBSCALE_NO_FP16=1`, elemsize 4 über die ganze Kette). Echtes
+fp32 ist ~2,5x langsamer als fp16; der Governor senkt daher pro Frame die
+Inferenz-Skalierung (fraktionaler CPU-Box-Downsample des Inputs) auf ein
+Netz-Zeitbudget und lässt das fp32-Postproc per Bilinear auf das
+Presentation-Target hochskalieren. Default an (44ms Budget), abschaltbar per
+`ANIWEBSCALE_FP32_BUDGET_MS=0`; fp16-Speicher und der tiled-Pfad bleiben
+unangetastet. Qualitätsbeleg: `bench/native-fp32-governor-evidence.py`.
+
 ## Renderer
 
 **Renderer** — der WebGPU-Teil (Device, Pipelines, Presentation). Besitzt

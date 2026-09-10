@@ -2,7 +2,8 @@
 
 AniWebScale applies Anime4K and other anime-focused upscalers to HTML video
 in real time. It ships as a Chrome/Firefox Manifest V3 extension and has an
-optional Windows x64 renderer for frames that WebGPU cannot import.
+optional Windows x64 renderer for frames that WebGPU cannot import, plus an
+optional Linux ncnn-Vulkan RealESRGAN host for Firefox-based browsers.
 
 The extension never rewrites `video.src`, reloads a stream, changes CORS
 headers, or re-encodes media. Audio and playback stay with the website.
@@ -30,10 +31,18 @@ The Mode selector also exposes dedicated neural upscalers:
 
 | Mode | Model and output |
 | --- | --- |
+| Real-ESRGAN AnimeVideo-v3 x4 | AnimeVideo-v3 SRVGGNetCompact, 4x output, input height capped by the Real-ESRGAN detail setting |
 | CNN Upscale x2 | Anime4K convolutional neural network, selectable M/VL/UL weights, fixed 2x internal output |
 | ArtCNN C4F16 x2 | Official ArtCNN C4F16 fragment model, fixed 2x output |
 | ACNet F8B4 x2 | Official neutral ACNet F8B4 fragment model, fixed 2x output |
 | ARNet F8B8 x2 | Official neutral ARNet F8B8 fragment model, fixed 2x output |
+
+Real-ESRGAN precision is selected automatically per device and execution
+provider — there is no precision dropdown: the native Vulkan host uses its
+fp16-storage model, the WebGPU worker uses the fp32 reference, and the WASM
+fallback session uses the INT8 model. The live overlay reports which variant
+served the frames. The `Real-ESRGAN detail` setting caps the inference input
+height (480 / 432 / 405 / 360) and is auto-stepped down under sustained load.
 
 Frame generation is an independent option. It retains two enhanced frames on
 the GPU, estimates short-range motion, and inserts one motion-adaptive midpoint
@@ -140,6 +149,24 @@ Browser extensions cannot bootstrap a Native Messaging executable themselves:
 Windows requires an external application installer to create the per-user host
 registration. The included one-click installer is therefore the automatic
 installation boundary.
+
+## Optional Linux native host (ncnn/Vulkan)
+
+For Firefox-based browsers on Linux (Zen, Firefox), `native/linux-host` builds
+an ncnn-Vulkan RealESRGAN host that the extension reaches over a
+token-authenticated loopback HTTP transport. The network runs in fp16 storage
+by default; `--no-fp16` selects a true fp32-storage path whose inference-scale
+governor keeps the frame inside a ~15 fps budget, and `ANIWEBSCALE_INFER_DIV=2`
+halves the inference resolution for weaker GPUs. Build and install it with:
+
+```bash
+cmake -S native/linux-host -B native/linux-host/build -G Ninja
+cmake --build native/linux-host/build --target aniwebscale-ncnn-host -j
+bash native/scripts/install-linux-host.sh
+```
+
+See [`native/linux-host/README.md`](native/linux-host/README.md) for the build
+dependencies, flags, environment variables and verification commands.
 
 ## Tests and packages
 

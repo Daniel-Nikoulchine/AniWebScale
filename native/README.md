@@ -1,7 +1,9 @@
 # AniWebScale native Windows helper
 
 This directory contains the optional Windows x64 backend for video frames that
-cannot be imported by the extension's WebGPU path.
+cannot be imported by the extension's WebGPU path. The separate Linux
+ncnn-Vulkan RealESRGAN host lives in [`linux-host/`](linux-host/README.md) and
+shares no code with the Windows renderer.
 
 - `Anime4K.NativeHost.exe` is a strict Native Messaging broker. It accepts
   length-prefixed UTF-8 JSON on stdin/stdout, checks every command against the

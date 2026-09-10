@@ -115,6 +115,16 @@ Konfiguration, Cache und Kaskaden-Fortschritt sind Instanzzustand — „erst
 konfigurieren, dann Session“ ist strukturell (keine Factory, keine
 Session), nicht mehr nur Await-Disziplin.
 
+**Precision (Auto)** — die pro Gerät/EP automatisch gewählte Modellvariante;
+kein User-Setting mehr (Migration v12 entfernt `realesrganPrecision` aus
+Storage/UI/Effekt-Params). Policy in
+`setupRealEsrganBrowserRuntime()`/`RealEsrganExecutionConfig`: native
+Vulkan-Host → fp16-Speicher (eigenes Modell); ORT-Worker (WebGPU) →
+fp32-Referenz; Main-Thread-Session (WASM-Fallback) → int8. fp16 bleibt aus,
+bis ORT-web valide f16-Kernel liefert (sonst ein Session-Versuch plus
+Timeout pro Shape). Die tatsächlich genutzte Variante meldet
+`RealEsrganPhaseStats.precision` (Overlay + E2E-Stats).
+
 **Frame-Job** — die Job-Orchestrierung (`src/core/realesrgan-frame-job.ts`)
 über dem Pacing-Scheduler. Sie besitzt zwei verschiedene „newest“-Fragen:
 den Publish-Gate (nur das neueste **eingereichte** Work published — für

@@ -4,6 +4,13 @@ import type { Anime4KPipeline, PipelineConstructor } from './pipeline-types';
 interface PipelineDescriptor {
   device: GPUDevice;
   inputTexture: GPUTexture;
+  /**
+   * Optional per-effect runtime parameters. RealESRGAN reads
+   * `maxInferenceHeight` from it; external-GLSL pipelines (ArtCNN/ACNet/ARNet)
+   * ignore it. Optional so existing call sites that only need
+   * device+inputTexture keep working unchanged.
+   */
+  params?: { [key: string]: unknown };
 }
 
 const lumaWGSL = `
@@ -73,9 +80,6 @@ class GlslConvPipeline implements Anime4KPipeline {
     });
   }
 
-  public updateParam(): void {
-    throw new Error('External GLSL models have no runtime parameters.');
-  }
 
   public pass(encoder: GPUCommandEncoder): void {
     const pass = encoder.beginComputePass({ label: 'External GLSL convolution' });
@@ -90,6 +94,10 @@ class GlslConvPipeline implements Anime4KPipeline {
 
   public getOutputTexture(): GPUTexture {
     return this.outputTexture;
+  }
+
+  public destroy(): void {
+    this.outputTexture.destroy();
   }
 }
 
@@ -162,9 +170,6 @@ class PixelShuffleColorMerge implements Anime4KPipeline {
     });
   }
 
-  public updateParam(): void {
-    throw new Error('External GLSL models have no runtime parameters.');
-  }
 
   public pass(encoder: GPUCommandEncoder): void {
     const pass = encoder.beginComputePass({ label: 'External GLSL pixel shuffle' });
@@ -179,6 +184,10 @@ class PixelShuffleColorMerge implements Anime4KPipeline {
 
   public getOutputTexture(): GPUTexture {
     return this.outputTexture;
+  }
+
+  public destroy(): void {
+    this.outputTexture.destroy();
   }
 }
 
@@ -217,9 +226,6 @@ class ExternalGlslPipeline implements Anime4KPipeline {
     this.pipelines.push(new PixelShuffleColorMerge(device, inputTexture, features, model.id));
   }
 
-  public updateParam(): void {
-    throw new Error('External GLSL models have no runtime parameters.');
-  }
 
   public pass(encoder: GPUCommandEncoder): void {
     this.pipelines.forEach(pipeline => pipeline.pass(encoder));
@@ -227,6 +233,10 @@ class ExternalGlslPipeline implements Anime4KPipeline {
 
   public getOutputTexture(): GPUTexture {
     return this.pipelines[this.pipelines.length - 1].getOutputTexture();
+  }
+
+  public destroy(): void {
+    this.pipelines.forEach(pipeline => pipeline.destroy?.());
   }
 }
 

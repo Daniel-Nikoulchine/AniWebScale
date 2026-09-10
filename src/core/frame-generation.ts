@@ -5,26 +5,49 @@ import {
 } from './presentation-protocol';
 
 /**
- * The presentation surface the frame generator renders into. The Renderer
+ * Opaque handle to the renderer's two-texture frame history. The renderer owns
+ * the device, the history textures and the presentation bind groups; the
+ * generator only commands semantic operations, so no texture descriptor, bind
+ * group or encoder detail leaks across the seam. `seed` fills both
+ * orientations with the current final texture (first frame), `capture` copies
+ * the final texture into the active orientation, and `swap` toggles the
+ * orientation and refreshes the renderer's presentation bind group.
+ */
+export interface FrameGenerationHistory {
+  /** Copy the final texture into BOTH history orientations (first frame). */
+  seed(encoder: GPUCommandEncoder): void;
+  /** Copy the final texture into the currently active history orientation. */
+  capture(encoder: GPUCommandEncoder): void;
+  /** Toggle previous/current and refresh the presentation bind group. */
+  swap(): void;
+}
+
+/**
+ * The presentation port the frame generator renders through. The Renderer
  * provides this; it owns the GPU device, the canvas presentation pipeline and
- * the live frame-loop state the generator must consult before acting.
+ * the live frame-loop state the generator must consult before acting. The
+ * generator never touches GPU resources directly: it asks the host to ensure
+ * the history, present a frame and write the interpolation factor.
  */
 export interface FrameGenerationHost {
-  readonly device: GPUDevice;
-  readonly presentationUniform: GPUBuffer;
-  readonly renderBindGroupLayout: GPUBindGroupLayout;
-  readonly sampler: GPUSampler;
   readonly video: HTMLVideoElement;
-  readonly finalTexture: GPUTexture;
   readonly frameBudgetMs: number;
   readonly frameGenerationEnabled: boolean;
   isDestroyed(): boolean;
   isRebuilding(): boolean;
   isFrameProcessing(): boolean;
-  /** Re-resolve the renderer's active presentation bind group. */
-  refreshPresentationBindGroup(): void;
-  /** Encode the presentation pass into the given encoder. */
-  encodePresentation(encoder: GPUCommandEncoder): void;
+  /**
+   * Build (or rebuild) the two-texture history and return an opaque handle,
+   * or null when frame generation is disabled or the final texture is not
+   * available. Idempotent: the host releases any previous history first.
+   */
+  ensureHistory(): FrameGenerationHistory | null;
+  /** Release the history textures and bind groups (the host owns them). */
+  releaseHistory(): void;
+  /** Write the interpolation factor into the presentation uniform. */
+  writePresentationFactor(factor: Float32Array<ArrayBuffer>): void;
+  /** Write the factor, encode the presentation pass and submit it. */
+  presentFrame(factor: Float32Array<ArrayBuffer>, label: string): void;
 }
 
 /**
@@ -35,15 +58,12 @@ export interface FrameGenerationHost {
  * Extracted from Renderer so the interpolation timing logic lives in one
  * place with its own interface instead of being interleaved across the frame
  * loop. The GPU presentation pipeline (device, canvas context, render
- * pipeline) stays in the Renderer; the generator reaches it through the
- * FrameGenerationHost seam.
+ * pipeline, history textures) stays in the Renderer; the generator reaches it
+ * through the FrameGenerationHost seam and only holds an opaque
+ * FrameGenerationHistory.
  */
 export class FrameGeneration {
-  private historyTextures: [GPUTexture, GPUTexture] | null = null;
-  private previousHistoryTexture: GPUTexture | null = null;
-  private currentHistoryTexture: GPUTexture | null = null;
-  private historyPresentationBindGroups: [GPUBindGroup, GPUBindGroup] | null = null;
-  private historyPresentationIndex = 0;
+  private history: FrameGenerationHistory | null = null;
   private historyReady = false;
   private generatedFrameAnimationId: number | null = null;
   private frameGenerationStartedAt = 0;
@@ -51,78 +71,27 @@ export class FrameGeneration {
 
   constructor(private readonly host: FrameGenerationHost) {}
 
-  /** Whether the frame history has been seeded and can present. */
-  get isHistoryReady(): boolean {
-    return this.historyReady;
-  }
-
   /**
-   * The presentation bind group for the current history orientation, or null
-   * when frame generation is inactive or the history is not built. The
-   * renderer uses this to decide whether to present from history or from the
-   * final enhancement texture.
+   * Whether the renderer has a history bind group to present from. Used by
+   * the renderer to choose between the history orientation and the plain
+   * final-texture bind group.
    */
-  get activeBindGroup(): GPUBindGroup | null {
-    if (!this.host.frameGenerationEnabled || !this.historyPresentationBindGroups) return null;
-    return this.historyPresentationBindGroups[this.historyPresentationIndex];
-  }
-
-  private createBinding(previous: GPUTexture, current: GPUTexture): GPUBindGroup {
-    return this.host.device.createBindGroup({
-      layout: this.host.renderBindGroupLayout,
-      entries: [
-        { binding: 0, resource: this.host.sampler },
-        { binding: 1, resource: previous.createView() },
-        { binding: 2, resource: current.createView() },
-        { binding: 3, resource: { buffer: this.host.presentationUniform } },
-      ],
-    });
+  get historyAvailable(): boolean {
+    return this.history !== null;
   }
 
   /** Build (or rebuild) the two-texture frame history. */
   createResources(): void {
     this.destroyResources();
-    if (!this.host.frameGenerationEnabled || !this.host.finalTexture) return;
-    const descriptor: GPUTextureDescriptor = {
-      label: 'Frame generation history',
-      size: [this.host.finalTexture.width, this.host.finalTexture.height, 1],
-      // copyTextureToTexture requires identical formats on both ends; the
-      // history source is the final pipeline output (or, with no pipelines
-      // scheduled, the 8-bit video frame texture), so inherit its format.
-      format: this.host.finalTexture.format,
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    };
-    this.historyTextures = [
-      this.host.device.createTexture(descriptor),
-      this.host.device.createTexture(descriptor),
-    ];
-    [this.previousHistoryTexture, this.currentHistoryTexture] = this.historyTextures;
-    this.historyPresentationBindGroups = [
-      this.createBinding(this.historyTextures[0], this.historyTextures[1]),
-      this.createBinding(this.historyTextures[1], this.historyTextures[0]),
-    ];
+    this.history = this.host.ensureHistory();
   }
 
   /** Release the frame history and stop any scheduled generated frame. */
   destroyResources(): void {
     this.stopAnimation();
-    this.historyTextures?.forEach(texture => texture.destroy());
-    this.historyTextures = null;
-    this.previousHistoryTexture = null;
-    this.currentHistoryTexture = null;
-    this.historyPresentationBindGroups = null;
-    this.historyPresentationIndex = 0;
+    this.history = null;
     this.historyReady = false;
-  }
-
-  private encodeHistoryCopy(encoder: GPUCommandEncoder, target: GPUTexture): void {
-    // A DMA copy leaves the compute units free for the enhancement passes,
-    // unlike the shader-based copy it replaces.
-    encoder.copyTextureToTexture(
-      { texture: this.host.finalTexture },
-      { texture: target },
-      [this.host.finalTexture.width, this.host.finalTexture.height, 1],
-    );
+    this.host.releaseHistory();
   }
 
   /**
@@ -132,37 +101,35 @@ export class FrameGeneration {
    * scheduled for presentation between this frame and the next.
    */
   prepareFrame(encoder: GPUCommandEncoder): boolean {
-    if (!this.host.frameGenerationEnabled || !this.previousHistoryTexture || !this.currentHistoryTexture) {
-      this.host.device.queue.writeBuffer(this.host.presentationUniform, 0, PRESENT_CURRENT_FRAME);
+    if (!this.host.frameGenerationEnabled || !this.history) {
+      this.host.writePresentationFactor(PRESENT_CURRENT_FRAME);
       return false;
     }
     this.stopAnimation();
     if (!this.historyReady) {
-      this.encodeHistoryCopy(encoder, this.previousHistoryTexture);
-      this.encodeHistoryCopy(encoder, this.currentHistoryTexture);
+      this.history.seed(encoder);
       this.historyReady = true;
-      this.host.device.queue.writeBuffer(this.host.presentationUniform, 0, PRESENT_CURRENT_FRAME);
+      this.host.writePresentationFactor(PRESENT_CURRENT_FRAME);
       return false;
     }
 
-    [this.previousHistoryTexture, this.currentHistoryTexture] = [
-      this.currentHistoryTexture,
-      this.previousHistoryTexture,
-    ];
-    this.encodeHistoryCopy(encoder, this.currentHistoryTexture);
-    this.historyPresentationIndex = this.historyPresentationIndex === 0 ? 1 : 0;
-    this.host.refreshPresentationBindGroup();
-    this.host.device.queue.writeBuffer(this.host.presentationUniform, 0, PRESENT_PREVIOUS_FRAME);
+    this.history.swap();
+    this.history.capture(encoder);
+    this.host.writePresentationFactor(PRESENT_PREVIOUS_FRAME);
     return true;
   }
 
   private renderHistoryFrame(factor: Float32Array<ArrayBuffer>, label: string): void {
     if (this.host.isDestroyed() || !this.host.frameGenerationEnabled
         || !this.historyReady || this.host.isRebuilding()) return;
-    this.host.device.queue.writeBuffer(this.host.presentationUniform, 0, factor);
-    const encoder = this.host.device.createCommandEncoder({ label });
-    this.host.encodePresentation(encoder);
-    this.host.device.queue.submit([encoder.finish()]);
+    // Called from finally blocks (pause flush, rebuild cleanup): never let a
+    // presentation failure mask the original error or produce unhandled
+    // rejections from void drainFrames.
+    try {
+      this.host.presentFrame(factor, label);
+    } catch (error) {
+      console.warn('[Anime4K] Frame generation present failed:', error);
+    }
   }
 
   private renderGeneratedIntermediate(): void {
@@ -210,6 +177,12 @@ export class FrameGeneration {
     const tick = (now: number) => {
       this.generatedFrameAnimationId = null;
       if (this.host.isDestroyed() || !this.host.frameGenerationEnabled || this.host.isRebuilding()) return;
+      // Never present an intermediate while the main loop encodes the next
+      // real frame: both write presentationUniform and would race the factor.
+      if (this.host.isFrameProcessing()) {
+        this.generatedFrameAnimationId = requestAnimationFrame(tick);
+        return;
+      }
       if (this.host.video.paused || this.host.video.ended) {
         this.onPlaybackStopped();
         return;

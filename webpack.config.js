@@ -6,6 +6,7 @@ const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const ExtensionManifestPlugin = require('webpack-extension-manifest-plugin');
 const WebExtensionPlugin = require('webpack-target-webextension');
 const { Compilation, DefinePlugin, sources } = require('webpack');
+const { toWebpackAliases } = require('./scripts/webpack-aliases.cjs');
 
 class RemoveUnsafeGlobalFallbackPlugin {
   apply(compiler) {
@@ -121,19 +122,7 @@ module.exports = (env, argv) => {
     },
     resolve: {
       extensions: ['.ts', '.js'],
-      alias: {
-        'anime4k-webgpu/core$': path.resolve(__dirname, '.generated/anime4k-webgpu/core.js'),
-        'anime4k-webgpu/common$': path.resolve(__dirname, '.generated/anime4k-webgpu/common.js'),
-        'anime4k-webgpu/quality-m$': path.resolve(__dirname, '.generated/anime4k-webgpu/quality-m.js'),
-        'anime4k-webgpu/quality-vl$': path.resolve(__dirname, '.generated/anime4k-webgpu/quality-vl.js'),
-        'anime4k-webgpu/quality-ul$': path.resolve(__dirname, '.generated/anime4k-webgpu/quality-ul.js'),
-        'anime4k-model/cnn-soft-ul$': path.resolve(__dirname, '.generated/anime4k-models/cnn-soft-ul.js'),
-        'anime4k-model/denoise-cnn-x2-m$': path.resolve(__dirname, '.generated/anime4k-models/denoise-cnn-x2-m.js'),
-        'anime4k-model/denoise-cnn-x2-ul$': path.resolve(__dirname, '.generated/anime4k-models/denoise-cnn-x2-ul.js'),
-        'anime4k-model/artcnn-x2$': path.resolve(__dirname, '.generated/anime4k-models/artcnn-x2.js'),
-        'anime4k-model/acnet-x2$': path.resolve(__dirname, '.generated/anime4k-models/acnet-x2.js'),
-        'anime4k-model/arnet-x2$': path.resolve(__dirname, '.generated/anime4k-models/arnet-x2.js'),
-      },
+      alias: toWebpackAliases(),
     },
     plugins: [
       new DefinePlugin({
@@ -145,6 +134,66 @@ module.exports = (env, argv) => {
           { from: '*.png', context: 'public/icons', to: 'icons' },
           { from: 'public/_locales', to: '_locales' },
           { from: 'public/licenses', to: 'licenses' },
+          // onnxruntime-web runtime for the RealESRGAN/RealCUGAN ONNX inference
+          // paths. The session factory points env.wasm.wasmPaths and the worker
+          // bundle import at these extension-relative URLs.
+          //
+          // ort.webgpu.bundle.min.mjs is the standalone WebGPU-enabled bundle
+          // (matches the `ort/ort.webgpu.min.mjs` path the worker hands to the
+          // blob-URL import).
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort.webgpu.bundle.min.mjs',
+            to: 'ort/ort.webgpu.min.mjs',
+          },
+          // The .mjs + .wasm pair for the jsep (WebGPU + multi-thread) WASM
+          // module. onnxruntime-web dynamically imports the .mjs wrapper to
+          // initialise the WebGPU execution provider; copying only the .wasm
+          // (as we did previously) makes that import fail with
+          // "error loading dynamically imported module: ...jsep.mjs".
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs',
+            to: 'ort/ort-wasm-simd-threaded.jsep.mjs',
+          },
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm',
+            to: 'ort/ort-wasm-simd-threaded.jsep.wasm',
+          },
+          // Single-threaded WASM fallback (no WebGPU, no SharedArrayBuffer).
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm',
+            to: 'ort/ort-wasm-simd-threaded.wasm',
+          },
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs',
+            to: 'ort/ort-wasm-simd-threaded.mjs',
+          },
+          // The asyncify build is what onnxruntime-web actually uses in the
+          // browser by default (the WebGPU .bundle + asyncify WASM are the
+          // pair the runtime is wired against in 1.29+).
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm',
+            to: 'ort/ort-wasm-simd-threaded.asyncify.wasm',
+          },
+          {
+            from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs',
+            to: 'ort/ort-wasm-simd-threaded.asyncify.mjs',
+          },
+          // The RealESRGAN inference worker is loaded at runtime as an
+          // unbundled plain-JS module (fetched, wrapped in a Blob URL, started
+          // as a module worker), so it must ship verbatim. Missing this copy
+          // made the client's fetch 404 and silently disabled the whole
+          // worker path (every frame fell back to the main-thread session).
+          { from: 'src/worker/*.js', to: 'chunks/[name][ext]' },
+          // Hebel E5: the WASM-SIMD compose module the worker fetches at
+          // runtime. Optional like the FP16 models: absence only costs the
+          // SIMD speedup (JS compose fallback), never a frame. Built by
+          // npm run generate:pixels-wasm (cargo-less checkouts keep a stale
+          // copy or ship without).
+          { from: 'wasm/pixels.wasm', to: 'chunks/pixels.wasm', noErrorOnMissing: true },
+          { from: 'models', to: 'models', globOptions: { ignore: ['**/*.fp16.onnx'] } },
+          // Optional FP16 models are copied only when present in the source
+          // tree; the runtime probes the asset and falls back to FP32.
+          { from: 'models/realesrgan/*.fp16.onnx', to: 'models/realesrgan/[name][ext]', noErrorOnMissing: true },
         ],
       }),
       new HtmlWebpackPlugin({

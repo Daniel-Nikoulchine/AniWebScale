@@ -1,7 +1,13 @@
 import enCatalogJson from '../../public/_locales/en/messages.json';
 import deCatalogJson from '../../public/_locales/de/messages.json';
+import { isUiLanguage, type UiLanguage } from '../utils/local-settings';
 
-export type UiLanguage = 'auto' | 'en' | 'de';
+// NOTE: the native-capture prompt string lives in src/shared/native-consent.ts
+// (not owned by this module). Its catalog key `nativeConsentPrompt` is already
+// published here so that file can switch to message('nativeConsentPrompt', ...)
+// once it moves onto the shared i18n seam.
+
+export type { UiLanguage };
 
 interface CatalogEntry {
   message: string;
@@ -27,16 +33,8 @@ function browserUiLanguage(): 'en' | 'de' {
 }
 
 function applyLanguage(value: unknown): void {
-  uiLanguage = value === 'en' || value === 'de' ? value : 'auto';
+  uiLanguage = isUiLanguage(value) ? value : 'auto';
   resolvedLanguage = uiLanguage === 'auto' ? browserUiLanguage() : uiLanguage;
-}
-
-/**
- * The language the page surfaces should resolve to: the user's explicit
- * choice (en/de), or the browser UI language when set to 'auto'.
- */
-export function getResolvedLanguage(): 'en' | 'de' {
-  return resolvedLanguage;
 }
 
 /**
@@ -89,16 +87,42 @@ export function message(
   );
 }
 
-export function localizeDocument(root: Document = document): void {
-  root.documentElement.lang = resolvedLanguage;
-  root.querySelectorAll<HTMLElement>('[data-i18n]').forEach(element => {
-    const key = element.dataset.i18n || '';
-    const translated = message(key);
-    if (translated) element.textContent = translated;
-  });
-  root.querySelectorAll<HTMLElement>('[data-i18n-aria-label]').forEach(element => {
-    const key = element.dataset.i18nAriaLabel || '';
-    const translated = message(key);
-    if (translated) element.setAttribute('aria-label', translated);
-  });
+/**
+ * The declared localized-attribute set. `localizeDocument` is data-driven over
+ * it, so a new binding is one table row rather than a new query loop.
+ */
+type LocalizedApplier = (element: HTMLElement, value: string) => void;
+
+const LOCALIZED_ATTRIBUTES: ReadonlyArray<{ attribute: string; apply: LocalizedApplier }> = [
+  {
+    attribute: 'data-i18n',
+    apply: (element, value) => {
+      // Setting textContent on an <optgroup> would drop its options; its
+      // label is the localizable surface instead.
+      if (element instanceof HTMLOptGroupElement) element.label = value;
+      else element.textContent = value;
+    },
+  },
+  { attribute: 'data-i18n-title', apply: (element, value) => element.setAttribute('title', value) },
+  { attribute: 'data-i18n-placeholder', apply: (element, value) => element.setAttribute('placeholder', value) },
+  { attribute: 'data-i18n-aria-label', apply: (element, value) => element.setAttribute('aria-label', value) },
+];
+
+export function localizeDocument(root: ParentNode = document): void {
+  if (root instanceof Document) root.documentElement.lang = resolvedLanguage;
+  for (const { attribute, apply } of LOCALIZED_ATTRIBUTES) {
+    root.querySelectorAll<HTMLElement>(`[${attribute}]`).forEach(element => {
+      const key = element.getAttribute(attribute) || '';
+      const translated = message(key);
+      if (translated) apply(element, translated);
+    });
+  }
+}
+
+/**
+ * Re-apply the current catalog to the live DOM, including dynamically rebuilt
+ * selects whose options carry the declared data attributes.
+ */
+export function relocalize(root: ParentNode = document): void {
+  localizeDocument(root);
 }

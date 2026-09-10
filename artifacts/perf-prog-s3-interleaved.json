@@ -1,0 +1,129 @@
+{
+ "tool": "host-latency-bench-s3-interleaved",
+ "design": "3 rounds alternating vorher(/tmp/host-s3-vorher, pre-change build) vs nachher(current build), same thermal regime, n=10, warmup=2",
+ "rounds": [
+  {
+   "round": 1,
+   "cases": [
+    {
+     "width": 480,
+     "height": 360,
+     "outWidth": 1920,
+     "outHeight": 1440,
+     "vorherMs": 25.25,
+     "nachherMs": 22.92,
+     "deltaPct": -9.2
+    },
+    {
+     "width": 960,
+     "height": 540,
+     "outWidth": 3840,
+     "outHeight": 2160,
+     "vorherMs": 91.96,
+     "nachherMs": 87.26,
+     "deltaPct": -5.11
+    },
+    {
+     "width": 1280,
+     "height": 720,
+     "outWidth": 5120,
+     "outHeight": 2880,
+     "vorherMs": 216.65,
+     "nachherMs": 196.71,
+     "deltaPct": -9.21
+    },
+    {
+     "width": 1920,
+     "height": 1080,
+     "outWidth": 7680,
+     "outHeight": 4320,
+     "vorherMs": 422.24,
+     "nachherMs": 421.0,
+     "deltaPct": -0.29
+    }
+   ]
+  },
+  {
+   "round": 2,
+   "cases": [
+    {
+     "width": 480,
+     "height": 360,
+     "outWidth": 1920,
+     "outHeight": 1440,
+     "vorherMs": 24.47,
+     "nachherMs": 23.78,
+     "deltaPct": -2.81
+    },
+    {
+     "width": 960,
+     "height": 540,
+     "outWidth": 3840,
+     "outHeight": 2160,
+     "vorherMs": 92.22,
+     "nachherMs": 88.07,
+     "deltaPct": -4.49
+    },
+    {
+     "width": 1280,
+     "height": 720,
+     "outWidth": 5120,
+     "outHeight": 2880,
+     "vorherMs": 217.21,
+     "nachherMs": 206.42,
+     "deltaPct": -4.97
+    },
+    {
+     "width": 1920,
+     "height": 1080,
+     "outWidth": 7680,
+     "outHeight": 4320,
+     "vorherMs": 426.61,
+     "nachherMs": 423.21,
+     "deltaPct": -0.8
+    }
+   ]
+  },
+  {
+   "round": 3,
+   "cases": [
+    {
+     "width": 480,
+     "height": 360,
+     "outWidth": 1920,
+     "outHeight": 1440,
+     "vorherMs": 25.09,
+     "nachherMs": 23.39,
+     "deltaPct": -6.78
+    },
+    {
+     "width": 960,
+     "height": 540,
+     "outWidth": 3840,
+     "outHeight": 2160,
+     "vorherMs": 93.01,
+     "nachherMs": 86.81,
+     "deltaPct": -6.66
+    },
+    {
+     "width": 1280,
+     "height": 720,
+     "outWidth": 5120,
+     "outHeight": 2880,
+     "vorherMs": 216.56,
+     "nachherMs": 195.43,
+     "deltaPct": -9.76
+    },
+    {
+     "width": 1920,
+     "height": 1080,
+     "outWidth": 7680,
+     "outHeight": 4320,
+     "vorherMs": 421.88,
+     "nachherMs": 418.37,
+     "deltaPct": -0.83
+    }
+   ]
+  }
+ ]
+}

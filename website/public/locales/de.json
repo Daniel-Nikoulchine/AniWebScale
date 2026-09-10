@@ -60,7 +60,7 @@
     "message": "Alle Website-Zugriffe entfernt"
   },
   "cmpCaption": {
-    "message": "Interaktive visuelle Vorschau"
+    "message": "Echte Modellausgabe — Regler ziehen"
   },
   "cmpItem1": {
     "message": "Sauberere Konturen"
@@ -69,16 +69,13 @@
     "message": "Glattere Farbbänder"
   },
   "cmpItem3": {
-    "message": "Schärfere Details bei 2x und 4x"
-  },
-  "cmpKicker": {
-    "message": "02 / SIEH DEN UNTERSCHIED"
+    "message": "Schärfere Details durch KI-Upscaling"
   },
   "cmpText": {
-    "message": "Ziehe den Regler, um das Original-Frame mit einer Anime4K-verbesserten Vorschau zu vergleichen."
+    "message": "Ziehe den Regler, um das Original-Frame mit einem echten KI-hochskalierten Render zu vergleichen."
   },
   "cmpTitle": {
-    "message": "Weiche Quelle,<br><em>scharfer Render.</em>"
+    "message": "Weiche Quelle,<br>scharfer Render."
   },
   "colorTheme": {
     "message": "Farbschema"
@@ -104,8 +101,8 @@
   "disablingExtension": {
     "message": "Erweiterung wird deaktiviert..."
   },
-  "dlKicker": {
-    "message": "BEREIT, WENN DU ES BIST"
+  "dlGithub": {
+    "message": "Entwicklung auf GitHub verfolgen →"
   },
   "dlNote": {
     "message": "Store-Listings werden vorbereitet. Download-Links erscheinen hier, sobald sie live sind."
@@ -188,14 +185,11 @@
   "faq6Q": {
     "message": "Wie bekomme ich Support?"
   },
-  "faqKicker": {
-    "message": "03 / GUT ZU WISSEN"
-  },
   "faqSub": {
     "message": "Noch neugierig? Die Erweiterung ist darauf ausgelegt, berechenbar, lokal und leicht rückgängig zu machen zu sein."
   },
   "faqTitle": {
-    "message": "Fragen<br><em>treffen Antworten.</em>"
+    "message": "Fragen<br>treffen Antworten."
   },
   "feat1Text": {
     "message": "Anime4K und KI-gestützte Modi schärfen jedes Frame, während dein Video weiterspielt."
@@ -233,14 +227,11 @@
   "feat6Title": {
     "message": "Gemacht für Line Art"
   },
-  "featKicker": {
-    "message": "01 / DAS GUTE ZEUG"
-  },
   "featSub": {
     "message": "Gebaut für animierte Inhalte, bei denen klare Konturen und feine Farbabstufungen am wichtigsten sind."
   },
   "featTitle": {
-    "message": "Eine kleine Erweiterung.<br><em>Jedes Frame geschärft.</em>"
+    "message": "Eine kleine Erweiterung.<br>Jedes Frame geschärft."
   },
   "finishSetup": {
     "message": "Einrichtung abschließen"
@@ -296,20 +287,8 @@
   "frameMotion2xEvenOff": {
     "message": "Bewegungsbasierte 2x-Rate, auch bei ausgeschalteter Verbesserung."
   },
-  "gpuCheck": {
-    "message": "Anforderungen prüfen"
-  },
-  "gpuNoticeAria": {
-    "message": "Grafikkarten-Anforderung"
-  },
-  "gpuText": {
-    "message": "Neuere integrierte Grafikkarten schaffen leichtere Presets. Für flüssiges 4K, KI-Upscaling und Frame-Generierung empfiehlt sich eine leistungsstarke dedizierte Grafikkarte mit aktuellen Treibern und ausreichend VRAM."
-  },
-  "gpuTitle": {
-    "message": "Eine moderne GPU ist erforderlich."
-  },
   "heroArtAria": {
-    "message": "Stilisierter AniWebScale-Videoplayer"
+    "message": "AniWebScale-Videoplayer mit echter Upscaling-Vorschau"
   },
   "heroCta": {
     "message": "Zum Browser hinzufügen"
@@ -384,67 +363,67 @@
     "message": "Stellt Liniendetails wieder her und skaliert anschließend mit Anime4K CNN. Die ausgewogene Voreinstellung für die meisten Anime."
   },
   "modeAOption": {
-    "message": "Anime4K A - Ausgewogene Wiederherstellung + 2x-Skalierung (Empfohlen)"
+    "message": "Anime4K A · Ausgewogen"
   },
   "modeAaDescription": {
     "message": "Führt die Anime4K-A-Kette zweimal aus, für stärkere Details und bis zu 4x Skalierung. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels."
   },
   "modeAaOption": {
-    "message": "Anime4K A+A - Starke Wiederherstellung in 2 Durchläufen + bis zu 4x"
+    "message": "Anime4K A+A · Stark"
   },
   "modeAcNetDescription": {
     "message": "Kleines festes 2x-GLSL-Netz, das Geschwindigkeit und sehr geringe GPU-Last priorisiert."
   },
   "modeAcNetOption": {
-    "message": "ACNet F8B4 2x - Schnelle leichte Skalierung (GPU: sehr gering)"
+    "message": "ACNet · Schnell"
   },
   "modeArNetDescription": {
     "message": "Tieferes festes 2x-GLSL-Netz mit stärkerer Detailwiederherstellung als ACNet bei ausgewogener GPU-Last."
   },
   "modeArNetOption": {
-    "message": "ARNet F8B8 2x - Starke Detailwiederherstellung (GPU: ausgewogen)"
+    "message": "ARNet · Starke Details"
   },
   "modeArtCnnDescription": {
     "message": "Festes 2x-GLSL-Netz zur Rekonstruktion von Anime-Linien und natürlichen Details in Echtzeit."
   },
   "modeArtCnnOption": {
-    "message": "ArtCNN C4F16 2x - Linien-/Detailrekonstruktion (GPU: Echtzeit)"
+    "message": "ArtCNN · Liniendetails"
   },
   "modeBDescription": {
     "message": "Verwendet eine sanftere Wiederherstellung vor der Anime4K-CNN-Skalierung, um Artefakte bei unscharfen oder komprimierten Videos zu reduzieren."
   },
   "modeBOption": {
-    "message": "Anime4K B - Sanfte Wiederherstellung + 2x-Skalierung"
+    "message": "Anime4K B · Sanfte Wiederherstellung"
   },
   "modeBbDescription": {
     "message": "Führt die sanftere Anime4K-B-Kette für unscharfe Quellen zweimal aus und skaliert bis zu 4x. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels."
   },
   "modeBbOption": {
-    "message": "Anime4K B+B - Starke sanfte Wiederherstellung + bis zu 4x"
+    "message": "Anime4K B+B · Stark sanft"
   },
   "modeCDescription": {
     "message": "Entrauscht und skaliert in einem Anime4K-CNN-Durchlauf. Besonders geeignet für sichtbar verrauschte Animationen."
   },
   "modeCOption": {
-    "message": "Anime4K C - Entrauschen + 2x-Skalierung"
+    "message": "Anime4K C · Entrauschen"
   },
   "modeCaDescription": {
     "message": "Entrauscht und skaliert zuerst, stellt dann wieder her und kann erneut skalieren. UL ist ein High-End-GPU-Profil außerhalb des 24-FPS-Basisziels."
   },
   "modeCaOption": {
-    "message": "Anime4K C+A - Entrauschen, wiederherstellen + bis zu 4x"
+    "message": "Anime4K C+A · Entrauschen+Wiederherstellen"
   },
   "modeCnnDescription": {
     "message": "Offizielles Anime4K CNN mit fester 2x-Skalierung. Liefert ein scharfes Ergebnis; Qualität ändert Modellgröße und GPU-Last."
   },
   "modeCnnOption": {
-    "message": "Anime4K CNN 2x - Scharfe neuronale Skalierung (GPU: mittel)"
+    "message": "Anime4K CNN · Scharf 2x"
   },
   "modeOffDescription": {
     "message": "Deaktiviert die Bildverbesserung. Die Frame-Generierung kann separat aktiv bleiben."
   },
   "modeOffOption": {
-    "message": "Aus - Keine Bildverbesserung"
+    "message": "Aus"
   },
   "nativeHostStatusLabel": {
     "message": "Nativer Renderer"
@@ -487,6 +466,18 @@
   },
   "notFoundTitle": {
     "message": "Seite nicht gefunden — AniWebScale"
+  },
+  "noticeAria": {
+    "message": "Voraussetzungen"
+  },
+  "noticeCheck": {
+    "message": "Anforderungen & Kompatibilität prüfen"
+  },
+  "noticeText": {
+    "message": "Leichte Presets schaffen ggf. neuere integrierte Grafikkarten, aber flüssiges 4K, KI-Upscaling, Frame-Generierung und DRM-geschützte Dienste brauchen eine leistungsstarke dedizierte GPU oder den nativen Windows-Renderer."
+  },
+  "noticeTitle": {
+    "message": "Moderne GPU erforderlich — Native für geschützte Streams."
   },
   "onboardingTitle": {
     "message": "Schärfere Anime, in Echtzeit."
@@ -654,19 +645,22 @@
     "message": "Der aktive Renderer hat die Einstellungen abgelehnt."
   },
   "repoCaption": {
-    "message": "Illustrative Vorschau"
+    "message": "Echte Modellausgabe"
   },
   "repoCaptionStrong": {
-    "message": "Originäre prozedurale Vergleichsplatte"
+    "message": "RealESR-AnimeVideo-v3 x4-Upscale-Vorschau"
   },
-  "repoKicker": {
-    "message": "VISUELLE VORSCHAU"
+  "repoFigureAlt": {
+    "message": "Echter Vorher-Nachher-Vergleich: 450-mal-200-Anime-Clipframe, hochskaliert auf 1800-mal-800 mit RealESR-AnimeVideo-v3 — weiches bilineares Original links, KI-verbesserter Render rechts"
+  },
+  "repoSource": {
+    "message": "Quelle: Projekt-Testfixture-Clipframe (450×200-Mitten-Crop, keine Untertitel)"
   },
   "repoText": {
-    "message": "Diese Seite-an-Seite-Vergleichsplatte ist eine originäre prozedurale Illustration, die den visuellen Unterschied zwischen einer weichen Quelle und einem scharfen verbesserten Render zeigt."
+    "message": "Dieser Seite-an-Seite-Vergleich zeigt ein echtes 450-mal-200-Quellframe, hochskaliert auf 1800-mal-800 mit dem RealESR-AnimeVideo-v3-Modell: weiches bilineares Original links, KI-verbesserter Render rechts."
   },
   "repoTitle": {
-    "message": "Links weich,<br><em>rechts scharf.</em>"
+    "message": "Links weich,<br>rechts scharf."
   },
   "requestingSiteAccess": {
     "message": "Website-Zugriff wird angefragt..."
@@ -688,6 +682,12 @@
   },
   "savingSetup": {
     "message": "Einrichtung wird gespeichert..."
+  },
+  "sceneEnhanced": {
+    "message": "RealESR x4 · 1800×800"
+  },
+  "sceneOriginal": {
+    "message": "ORIGINAL · 450×200"
   },
   "settingsHome": {
     "message": "Startseite der AniWebScale-Einstellungen"
@@ -775,18 +775,6 @@
   },
   "storeComingSoon": {
     "message": "Demnächst"
-  },
-  "streamCheck": {
-    "message": "Kompatibilität prüfen"
-  },
-  "streamNoticeAria": {
-    "message": "Kompatibilität mit geschütztem Streaming"
-  },
-  "streamText": {
-    "message": "Geschützte Streams können den WebGPU-Pfad nicht nutzen. Der Native-Windows-Renderer ist erforderlich, aber einzelne Dienste können die Aufnahme trotzdem blockieren, da AniWebScale DRM niemals umgeht."
-  },
-  "streamTitle": {
-    "message": "Crunchyroll, Netflix und ähnliche Dienste benötigen Native."
   },
   "support": {
     "message": "Support"
@@ -928,5 +916,65 @@
   },
   "welcomeStep": {
     "message": "WILLKOMMEN / 01"
+  },
+  "modeRealEsrganOption": {
+    "message": "Real-ESRGAN · Max. Details"
+  },
+  "modeRealEsrganDescription": {
+    "message": "Festes 4x-ESRGAN-Netz, trainiert auf Anime-Video; beste Details bei sehr hoher GPU-Last. Für SD-Quellen gedacht."
+  },
+  "realesrganCap": {
+    "message": "Real-ESRGAN-Details"
+  },
+  "realesrganCap480": {
+    "message": "480p · Max. Details (~16 fps)"
+  },
+  "realesrganCap432": {
+    "message": "432p · Ausgewogen (~21 fps)"
+  },
+  "realesrganCap405": {
+    "message": "405p · Max. Tempo (~26 fps)"
+  },
+  "realesrganCap360": {
+    "message": "360p · Notfall (~30 fps)"
+  },
+  "grantTitle": {
+    "message": "Diesen Videoplayer aktivieren"
+  },
+  "grantLeadBefore": {
+    "message": "Diese Website bindet ihren Videoplayer von"
+  },
+  "grantLeadAfter": {
+    "message": " ein. Erteile AniWebScale Zugriff auf diesen Player, damit das Video im Vollbild verbessert werden kann."
+  },
+  "grantAction": {
+    "message": "Zugriff erlauben"
+  },
+  "grantInvalid": {
+    "message": "Diese Anfrage ist ungültig. Schließe diesen Tab und versuche es erneut."
+  },
+  "grantAlreadyGranted": {
+    "message": "Zugriff bereits erteilt. Wird auf den geöffneten Tab angewendet..."
+  },
+  "grantApplying": {
+    "message": "Zugriff erteilt. Wird auf den geöffneten Tab angewendet..."
+  },
+  "grantDonePlay": {
+    "message": "Fertig. Wechsle zurück zu deinem Video und starte die Wiedergabe."
+  },
+  "grantDoneFullscreen": {
+    "message": "Fertig. Wechsle zurück zu deinem Video und wechsle in den Vollbildmodus."
+  },
+  "grantRefused": {
+    "message": "Der Browser hat die Anfrage abgelehnt. Erteile den Zugriff stattdessen im Erweiterungs-Popup."
+  },
+  "grantDenied": {
+    "message": "Zugriff wurde verweigert. Du kannst ihn später im Erweiterungs-Popup erteilen."
+  },
+  "grantFine": {
+    "message": "Die Freigabe gilt nur für diese Player-Domain. Du kannst sie jederzeit im Erweiterungs-Popup widerrufen."
+  },
+  "nativeConsentPrompt": {
+    "message": "AniWebScale erlauben, diesen Browser-Tab mit dem lokalen Windows-Renderer für {origin} aufzuzeichnen?\n\nDRM-Wiedergabe erfordert, dass die Hardwarebeschleunigung des Browsers deaktiviert und der Browser neu gestartet wird. Andernfalls kann geschütztes Video schwarz erscheinen. Der Renderer empfängt nur zusammengesetzte Pixel und umgeht DRM nicht."
   }
 }

@@ -1,0 +1,60 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage: require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16: require
+
+// Stufe 2 (GPU-Pre): full-res RGBA8 -> half-res planar fp16 RGB [0,1] in one
+// dispatch. Box-average with fractional edge weights, bit-identical weights
+// to the Stufe-1 CPU loop (floor/ceil window, round-half-up to u8 happens
+// implicitly: the fp16 planar value equals round(v)/255 within fp16 eps).
+// Output dims are ceil(fw/2) x ceil(fh/2); the caller clamps odd inputs the
+// same way ((w+1)/2). Single 2x factor only; other divs stay on the CPU path.
+layout (constant_id = 0) const int bgr = 0;
+
+layout (binding = 0) readonly buffer bottom_blob { uint bottom_blob_data[]; };
+layout (binding = 1) writeonly buffer top_blob { float16_t top_blob_data[]; };
+
+layout (push_constant) uniform parameter
+{
+    int fw;    // full-res input width
+    int fh;    // full-res input height
+    int ow;    // output width  = ceil(fw/2)
+    int oh;    // output height = ceil(fh/2)
+    int cstep; // planar cstep of the output (padded)
+} p;
+
+void main()
+{
+    const int gx = int(gl_GlobalInvocationID.x);
+    const int gy = int(gl_GlobalInvocationID.y);
+    if (gx >= p.ow || gy >= p.oh)
+        return;
+    const float x0f = float(gx) * float(p.fw) / float(p.ow);
+    const float x1f = float(gx + 1) * float(p.fw) / float(p.ow);
+    const float y0f = float(gy) * float(p.fh) / float(p.oh);
+    const float y1f = float(gy + 1) * float(p.fh) / float(p.oh);
+    const int x0 = int(floor(x0f)), x1 = int(ceil(x1f));
+    const int y0 = int(floor(y0f)), y1 = int(ceil(y1f));
+    float ar = 0.0f, ag = 0.0f, ab = 0.0f, wsum = 0.0f;
+    for (int sy = y0; sy < y1; ++sy) {
+        const float wy = min(y1f, float(sy + 1)) - max(y0f, float(sy));
+        if (wy <= 0.0f) continue;
+        for (int sx = x0; sx < x1; ++sx) {
+            const float wx = min(x1f, float(sx + 1)) - max(x0f, float(sx));
+            if (wx <= 0.0f) continue;
+            const float wgt = wx * wy;
+            const uint rgba = bottom_blob_data[sy * p.fw + sx];
+            ar += float((rgba >> 0) & 0xFFu) * wgt;
+            ag += float((rgba >> 8) & 0xFFu) * wgt;
+            ab += float((rgba >> 16) & 0xFFu) * wgt;
+            wsum += wgt;
+        }
+    }
+    const float inv = 1.0f / max(wsum, 1e-6f);
+    const float scale = 1.0f / 255.0f;
+    float r_u = ar * inv, g_u = ag * inv, b_u = ab * inv;
+    if (bgr == 1) { float t = r_u; r_u = b_u; b_u = t; }
+    const int idx = gy * p.ow + gx;
+    top_blob_data[0 * p.cstep + idx] = float16_t(r_u * scale);
+    top_blob_data[1 * p.cstep + idx] = float16_t(g_u * scale);
+    top_blob_data[2 * p.cstep + idx] = float16_t(b_u * scale);
+}

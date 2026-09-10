@@ -130,25 +130,42 @@ describe('firefox-store-lint-gate', () => {
       expect(failures.some((f: string) => f.includes('notice(s)'))).toBe(true);
     });
 
-    it('rejects when warning count is not exactly 1', () => {
+    it('rejects an unknown (non-allowlisted) warning', () => {
       const output = {
         count: 0,
-        summary: { errors: 0, notices: 0, warnings: 0 },
-        errors: [],
-        notices: [],
-        warnings: [],
-      };
-      const failures = validateLintOutput(output);
-      expect(failures.some((f: string) => f.includes('expected exactly 1 warning'))).toBe(true);
-    });
-
-    it('rejects duplicate allowlisted warnings', () => {
-      const output = {
-        count: 2,
-        summary: { errors: 0, notices: 0, warnings: 2 },
+        summary: { errors: 0, notices: 0, warnings: 1 },
         errors: [],
         notices: [],
         warnings: [
+          {
+            code: 'SOME_OTHER_CODE',
+            message: 'Some unexpected warning',
+            description: 'unexpected',
+            file: 'content.js',
+            line: 1,
+          },
+        ],
+      };
+      const failures = validateLintOutput(output);
+      expect(failures.some((f: string) => f.includes('unknown warning'))).toBe(true);
+    });
+
+    it('accepts any number of vendor (onnxruntime-web) warnings', () => {
+      const vendorWarning = (file: string) => ({
+        code: 'DANGEROUS_EVAL',
+        message: 'The Function constructor is eval.',
+        description: 'vendor',
+        file,
+        line: 2,
+      });
+      const output = {
+        count: 3,
+        summary: { errors: 0, notices: 0, warnings: 3 },
+        errors: [],
+        notices: [],
+        warnings: [
+          vendorWarning('ort/ort.webgpu.min.mjs'),
+          vendorWarning('chunks/ort.js'),
           {
             code: 'UNSAFE_VAR_ASSIGNMENT',
             message: EXACT_WARNING.message,
@@ -156,13 +173,30 @@ describe('firefox-store-lint-gate', () => {
             file: 'content.js',
             line: 1,
           },
-          {
-            code: 'UNSAFE_VAR_ASSIGNMENT',
-            message: EXACT_WARNING.message,
-            description: EXACT_WARNING.description,
-            file: 'content.js',
-            line: 50,
-          },
+        ],
+      };
+      const failures = validateLintOutput(output);
+      expect(failures).toEqual([]);
+    });
+
+    it('rejects duplicate allowlisted warnings beyond the budget', () => {
+      const warn = (file: string, line: number) => ({
+        code: 'UNSAFE_VAR_ASSIGNMENT',
+        message: EXACT_WARNING.message,
+        description: EXACT_WARNING.description,
+        file,
+        line,
+      });
+      const output = {
+        count: 3,
+        summary: { errors: 0, notices: 0, warnings: 3 },
+        errors: [],
+        notices: [],
+        warnings: [
+          warn('content.js', 1),
+          warn('chunks/realesrgan-inference-worker.js', 10),
+          // A third identical first-party warning exceeds the budget of two.
+          warn('content.js', 50),
         ],
       };
       const failures = validateLintOutput(output);

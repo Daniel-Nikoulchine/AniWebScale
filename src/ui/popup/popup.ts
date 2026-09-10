@@ -1,7 +1,6 @@
 import '../common-vars.css';
 import '../form-controls.css';
 import './popup.css';
-import { applySettings } from '../../utils/apply-settings';
 import { getSettings } from '../../utils/settings';
 import {
   describeSiteAccess,
@@ -13,9 +12,9 @@ import { renderEnhancementSelects, renderToggle, renderEnhancementToggles } from
 import { refreshModeUi } from '../mode-ui';
 import { themeManager } from '../theme-manager';
 import { localizeDocument, message, initI18n } from '../i18n';
-import { createSettingsController } from '../settings-controller';
+import { collectRenderSettings, createSettingsController, syncRenderSettings } from '../settings-controller';
 
-document.addEventListener('DOMContentLoaded', async () => {
+async function initPopup(): Promise<void> {
   await initI18n();
   localizeDocument();
   themeManager.getTheme();
@@ -23,15 +22,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
   );
-  const { mode, quality, backend } = controls;
+  const { mode, quality, backend, realesrganCap } = controls;
   const extensionEnabled = renderToggle(
     document.getElementById('extension-toggle') as HTMLDivElement,
     {
       id: 'extension-enabled',
       titleKey: 'extensionEnabled',
       titleFallback: 'Extension enabled',
-      descriptionKey: 'processVideos',
-      descriptionFallback: 'Process videos in this browser',
       compact: true,
     },
   );
@@ -138,6 +135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.warn('[AniWebScale] Could not inspect site access:', error);
     siteAccessCard.dataset.state = 'unavailable';
     siteAccessSummary.textContent = message('siteAccessCheckFailed', 'Site access could not be checked.');
+    siteAccessButton.textContent = message('siteAccessUnavailableAction', 'Unavailable');
     siteAccessButton.disabled = true;
   });
 
@@ -147,44 +145,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   mode.value = settings.mode;
   quality.value = settings.quality;
   backend.value = settings.backend;
+  if (realesrganCap) realesrganCap.value = String(settings.realesrganCapHeight);
   statistics.checked = settings.statsEnabled;
   frameGeneration.checked = settings.frameGenerationEnabled;
-
-  extensionEnabled.addEventListener('change', async () => {
-    const enabled = extensionEnabled.checked;
-    extensionEnabled.disabled = true;
-    status.textContent = enabled
-      ? message('enablingExtension', 'Enabling extension...')
-      : message('disablingExtension', 'Disabling extension...');
-    const result = await applySettings({ extensionEnabled: enabled }).catch(() => 'failed' as const);
-    extensionEnabled.disabled = false;
-    if (result === 'failed') {
-      extensionEnabled.checked = !enabled;
-      status.textContent = message('extensionStatusChangeFailed', 'Could not change extension status.');
-      return;
-    }
-    if (result === 'saved-not-applied') {
-      status.textContent = message('extensionStatusSavedNotApplied', 'Extension status saved, but could not be applied.');
-      return;
-    }
-    status.textContent = enabled
-      ? message('extensionEnabledStatus', 'Extension enabled.')
-      : message('extensionDisabledStatus', 'Extension disabled.');
-  });
 
   const updateModeUi = () => refreshModeUi({
     mode,
     quality,
     backend,
+    realesrganCap,
     frameGeneration,
     description: modeDescription,
     nativeWarning,
   });
 
   mode.addEventListener('change', updateModeUi);
+  quality.addEventListener('change', updateModeUi);
   frameGeneration.addEventListener('change', updateModeUi);
   backend.addEventListener('change', updateModeUi);
   updateModeUi();
+
+  // Live sync with other surfaces (options page, other popups): without this
+  // a change made elsewhere leaves this popup showing stale controls.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, statistics, frameGeneration })) updateModeUi();
+    if (typeof changes.extensionEnabled?.newValue === 'boolean'
+      && extensionEnabled.checked !== changes.extensionEnabled.newValue) {
+      extensionEnabled.checked = changes.extensionEnabled.newValue;
+    }
+  });
 
   // ── Autosave ─────────────────────────────────────────────────────────────
 
@@ -194,12 +184,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => { status.textContent = ''; }, 3000);
   };
+  // The extension toggle reports its own status ("Extension enabled/disabled.")
+  // instead of the generic settings message. Recorded on change so a render
+  // control change still shows the generic message.
+  let pendingToggleStatus: string | undefined;
+  extensionEnabled.addEventListener('change', () => {
+    pendingToggleStatus = extensionEnabled.checked
+      ? message('extensionEnabledStatus', 'Extension enabled.')
+      : message('extensionDisabledStatus', 'Extension disabled.');
+  });
   createSettingsController({
-    controls: { mode, quality, backend, statistics, frameGeneration },
+    controls: { mode, quality, backend, realesrganCap, statistics, frameGeneration },
+    additionalControls: [extensionEnabled],
+    collectSettings: () => ({
+      ...collectRenderSettings({ mode, quality, backend, realesrganCap, statistics, frameGeneration }),
+      extensionEnabled: extensionEnabled.checked,
+    }),
     showStatus,
+    appliedFor: () => {
+      const text = pendingToggleStatus;
+      pendingToggleStatus = undefined;
+      return text;
+    },
     messages: {
       saving: message('saving', 'Saving...'),
-      saved: message('settingsSavedApplied', 'Settings saved and applied.'),
       applied: message('settingsSavedApplied', 'Settings saved and applied.'),
       savedNotApplied: message('settingsSavedNotApplied', 'Settings saved, but could not be applied.'),
       failed: message('settingsSaveFailed', 'Could not save settings.'),
@@ -207,4 +215,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   openOptions.addEventListener('click', () => chrome.runtime.openOptionsPage());
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // An unguarded rejection here (extension context invalidated after an
+  // update while the popup is open) would kill the initializer silently and
+  // leave a blank, dead page.
+  initPopup().catch(error => {
+    console.error('[Anime4K] popup init failed:', error);
+    const status = document.getElementById('status');
+    if (status) status.textContent = `Anime4K: ${error instanceof Error ? error.message : String(error)}`;
+  });
 });

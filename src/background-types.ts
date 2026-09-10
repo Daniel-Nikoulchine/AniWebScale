@@ -9,7 +9,7 @@ import type {
   NativeConfiguration,
   NativeMetricsEvent,
 } from './native/protocol';
-import { NATIVE_SESSION_VERSION } from './shared/session-recovery';
+import { NATIVE_SESSION_VERSION, type NativeCaptureKind } from './shared/session-recovery';
 
 /** A video element prepared for direct-fullscreen native capture. */
 export interface PreparedVideo {
@@ -45,7 +45,7 @@ export interface PopupMeasurement {
 /** The persisted record describing an active or in-flight native session. */
 export interface NativeSessionRecord {
   version: typeof NATIVE_SESSION_VERSION;
-  captureKind: 'direct-fullscreen' | 'legacy-popup';
+  captureKind: NativeCaptureKind;
   phase: 'preparing' | 'active' | 'stopping';
   sessionId: string;
   nonce: string;

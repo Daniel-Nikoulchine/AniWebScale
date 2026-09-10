@@ -3,12 +3,13 @@ import type {
   EnhancementEffect,
   EnhancementMode,
   QualityTier,
+  RealEsrganCapHeight,
 } from '../types';
 import {
   OFFICIAL_PRESET_GRAPHS,
   type PresetStep,
 } from '../shared/generated-preset-graph';
-import { isAnime4KMode } from '../shared/presets';
+import { DEFAULT_REALESRGAN_CAP_HEIGHT, isAnime4KMode } from '../shared/presets';
 import { findEffect, resolveAiUpscaleEffect } from './effects-map';
 
 export { OFFICIAL_PRESET_GRAPHS };
@@ -30,9 +31,10 @@ export function resolvePresetGraph(mode: Anime4KMode, quality: QualityTier): Enh
 export function resolveEnhancementGraph(
   mode: EnhancementMode,
   quality: QualityTier,
+  realesrganCapHeight: RealEsrganCapHeight = DEFAULT_REALESRGAN_CAP_HEIGHT,
 ): EnhancementEffect[] {
   if (mode === 'OFF') return [];
   return isAnime4KMode(mode)
     ? resolvePresetGraph(mode, quality)
-    : [resolveAiUpscaleEffect(mode, quality)];
+    : [resolveAiUpscaleEffect(mode, quality, realesrganCapHeight)];
 }

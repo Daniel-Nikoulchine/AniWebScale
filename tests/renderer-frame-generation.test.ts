@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FrameGeneration, type FrameGenerationHost } from '../src/core/frame-generation';
+import { FrameGeneration, type FrameGenerationHistory, type FrameGenerationHost } from '../src/core/frame-generation';
 import { Renderer } from '../src/core/renderer';
 
 function texture(width: number, height: number): GPUTexture {
@@ -11,26 +11,22 @@ function texture(width: number, height: number): GPUTexture {
   } as unknown as GPUTexture;
 }
 
+function makeHistory(): FrameGenerationHistory {
+  return { seed: vi.fn(), capture: vi.fn(), swap: vi.fn() };
+}
+
 function frameGenerationHost(overrides: Partial<FrameGenerationHost> = {}): FrameGenerationHost {
   const base: FrameGenerationHost = {
-    device: {
-      createTexture: vi.fn(() => texture(1280, 720)),
-      createBindGroup: vi.fn(() => ({} as GPUBindGroup)),
-      createCommandEncoder: vi.fn(() => ({ finish: vi.fn(() => ({} as GPUCommandBuffer)) })),
-      queue: { writeBuffer: vi.fn(), submit: vi.fn() },
-    } as unknown as GPUDevice,
-    presentationUniform: {} as GPUBuffer,
-    renderBindGroupLayout: {} as GPUBindGroupLayout,
-    sampler: {} as GPUSampler,
     video: { paused: false, ended: false } as HTMLVideoElement,
-    finalTexture: texture(1280, 720),
     frameBudgetMs: 1000 / 24,
     frameGenerationEnabled: true,
     isDestroyed: () => false,
     isRebuilding: () => false,
     isFrameProcessing: () => false,
-    refreshPresentationBindGroup: vi.fn(),
-    encodePresentation: vi.fn(),
+    ensureHistory: vi.fn(() => makeHistory()),
+    releaseHistory: vi.fn(),
+    writePresentationFactor: vi.fn(),
+    presentFrame: vi.fn(),
   };
   return { ...base, ...overrides };
 }
@@ -53,69 +49,42 @@ describe('frame-generation presentation resources', () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it('prebuilds both history orientations and copies history via the DMA path', () => {
-    const createdTextures: GPUTexture[] = [];
-    const createBindGroup = vi.fn(() => ({ id: createBindGroup.mock.calls.length } as unknown as GPUBindGroup));
-    const createTexture = vi.fn((descriptor: GPUTextureDescriptor) => {
-      const size = descriptor.size as [number, number, number];
-      const result = texture(size[0], size[1]);
-      createdTextures.push(result);
-      return result;
-    });
-    const writeBuffer = vi.fn();
-    const refreshPresentationBindGroup = vi.fn();
-    const host = frameGenerationHost({
-      device: {
-        createTexture,
-        createBindGroup,
-        createCommandEncoder: vi.fn(),
-        queue: { writeBuffer },
-      } as unknown as GPUDevice,
-      finalTexture: texture(1280, 720),
-      refreshPresentationBindGroup,
-    });
+  it('seeds both history orientations, then swaps and captures the next frame', () => {
+    const history = makeHistory();
+    const ensureHistory = vi.fn(() => history);
+    const writePresentationFactor = vi.fn();
+    const host = frameGenerationHost({ ensureHistory, writePresentationFactor });
     const generation = new FrameGeneration(host);
 
     generation.createResources();
+    expect(ensureHistory).toHaveBeenCalledOnce();
 
-    expect(createdTextures).toHaveLength(2);
-    expect(createTexture.mock.calls[0][0].usage).toBe(GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST);
-    expect(createBindGroup).toHaveBeenCalledTimes(2);
-    const firstOrientation = generation.activeBindGroup;
-    expect(firstOrientation).not.toBeNull();
-    const [initialPrevious, initialCurrent] = createdTextures;
-
-    const copyTextureToTexture = vi.fn();
-    const encoder = { copyTextureToTexture } as unknown as GPUCommandEncoder;
+    const encoder = { copyTextureToTexture: vi.fn() } as unknown as GPUCommandEncoder;
     expect(generation.prepareFrame(encoder)).toBe(false);
-    expect(copyTextureToTexture).toHaveBeenCalledTimes(2);
-    expect(copyTextureToTexture).toHaveBeenNthCalledWith(
-      1,
-      { texture: host.finalTexture },
-      { texture: initialPrevious },
-      [1280, 720, 1],
-    );
-    expect(copyTextureToTexture).toHaveBeenNthCalledWith(
-      2,
-      { texture: host.finalTexture },
-      { texture: initialCurrent },
-      [1280, 720, 1],
-    );
-    expect(Array.from(writeBuffer.mock.calls[0][2] as Float32Array)).toEqual([1, 0, 0, 0]);
+    expect(history.seed).toHaveBeenCalledOnce();
+    expect(history.swap).not.toHaveBeenCalled();
+    expect(Array.from(writePresentationFactor.mock.calls[0][0] as Float32Array)).toEqual([1, 0, 0, 0]);
 
     expect(generation.prepareFrame(encoder)).toBe(true);
-    expect(copyTextureToTexture).toHaveBeenCalledTimes(3);
-    // The swap made the initial previous texture current again, so the fresh
-    // frame lands there.
-    expect(copyTextureToTexture).toHaveBeenNthCalledWith(
-      3,
-      { texture: host.finalTexture },
-      { texture: initialPrevious },
-      [1280, 720, 1],
-    );
-    expect(Array.from(writeBuffer.mock.calls.at(-1)![2] as Float32Array)).toEqual([0, 0, 0, 0]);
-    expect(refreshPresentationBindGroup).toHaveBeenCalledOnce();
-    expect(generation.activeBindGroup).not.toBe(firstOrientation);
+    expect(history.swap).toHaveBeenCalledOnce();
+    expect(history.capture).toHaveBeenCalledOnce();
+    expect(Array.from(writePresentationFactor.mock.calls.at(-1)![0] as Float32Array)).toEqual([0, 0, 0, 0]);
+  });
+
+  it('releases the history the host owns when resources are rebuilt', () => {
+    const releaseHistory = vi.fn();
+    const host = frameGenerationHost({ releaseHistory });
+    const generation = new FrameGeneration(host);
+
+    generation.createResources();
+    expect(generation.historyAvailable).toBe(true);
+    generation.createResources();
+    // Each createResources releases the previous history before ensuring the
+    // new one, so the host has released twice after the rebuild.
+    expect(releaseHistory).toHaveBeenCalledTimes(2);
+    generation.destroyResources();
+    expect(releaseHistory).toHaveBeenCalledTimes(3);
+    expect(generation.historyAvailable).toBe(false);
   });
 
   it('flushes the latest real frame when playback stops between generated frames', () => {
@@ -123,19 +92,11 @@ describe('frame-generation presentation resources', () => {
     const requestAnimationFrame = vi.fn(() => 42);
     vi.stubGlobal('cancelAnimationFrame', cancelAnimationFrame);
     vi.stubGlobal('requestAnimationFrame', requestAnimationFrame);
-    const writeBuffer = vi.fn();
-    const submit = vi.fn();
-    const encodePresentation = vi.fn();
+    const presentFrame = vi.fn();
     const videoState = { paused: false, ended: false };
     const host = frameGenerationHost({
       video: videoState as unknown as HTMLVideoElement,
-      device: {
-        createTexture: vi.fn(() => texture(1280, 720)),
-        createBindGroup: vi.fn(() => ({} as GPUBindGroup)),
-        createCommandEncoder: vi.fn(() => ({ finish: vi.fn(() => ({} as GPUCommandBuffer)) })),
-        queue: { writeBuffer, submit },
-      } as unknown as GPUDevice,
-      encodePresentation,
+      presentFrame,
     });
     const generation = new FrameGeneration(host);
     seedHistory(generation);
@@ -146,46 +107,34 @@ describe('frame-generation presentation resources', () => {
     generation.onPlaybackStopped();
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(42);
-    expect(Array.from(writeBuffer.mock.calls.at(-1)![2] as Float32Array)).toEqual([1, 0, 0, 0]);
-    expect(encodePresentation).toHaveBeenCalledOnce();
-    expect(submit).toHaveBeenCalledOnce();
+    expect(presentFrame).toHaveBeenCalledOnce();
+    expect(Array.from(presentFrame.mock.calls[0][0] as Float32Array)).toEqual([1, 0, 0, 0]);
+    expect(presentFrame.mock.calls[0][1]).toBe('Frame generation pause flush');
   });
 
   it('defers the pause flush until an in-flight source frame has completed', () => {
     let frameProcessing = true;
-    const writeBuffer = vi.fn();
-    const submit = vi.fn();
-    const encodePresentation = vi.fn();
+    const presentFrame = vi.fn();
     const host = frameGenerationHost({
       video: { paused: true, ended: false } as HTMLVideoElement,
       isFrameProcessing: () => frameProcessing,
-      device: {
-        createTexture: vi.fn(() => texture(1280, 720)),
-        createBindGroup: vi.fn(() => ({} as GPUBindGroup)),
-        createCommandEncoder: vi.fn(() => ({ finish: vi.fn(() => ({} as GPUCommandBuffer)) })),
-        queue: { writeBuffer, submit },
-      } as unknown as GPUDevice,
-      encodePresentation,
+      presentFrame,
     });
     const generation = new FrameGeneration(host);
     seedHistory(generation);
-    const writesAfterSeed = writeBuffer.mock.calls.length;
 
     generation.onPlaybackStopped();
-    expect(writeBuffer.mock.calls.length).toBe(writesAfterSeed);
-    expect(encodePresentation).not.toHaveBeenCalled();
+    expect(presentFrame).not.toHaveBeenCalled();
 
     frameProcessing = false;
     generation.flush();
 
-    expect(writeBuffer.mock.calls.length).toBe(writesAfterSeed + 1);
-    expect(Array.from(writeBuffer.mock.calls.at(-1)![2] as Float32Array)).toEqual([1, 0, 0, 0]);
-    expect(encodePresentation).toHaveBeenCalledOnce();
-    expect(submit).toHaveBeenCalledOnce();
+    expect(presentFrame).toHaveBeenCalledOnce();
+    expect(Array.from(presentFrame.mock.calls[0][0] as Float32Array)).toEqual([1, 0, 0, 0]);
 
     // The pending flag was consumed: a second flush stays quiet.
     generation.flush();
-    expect(submit).toHaveBeenCalledOnce();
+    expect(presentFrame).toHaveBeenCalledOnce();
   });
 
   it('processes paused seek callbacks and requests a final current-frame flush', () => {
@@ -378,6 +327,44 @@ describe('frame-generation presentation resources', () => {
 
     expect(renderer.releaseResources).toHaveBeenCalledOnce();
   });
+
+  it('drops the frame instead of killing the loop when history encode fails', async () => {
+    const renderer = Object.create(Renderer.prototype) as any;
+    renderer.destroyed = false;
+    renderer.rebuilding = false;
+    renderer.video = {
+      readyState: 2,
+      HAVE_CURRENT_DATA: 2,
+      paused: false,
+      ended: false,
+      videoWidth: 640,
+      videoHeight: 360,
+    };
+    renderer.videoFrameTexture = texture(640, 360);
+    renderer.sourceFormatStale = false;
+    renderer.copyCurrentVideoFrame = vi.fn(async () => undefined);
+    renderer.pipelines = [];
+    renderer.frameGeneration = {
+      prepareFrame: vi.fn(() => { throw new Error('lost device'); }),
+    };
+    renderer.encodePresentation = vi.fn();
+    renderer.runAfterSubmit = vi.fn();
+    renderer.droppedFrames = 0;
+    renderer.onError = vi.fn();
+    renderer.device = {
+      createCommandEncoder: vi.fn(() => ({ finish: vi.fn() })),
+      queue: {},
+    };
+
+    // A throwing prepareFrame used to escape into drainFrames' onError and
+    // stop the whole frame loop; like the pass/presentation guards it must
+    // drop exactly this frame.
+    await expect(renderer.processFrame()).resolves.toBe(false);
+    expect(renderer.droppedFrames).toBe(1);
+    expect(renderer.encodePresentation).not.toHaveBeenCalled();
+    expect(renderer.runAfterSubmit).toHaveBeenCalledOnce();
+    expect(renderer.onError).not.toHaveBeenCalled();
+  });
 });
 
 describe('source texture format detection', () => {
@@ -386,6 +373,9 @@ describe('source texture format detection', () => {
   function formatProbeRenderer(format: string | null): any {
     const renderer = Object.create(Renderer.prototype) as any;
     renderer.destroyed = false;
+    // Production always injects the GPU provider (initialize rejects otherwise);
+    // an empty provider keeps the new VideoFrame path under test.
+    renderer.gpu = {};
     renderer.video = { readyState: 2, HAVE_CURRENT_DATA: 2 };
     renderer.videoFrameTexture = { ...texture(640, 360), format };
     renderer.sourceTextureFormat = 'rgba8unorm';

@@ -4,8 +4,8 @@ import { BackendState } from '../src/core/backend-state';
 describe('BackendState', () => {
   it('starts idle and not busy', () => {
     const state = new BackendState();
-    expect(state.phaseName).toBe('idle');
     expect(state.isBusy).toBe(false);
+    expect(state.isStarting).toBe(false);
     expect(state.isActive).toBe(false);
     expect(state.isNativeActive).toBe(false);
     expect(state.isWebGPUActive).toBe(false);
@@ -14,7 +14,7 @@ describe('BackendState', () => {
   it('beginTransition marks the backend as starting', () => {
     const state = new BackendState();
     state.beginTransition();
-    expect(state.phaseName).toBe('starting');
+    expect(state.isStarting).toBe(true);
     expect(state.isBusy).toBe(true);
   });
 
@@ -22,7 +22,7 @@ describe('BackendState', () => {
     const state = new BackendState();
     state.beginTransition();
     state.beginTransition();
-    expect(state.phaseName).toBe('starting');
+    expect(state.isStarting).toBe(true);
   });
 
   it('commits to webgpu-active and native-active phases', () => {
@@ -45,8 +45,8 @@ describe('BackendState', () => {
     state.beginTransition();
     state.markNativeActive();
     state.markIdle();
-    expect(state.phaseName).toBe('idle');
     expect(state.isBusy).toBe(false);
+    expect(state.isStarting).toBe(false);
   });
 
   it('destroy returns the backend to idle', () => {
@@ -62,7 +62,7 @@ describe('BackendState', () => {
     state.markWebGPUActive();
     state.markIdle();
     state.beginTransition();
-    expect(state.phaseName).toBe('starting');
+    expect(state.isStarting).toBe(true);
     expect(state.isBusy).toBe(true);
   });
 });

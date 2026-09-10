@@ -1,4 +1,4 @@
-AniWebScale is a fully free static marketing site for the AniWebScale browser extension. It has no backend, no API, no database, and no account system.
+AniWebScale is a fully free static marketing site for the AniWebScale browser extension. It has no backend, no API, no database, no account system and no payment integration.
 
 ## Pages
 
@@ -10,29 +10,30 @@ AniWebScale is a fully free static marketing site for the AniWebScale browser ex
 
 ```bash
 cd website
-npm install
+npm ci
 npm start
 ```
 
-Opens `http://localhost:4242` with the static site. Requires no configuration, environment variables, or third-party services.
+Opens `http://localhost:4242` with the static site. Requires no configuration, environment variables or third-party services.
 
 ## i18n
 
 Source files are in `client/`:
 
 - `client/i18n.mjs` — Translation helper (reads `lang` from URL/search/locale, falls back to `en`)
-- `client/site-localize.mjs` — Applies translations to the DOM
+- `client/site-localize.mjs` — Applies translations to the DOM and exposes the catalog lookup for `app.js`
 
-Build with:
+`public/site-localize.js` is a generated bundle and is committed so the site can be
+deployed as-is. Rebuild and verify it with:
 
 ```bash
 npm run build:client
+git diff --exit-code public/site-localize.js   # CI drift gate
+npm run check:locales                          # bidirectional en/de key parity
 ```
 
 ## Deployment
 
-Upload `public/` as-is to any static host. The site is configured for Cloudflare Pages (wrangler is in `devDependencies`) but works with any static host.
-
-```bash
-npx wrangler pages deploy public
-```
+Run `npm run build:client` first, then upload `public/` as-is to any static host
+(for example `npx --yes wrangler pages deploy public`). The site is committed to
+Cloudflare Pages but works with any static host.

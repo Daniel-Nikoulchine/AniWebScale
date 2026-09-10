@@ -43,6 +43,10 @@ export async function loadLocalization(root = document) {
     const translated = t(element.dataset.i18nAriaLabel);
     if (translated) element.setAttribute('aria-label', translated);
   });
+  root.querySelectorAll('[data-i18n-alt]').forEach(element => {
+    const translated = t(element.dataset.i18nAlt);
+    if (translated) element.setAttribute('alt', translated);
+  });
   // Highlight the active language in any [data-lang-toggle] buttons
   root.querySelectorAll('[data-lang-toggle]').forEach(button => {
     button.classList.toggle('active', button.dataset.langToggle === language);

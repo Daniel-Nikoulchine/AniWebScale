@@ -4,7 +4,7 @@
  * isolation. None of these touch module-level session state.
  */
 import { createRequestId } from './native/client';
-import { NATIVE_PROTOCOL_VERSION } from './native/protocol';
+import { NATIVE_PROTOCOL_VERSION, type NativeConfiguration } from './native/protocol';
 import {
   parseHttpOrigin,
   resolveNativeMessageOrigin,
@@ -40,4 +40,20 @@ export function nativeRequestBase(): {
   requestId: string;
 } {
   return { protocolVersion: NATIVE_PROTOCOL_VERSION, requestId: createRequestId() };
+}
+
+/**
+ * The configuration triple shared by every host request that carries a
+ * renderer configuration (`start`, `updateConfiguration`).
+ */
+export function nativeConfigurationBody(configuration: NativeConfiguration): {
+  mode: NativeConfiguration['mode'];
+  quality: NativeConfiguration['quality'];
+  frameGenerationEnabled: boolean;
+} {
+  return {
+    mode: configuration.mode,
+    quality: configuration.quality,
+    frameGenerationEnabled: configuration.frameGenerationEnabled,
+  };
 }

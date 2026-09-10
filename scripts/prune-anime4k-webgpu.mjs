@@ -35,9 +35,25 @@ function visit(node) {
 
 visit(ast);
 
-const moduleObject = objectExpressions
-  .filter(node => node.properties.length > 100)
-  .sort((left, right) => right.properties.length - left.properties.length)[0];
+// Locate the webpack module table by its bootstrap marker
+// (`"use strict";var <id>={...modules...}`) rather than by object size. The
+// marker is stable for the pinned vendor bundle; the size heuristic remains
+// only as a fallback for unexpected bootstrap shapes.
+function locateModuleObject() {
+  const bootstrap = /"use strict";\s*var\s+[A-Za-z_$][\w$]*\s*=\s*/.exec(source);
+  if (bootstrap) {
+    const objectStart = bootstrap.index + bootstrap[0].length;
+    if (source[objectStart] === '{') {
+      const anchored = objectExpressions.find(node => node.start === objectStart);
+      if (anchored) return anchored;
+    }
+  }
+  return objectExpressions
+    .filter(node => node.properties.length > 100)
+    .sort((left, right) => right.properties.length - left.properties.length)[0];
+}
+
+const moduleObject = locateModuleObject();
 
 if (!moduleObject) throw new Error('Could not locate the anime4k-webgpu module table.');
 

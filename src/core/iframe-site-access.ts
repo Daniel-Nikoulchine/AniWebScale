@@ -104,6 +104,11 @@ function requestPlayerFrameAccess(origin: string): void {
     .then(settings => {
       if (settings.extensionEnabled === false) return null;
       const now = Date.now();
+      // Prune expired dedupe entries so the map cannot grow unbounded on pages
+      // that cycle through many player origins.
+      for (const [reported, at] of reportedOrigins) {
+        if (now - at >= REPORT_DEDUPE_MS) reportedOrigins.delete(reported);
+      }
       const lastReported = reportedOrigins.get(origin);
       if (lastReported !== undefined && now - lastReported < REPORT_DEDUPE_MS) return null;
       reportedOrigins.set(origin, now);

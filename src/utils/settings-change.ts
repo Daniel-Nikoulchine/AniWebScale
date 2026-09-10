@@ -8,12 +8,11 @@ export const RENDER_SETTING_KEYS = new Set([
   'extensionEnabled',
   'mode',
   'quality',
-  'output',
   'backend',
   'statsEnabled',
   'autoFullscreenEnabled',
   'frameGenerationEnabled',
-  'selectedModeId',
+  'realesrganCapHeight',
 ]);
 
 export function isRenderSettingKey(key: string): boolean {

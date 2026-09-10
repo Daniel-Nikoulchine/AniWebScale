@@ -9,13 +9,13 @@
   <main class="grant-wrap">
     <div class="card">
       <div class="brand"><img class="mini-mark" src="icons/icon32.png" alt="" width="26" height="26">AniWebScale</div>
-      <h1>Enable this video player</h1>
-      <p class="lead">This site embeds its video player from <strong id="host">another website</strong>. Grant AniWebScale access to that player so it can enhance the video in fullscreen.</p>
+      <h1 data-i18n="grantTitle">Enable this video player</h1>
+      <p class="lead"><span data-i18n="grantLeadBefore">This site embeds its video player from</span> <strong id="host">another website</strong><span data-i18n="grantLeadAfter">. Grant AniWebScale access to that player so it can enhance the video in fullscreen.</span></p>
       <div class="action-row">
-        <button id="grant" type="button" disabled>Grant access</button>
+        <button id="grant" type="button" disabled data-i18n="grantAction">Grant access</button>
         <div id="status" role="status" aria-live="polite"></div>
       </div>
-      <p class="fine">The grant covers this player domain only. You can revoke it anytime from the extension popup.</p>
+      <p class="fine" data-i18n="grantFine">The grant covers this player domain only. You can revoke it anytime from the extension popup.</p>
     </div>
   </main>
 </body>

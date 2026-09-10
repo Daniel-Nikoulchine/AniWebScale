@@ -31,27 +31,34 @@ export interface RendererConfigDiff {
 /**
  * Compare the current renderer config state against a proposed update and
  * produce a structured diff. Pure function — no GPU, no DOM, no side effects.
+ *
+ * One equality notion drives both flags: the canonical pipeline key plus the
+ * scalar target dimensions and frame-generation flag. `isUnchanged` is the
+ * conjunction of all three; `needsPipelineRebuild` is exactly the key
+ * inequality. Deriving them from the same comparison means they can never
+ * disagree (a config the caller is told is unchanged cannot secretly require
+ * a rebuild, which a separate `JSON.stringify(effects)` check allowed).
  */
 export function diffRendererConfig(
   current: RendererConfigState,
   next: RendererConfigNext,
   sourceDimensions: Dimensions,
 ): RendererConfigDiff {
-  const isUnchanged = JSON.stringify(current.effects) === JSON.stringify(next.effects)
-    && current.targetDimensions.width === next.targetDimensions.width
-    && current.targetDimensions.height === next.targetDimensions.height
-    && current.frameGenerationEnabled === next.frameGenerationEnabled;
-
   const nextPipelineEffectKey = scheduledEffectPipelineKey(
     next.effects,
     sourceDimensions,
     next.targetDimensions,
   );
 
+  const pipelineChanged = nextPipelineEffectKey !== current.pipelineEffectKey;
+  const dimensionsChanged = current.targetDimensions.width !== next.targetDimensions.width
+    || current.targetDimensions.height !== next.targetDimensions.height;
+  const frameGenerationChanged = current.frameGenerationEnabled !== next.frameGenerationEnabled;
+
   return {
-    isUnchanged,
-    needsPipelineRebuild: nextPipelineEffectKey !== current.pipelineEffectKey,
-    frameGenerationChanged: current.frameGenerationEnabled !== next.frameGenerationEnabled,
+    isUnchanged: !pipelineChanged && !dimensionsChanged && !frameGenerationChanged,
+    needsPipelineRebuild: pipelineChanged,
+    frameGenerationChanged,
     nextPipelineEffectKey,
   };
 }

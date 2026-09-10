@@ -1,14 +1,18 @@
 import { ANIME4K_APPLIED_ATTR } from '../constants';
 import type { Anime4KWebExtSettings } from '../types';
 import { getSettings } from '../utils/settings';
-import * as EnhancerMap from './enhancer-map';
 import {
+  associateEnhancer,
   clearEnhancerStash,
+  dissociateEnhancer,
   findAndUnstashEnhancer,
+  getAllManagedVideos,
+  getEnhancer,
+  hasEnhancer,
   stashEnhancer,
-} from './enhancer-stash';
+} from './video-population';
 import { VideoEnhancer } from './video-enhancer';
-import { walkDocumentTree, walkElementTree } from './dom-tree-walker';
+import { walkElementTree, walkTree } from './dom-tree-walker';
 
 const mediaEventsToWatch = ['loadedmetadata', 'play', 'playing', 'canplay'] as const;
 
@@ -16,7 +20,7 @@ function isVideoElement(element: EventTarget | Element | null): element is HTMLV
   return typeof HTMLVideoElement !== 'undefined' && element instanceof HTMLVideoElement;
 }
 
-class VideoPopulation {
+class VideoDiscovery {
   private readonly observedRoots = new Map<Document | ShadowRoot, MutationObserver>();
   private initialized = false;
   private initializationRevision = 0;
@@ -47,41 +51,54 @@ class VideoPopulation {
   };
 
   private cleanupVideoEnhancer(video: HTMLVideoElement, allowStash = true): void {
-    const enhancer = EnhancerMap.getEnhancer(video);
+    const enhancer = getEnhancer(video);
     if (!enhancer) return;
 
     const stashed = allowStash
       && video.hasAttribute(ANIME4K_APPLIED_ATTR)
       && stashEnhancer(enhancer);
-    if (!stashed) enhancer.destroy();
-    EnhancerMap.dissociateEnhancer(video);
+    // Dissociate even when teardown throws: a dead map entry would keep
+    // serving the zombie to election and the test bridge.
+    try {
+      if (!stashed) enhancer.destroy();
+    } finally {
+      dissociateEnhancer(video);
+    }
   }
 
   private processVideoElement(video: HTMLVideoElement, source: string): void {
-    if (EnhancerMap.hasEnhancer(video) || !video.isConnected) return;
+    if (hasEnhancer(video) || !video.isConnected) return;
 
     const stashedEnhancer = findAndUnstashEnhancer(video);
     if (stashedEnhancer) {
-      EnhancerMap.associateEnhancer(video, stashedEnhancer);
-      void stashedEnhancer.reattach(video).catch(error => {
+      associateEnhancer(video, stashedEnhancer);
+      void stashedEnhancer.reattach(video).then(() => {
+        // The node may have been removed again while the async renderer
+        // source switch was in flight; don't keep an enhancer mapped to a
+        // disconnected video (election, observers and stats would go stale).
+        if (!video.isConnected) {
+          dissociateEnhancer(video);
+          stashedEnhancer.destroy();
+        }
+      }).catch(error => {
         console.error('[Anime4K] Failed to reattach a replaced video element.', error);
-        EnhancerMap.dissociateEnhancer(video);
+        dissociateEnhancer(video);
         stashedEnhancer.destroy();
       });
       return;
     }
 
     try {
-      EnhancerMap.associateEnhancer(video, VideoEnhancer.create(video));
+      associateEnhancer(video, VideoEnhancer.create(video));
     } catch (error) {
       console.error(`[Anime4K] Failed to manage a video discovered by ${source}.`, error);
     }
   }
 
-  private installAniWorldHosterObserver(): void {
+  private installHosterSurfaceObserver(): void {
     if (this.hosterObserver || typeof MutationObserver === 'undefined') return;
     this.hosterObserver = new MutationObserver(() => {
-      this.scanRoot(document, 'aniworld-hoster-update');
+      this.scanRoot(document, 'hoster-surface-update');
     });
     this.hosterObserver.observe(document.documentElement, {
       childList: true,
@@ -109,7 +126,7 @@ class VideoPopulation {
   }
 
   private scanRoot(root: Document | ShadowRoot, source: string): void {
-    walkDocumentTree(root, element => {
+    walkTree(root, element => {
       if (isVideoElement(element)) this.processVideoElement(element, source);
       if (element.shadowRoot) this.observeRoot(element.shadowRoot, `${source}:shadow-root`);
     });
@@ -147,10 +164,10 @@ class VideoPopulation {
   }
 
   private destroyAllEnhancers(): void {
-    for (const video of EnhancerMap.getAllManagedVideos()) {
-      const enhancer = EnhancerMap.getEnhancer(video);
+    for (const video of getAllManagedVideos()) {
+      const enhancer = getEnhancer(video);
       enhancer?.destroy();
-      EnhancerMap.dissociateEnhancer(video);
+      dissociateEnhancer(video);
     }
     clearEnhancerStash();
   }
@@ -180,7 +197,7 @@ class VideoPopulation {
       if (revision !== this.initializationRevision || !settings.extensionEnabled || this.initialized) return;
       this.initialized = true;
       this.observeRoot(document, 'initial-scan');
-      this.installAniWorldHosterObserver();
+      this.installHosterSurfaceObserver();
       this.lateScanTimer = window.setTimeout(this.scanForLatePlayer, 250);
       window.addEventListener('pagehide', this.handlePageHide);
     })();
@@ -197,7 +214,7 @@ class VideoPopulation {
   }
 
   getManagedVideos(): HTMLVideoElement[] {
-    return EnhancerMap.getAllManagedVideos();
+    return getAllManagedVideos();
   }
 
   isInitialized(): boolean {
@@ -205,10 +222,20 @@ class VideoPopulation {
   }
 }
 
-const population = new VideoPopulation();
+const discovery = new VideoDiscovery();
 
+/**
+ * Initialize the page's video discovery. Never rejects by contract: a
+ * failure (e.g. storage hiccup in getSettings) logs and resolves, and the
+ * next scan/pageshow retries initialization. Call sites are fire-and-forget.
+ */
 export function initializeOnPage(): Promise<void> {
-  return population.initialize();
+  // Fire-and-forget at both call sites: a rejection (e.g. storage hiccup
+  // in getSettings) must not surface as an unhandled rejection, and the
+  // next scan/pageshow retries initialization anyway.
+  return discovery.initialize().catch((error: unknown) => {
+    console.info('[AniWebScale] Page initialization failed; will retry on the next scan.', error);
+  });
 }
 
 export type SettingsReapplyResult = { status: 'SUCCESS' | 'NO_ACTION' | 'ERROR'; message: string };
@@ -222,23 +249,23 @@ export type SettingsReapplyResult = { status: 'SUCCESS' | 'NO_ACTION' | 'ERROR';
 export async function reapplySettings(): Promise<SettingsReapplyResult> {
   const newSettings: Anime4KWebExtSettings = await getSettings();
   if (!newSettings.extensionEnabled) {
-    const managedCount = population.getManagedVideos().length;
-    population.deinitialize();
+    const managedCount = discovery.getManagedVideos().length;
+    discovery.deinitialize();
     return managedCount > 0
       ? { status: 'SUCCESS', message: `Disabled Anime4K on ${managedCount} managed video(s).` }
       : { status: 'NO_ACTION', message: 'AniWebScale is disabled.' };
   }
 
-  if (!population.isInitialized()) {
-    await population.initialize();
+  if (!discovery.isInitialized()) {
+    await discovery.initialize();
     return { status: 'SUCCESS', message: 'Anime4K is enabled.' };
   }
 
   let updatedCount = 0;
   let updateError: Error | null = null;
 
-  for (const video of population.getManagedVideos()) {
-    const enhancer = EnhancerMap.getEnhancer(video);
+  for (const video of discovery.getManagedVideos()) {
+    const enhancer = getEnhancer(video);
     if (!enhancer) continue;
     const isActive = enhancer.isActive();
 

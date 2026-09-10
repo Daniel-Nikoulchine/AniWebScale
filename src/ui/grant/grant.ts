@@ -3,6 +3,7 @@ import '../common-vars.css';
 import { themeManager } from '../theme-manager';
 import { sitePatternForUrl, injectSiteScripts } from '../../site-access';
 import { parseStatusResponse, siteAccessSyncMessage } from '../../shared/runtime-messages';
+import { initI18n, localizeDocument, message } from '../i18n';
 
 /**
  * The manual grant page. Opened as a fallback when the browser refuses a
@@ -16,7 +17,9 @@ const origin = params.get('origin');
 const tabIdRaw = params.get('tabId');
 const tabId = tabIdRaw !== null && /^\d+$/.test(tabIdRaw) ? Number(tabIdRaw) : undefined;
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  await initI18n();
+  localizeDocument();
   themeManager.getTheme();
 
   const grant = document.getElementById('grant') as HTMLButtonElement;
@@ -25,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const pattern = origin ? sitePatternForUrl(origin) : null;
   if (!origin || !pattern) {
-    status.textContent = 'This request is invalid. Close this tab and try again.';
+    status.textContent = message('grantInvalid', 'This request is invalid. Close this tab and try again.');
     status.dataset.tone = 'error';
     return;
   }
@@ -63,9 +66,9 @@ document.addEventListener('DOMContentLoaded', () => {
   void chrome.permissions.contains({ origins: [pattern] }).then(async alreadyGranted => {
     if (alreadyGranted) {
       grant.disabled = true;
-      status.textContent = 'Access already granted. Applying it to the open tab...';
+      status.textContent = message('grantAlreadyGranted', 'Access already granted. Applying it to the open tab...');
       await syncAndInject();
-      finish(true, 'Done. Switch back to your video and play it.');
+      finish(true, message('grantDonePlay', 'Done. Switch back to your video and play it.'));
       return;
     }
     grant.disabled = false;
@@ -84,16 +87,16 @@ document.addEventListener('DOMContentLoaded', () => {
       granted = await chrome.permissions.request({ origins: [pattern] });
     } catch (error) {
       console.error('[AniWebScale] Grant page permission request failed.', error);
-      finish(false, 'The browser refused the request. Grant access from the extension popup instead.');
+      finish(false, message('grantRefused', 'The browser refused the request. Grant access from the extension popup instead.'));
       return;
     }
     if (!granted) {
-      finish(false, 'Access was denied. You can grant it later from the extension popup.');
+      finish(false, message('grantDenied', 'Access was denied. You can grant it later from the extension popup.'));
       return;
     }
-    status.textContent = 'Access granted. Applying it to the open tab...';
+    status.textContent = message('grantApplying', 'Access granted. Applying it to the open tab...');
     await syncAndInject();
-    finish(true, 'Done. Switch back to your video and enter fullscreen.');
+    finish(true, message('grantDoneFullscreen', 'Done. Switch back to your video and enter fullscreen.'));
   });
 });
 

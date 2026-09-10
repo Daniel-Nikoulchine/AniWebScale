@@ -26,14 +26,34 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
       - name: Install dependencies
         run: npm ci
+
+      # generate:presets builds the optional pixels.wasm; ensure the target is
+      # available so the drift check below can regenerate all artifacts.
+      - name: Ensure Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      # Fast drift gate for committed generated sources, BEFORE any generate:*
+      # step can overwrite them in place.
+      - name: Check generated presets
+        run: npm run check:presets
 
       - name: Lint
         run: npm run lint
 
       - name: Typecheck
         run: npm run typecheck
+
+      # typecheck/build run generate:presets; any diff here means a committed
+      # generator output was stale.
+      - name: Verify generated sources are committed
+        run: git diff --exit-code
 
       - name: Verify extension identities
         run: npm run check:identities
@@ -109,3 +129,64 @@ jobs:
           name: aniwebscale-native-windows-x64
           path: native/build-ci/bin/Release
           if-no-files-found: error
+
+  native-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux build and Vulkan dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslang-tools libvulkan-dev mesa-vulkan-drivers vulkan-tools
+          python -m pip install --upgrade pip numpy
+
+      - name: Fetch pinned ncnn sources
+        run: python3 native/spike/fetch-sources.py
+
+      - name: Configure Linux host (Ninja)
+        run: cmake -S native/linux-host -B native/linux-host/build -G Ninja
+
+      - name: Build Linux host
+        run: cmake --build native/linux-host/build --target aniwebscale-ncnn-host -j"$(nproc)"
+
+      - name: HTTP transport smoke test
+        run: python3 tests/host-http-transport.py
+
+      - name: Presentation-target downscale test
+        run: python3 tests/host-target-downscale.py
+
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build localization bundle
+        run: npm run build:client
+
+      - name: Verify site-localize bundle is committed
+        run: git diff --exit-code public/site-localize.js
+
+      - name: Locale key parity (en/de)
+        run: npm run check:locales

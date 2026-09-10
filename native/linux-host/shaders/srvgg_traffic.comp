@@ -1,0 +1,28 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+// Deep-fusion premise probe (E4): what does ONE 64ch fp16 layer boundary
+// cost? Reads 64*H*W fp16 words, writes them back with a data-dependent
+// feedback op (so the compiler cannot fold it to a fill), ping-ponged A<->B
+// exactly like runTiled's actA/actB. The median per-boundary ms times the 16
+// body boundaries is the hard ceiling for any deep-fusion win — no counters
+// needed, same memory hierarchy as the real path (blob-pooled VkMats).
+layout (binding = 0) readonly buffer In { float16_t in_data[]; };
+layout (binding = 1) writeonly buffer Out { float16_t out_data[]; };
+layout (push_constant) uniform parameter
+{
+    int w;
+    int h;
+    int stride;
+} p;
+
+void main()
+{
+    int x = int(gl_GlobalInvocationID.x);
+    int y = int(gl_GlobalInvocationID.y);
+    int c = int(gl_GlobalInvocationID.z);
+    if (x >= p.w || y >= p.h || c >= 64) return;
+    int i = c * p.stride + y * p.w + x;
+    float v = float(in_data[i]);
+    v = v * 1.0009765625 + 0.0078125;
+    out_data[i] = float16_t(v);
+}

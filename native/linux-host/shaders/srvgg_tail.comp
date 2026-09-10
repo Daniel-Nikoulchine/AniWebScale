@@ -1,0 +1,47 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+// E4 phase 1: fused tail — DepthToSpace-CRD + nearest residual + add + clip,
+// straight to fp16 planar for the existing postproc shader (which packs and
+// optionally box-downscales). Indexing matches srvggTailAddClip exactly:
+//   out[c,oy,ox] = body[(c*16+ry*4+rx)][iy][ix] + frame[c][iy][ix],
+// with (ix,rx) = divmod(ox,4) (non-negative: GLSL / and % are floor here).
+layout (binding = 0) readonly buffer Body { float body_data[]; };
+layout (binding = 1) readonly buffer Frame { float16_t frame_data[]; };
+layout (binding = 2) writeonly buffer Out { float16_t out_data[]; };
+// Tiled path (phase 1b): body activations are fp16 storage like everything
+// else there. Uniform-selected, never divergent within a dispatch.
+layout (binding = 3) readonly buffer Body16 { float16_t body_data16[]; };
+
+layout (push_constant) uniform parameter
+{
+    int w;
+    int h;
+    int bodyStride;
+    int frameStride;
+    int outStride;
+    int bodyIsFp16;
+} p;
+
+void main()
+{
+    int ox = int(gl_GlobalInvocationID.x);
+    int oy = int(gl_GlobalInvocationID.y);
+    int outW = p.w * 4;
+    int outH = p.h * 4;
+    if (ox >= outW || oy >= outH)
+        return;
+    int ix = ox / 4;
+    int rx = ox % 4;
+    int iy = oy / 4;
+    int ry = oy % 4;
+    for (int c = 0; c < 3; ++c)
+    {
+        float body;
+        if (p.bodyIsFp16 == 1)
+            body = float(body_data16[(c * 16 + ry * 4 + rx) * p.bodyStride + iy * p.w + ix]);
+        else
+            body = body_data[(c * 16 + ry * 4 + rx) * p.bodyStride + iy * p.w + ix];
+        float res = float(frame_data[c * p.frameStride + iy * p.w + ix]);
+        out_data[c * p.outStride + oy * outW + ox] = float16_t(clamp(body + res, 0.0, 1.0));
+    }
+}

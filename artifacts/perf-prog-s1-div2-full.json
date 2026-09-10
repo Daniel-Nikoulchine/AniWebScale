@@ -1,0 +1,103 @@
+{
+  "benchmark": "RealESRGAN ncnn-Vulkan fp16",
+  "generatedAtUtc": "2026-09-09T17:29:40Z",
+  "device": {
+    "name": "AMD Radeon RX 6750 XT (RADV NAVI22)",
+    "driver": "radv",
+    "apiVersion": "1.4.354",
+    "vendorId": 4098,
+    "deviceId": 29663,
+    "fp16Packed": true,
+    "fp16Storage": true,
+    "fp16Arithmetic": true,
+    "rebar": true
+  },
+  "model": {
+    "param": "/home/daniel/Projects/anime4kBrowser-perf-programm/native/linux-host/../../models/realesrgan/ncnn/realesr-animevideov3-x4.param",
+    "bin": "/home/daniel/Projects/anime4kBrowser-perf-programm/native/linux-host/../../models/realesrgan/ncnn/realesr-animevideov3-x4.bin"
+  },
+  "config": {
+    "warmupFrames": 3,
+    "sampleFrames": 30,
+    "useFp16": true,
+    "useInt8": false,
+    "numThreads": 4,
+    "winograd": true,
+    "fp16Arithmetic": false,
+    "gpuPostproc": true,
+    "compareCpuFallback": false,
+    "inferAtTarget": true,
+    "inferDiv": 2
+  },
+  "elapsedSeconds": 4.049679,
+  "cases": [
+    {
+      "width": 640,
+      "height": 360,
+      "label": "360p",
+      "outWidth": 640,
+      "outHeight": 360,
+      "fp16": true,
+      "int8": false,
+      "gpuPostproc": true,
+      "averageMs": 6.825269,
+      "p50Ms": 6.775576,
+      "p95Ms": 7.075246,
+      "fps": 146.514378,
+      "rme": 0.606130,
+      "status": "ok",
+      "samplesMs": [6.7795, 6.7493, 6.7949, 6.7652, 6.7671, 6.7669, 6.7665, 6.7714, 6.7691, 7.2546, 6.7799, 6.7739, 6.8124, 7.0752, 6.9659, 7.0372, 6.9041, 6.8690, 6.8572, 6.8093, 6.7583, 6.7871, 6.7721, 6.7571, 6.7795, 6.7756, 6.7792, 6.7735, 6.7475, 6.7596]
+    },
+    {
+      "width": 960,
+      "height": 540,
+      "label": "540p",
+      "outWidth": 960,
+      "outHeight": 540,
+      "fp16": true,
+      "int8": false,
+      "gpuPostproc": true,
+      "averageMs": 13.986323,
+      "p50Ms": 13.980891,
+      "p95Ms": 14.022261,
+      "fps": 71.498419,
+      "rme": 0.084227,
+      "status": "ok",
+      "samplesMs": [13.9731, 13.9682, 13.9712, 13.9966, 13.9808, 13.9439, 13.9563, 13.9467, 13.9577, 13.9747, 13.9780, 13.9466, 14.0039, 13.9647, 13.9497, 13.9811, 13.9898, 13.9677, 14.0223, 14.1148, 14.0139, 14.0013, 13.9947, 14.0190, 13.9990, 13.9956, 13.9918, 13.9809, 13.9887, 14.0172]
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "label": "720p",
+      "outWidth": 1280,
+      "outHeight": 720,
+      "fp16": true,
+      "int8": false,
+      "gpuPostproc": true,
+      "averageMs": 26.398306,
+      "p50Ms": 26.393932,
+      "p95Ms": 26.524832,
+      "fps": 37.881219,
+      "rme": 0.148479,
+      "status": "ok",
+      "samplesMs": [26.3923, 26.4178, 26.4283, 26.8121, 26.5248, 26.3845, 26.3377, 26.3852, 26.4323, 26.4576, 26.4563, 26.4065, 26.3656, 26.3958, 26.3939, 26.4433, 26.4712, 26.4620, 26.4952, 26.4481, 26.4199, 26.3881, 26.3350, 26.2978, 26.2260, 26.2773, 26.2436, 26.2764, 26.2730, 26.3019]
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "label": "1080p",
+      "outWidth": 1920,
+      "outHeight": 1080,
+      "fp16": true,
+      "int8": false,
+      "gpuPostproc": true,
+      "averageMs": 74.327321,
+      "p50Ms": 74.275680,
+      "p95Ms": 74.676059,
+      "fps": 13.454003,
+      "rme": 0.085795,
+      "status": "ok",
+      "samplesMs": [74.4401, 74.6385, 74.1957, 74.1239, 74.1532, 74.2046, 74.1519, 74.2351, 74.2052, 74.3114, 74.2138, 74.2077, 74.2750, 74.2561, 74.9273, 74.3137, 74.4408, 74.3782, 74.2645, 74.3292, 74.4211, 74.4590, 74.4082, 74.3689, 74.0989, 74.2997, 74.2757, 74.6761, 74.3750, 74.1713]
+    }
+  ]
+}

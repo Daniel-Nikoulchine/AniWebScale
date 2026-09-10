@@ -6,6 +6,12 @@ const toast = document.querySelector('.toast');
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let toastTimer;
 
+// Catalog lookup exposed by site-localize.js once the locale JSON is loaded;
+// falls back to plain English until then (or if localization is unavailable).
+function translate(key, fallback) {
+  return typeof window.aniwebscaleT === 'function' ? window.aniwebscaleT(key, fallback) : fallback;
+}
+
 function showToast(message) {
   if (!toast) return;
   toast.textContent = message;
@@ -24,10 +30,14 @@ function setTheme(theme, persist = false) {
   root.dataset.theme = theme;
   if (persist) localStorage.setItem('aniwebscale-theme', theme);
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#0d0a17' : '#f6f5f1');
-  document.querySelector('.theme-button')?.setAttribute('aria-label', theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+  document.querySelector('.theme-button')?.setAttribute('aria-label', theme === 'dark'
+    ? translate('switchLightTheme', 'Switch to light theme')
+    : translate('switchDarkTheme', 'Switch to dark theme'));
 }
 
 setTheme(preferredTheme());
+// Re-apply the now-translatable theme label once the catalog has loaded.
+window.addEventListener('aniwebscale:localized', () => setTheme(root.dataset.theme));
 document.querySelector('.theme-button')?.addEventListener('click', () => {
   setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark', true);
 });
@@ -45,8 +55,7 @@ nav?.addEventListener('click', event => {
 });
 
 document.querySelector('.gpu-notice a')?.addEventListener('click', () => {
-  const requirements = document.querySelector('#gpu-requirements');
-  if (requirements) requirements.open = true;
+  for (const id of ['#gpu-requirements', '#protected-video']) document.querySelector(id)?.setAttribute('open', '');
 });
 
 const observer = reduceMotion || !('IntersectionObserver' in window)
@@ -69,6 +78,37 @@ slider?.addEventListener('input', () => {
   stage.classList.add(`split-${split}`);
 });
 
+// One-time slider hint: sweep 20 → 50 on first reveal so visitors discover
+// the comparison. Skipped for reduced motion; any user input takes over.
+if (slider && !reduceMotion && 'IntersectionObserver' in window) {
+  let hintFinished = false;
+  let hintCancelled = false;
+  const cancelHint = () => { hintCancelled = true; };
+  slider.addEventListener('pointerdown', cancelHint, { once: true });
+  slider.addEventListener('keydown', cancelHint, { once: true });
+  const setSplit = value => {
+    slider.value = String(value);
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const hintObserver = new IntersectionObserver(entries => {
+    if (hintFinished || !entries.some(entry => entry.isIntersecting)) return;
+    hintFinished = true;
+    hintObserver.disconnect();
+    setSplit(20);
+    const startedAt = performance.now();
+    const duration = 900;
+    const frame = now => {
+      if (hintCancelled) { setSplit(50); return; }
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 2);
+      setSplit(Math.round(20 + (50 - 20) * eased));
+      if (progress < 1) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }, { threshold: 0.4 });
+  hintObserver.observe(slider.parentElement);
+}
+
 const emailLink = document.querySelector('[data-support-email]');
 if (emailLink && !emailLink.getAttribute('href')?.startsWith('mailto:')) {
   emailLink.href = 'mailto:support@korrespont.com';
@@ -79,9 +119,6 @@ if (emailLink && !emailLink.getAttribute('href')?.startsWith('mailto:')) {
 document.querySelectorAll('.store-link').forEach(link => {
   link.addEventListener('click', event => {
     event.preventDefault();
-    const msg = document.documentElement.lang === 'de'
-      ? 'Store-Listing folgt bald. Die Erweiterung ist noch nicht im Store verfügbar.'
-      : 'Store listing coming soon. The extension is not yet available in the store.';
-    showToast(msg);
+    showToast(translate('storeComingSoon', 'Store listing coming soon. The extension is not yet available in the store.'));
   });
 });

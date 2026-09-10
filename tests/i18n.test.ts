@@ -1,8 +1,16 @@
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+function readRepo(path: string): string {
+  return readFileSync(resolve(repoRoot, path), 'utf8');
+}
+
 function messages(locale: string): Record<string, { message: string }> {
-  return JSON.parse(readFileSync(`public/_locales/${locale}/messages.json`, 'utf8'));
+  return JSON.parse(readRepo(`public/_locales/${locale}/messages.json`));
 }
 
 describe('extension localization catalog', () => {
@@ -15,7 +23,7 @@ describe('extension localization catalog', () => {
   });
 
   it('localizes the manifest identity through the same catalog', () => {
-    const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
+    const manifest = JSON.parse(readRepo('manifest.json'));
     expect(manifest.default_locale).toBe('en');
     expect(manifest.name).toBe('__MSG_extensionName__');
     expect(manifest.description).toBe('__MSG_description__');
@@ -23,7 +31,7 @@ describe('extension localization catalog', () => {
 
   it('publishes the extension catalog as a subset of the website catalog', () => {
     for (const locale of ['en', 'de']) {
-      const website = JSON.parse(readFileSync(`website/public/locales/${locale}.json`, 'utf8'));
+      const website = JSON.parse(readRepo(`website/public/locales/${locale}.json`));
       const extension = messages(locale);
       // Every extension key must exist on the website with the identical value;
       // the website may carry additional marketing/legal-only keys on top.
@@ -31,6 +39,12 @@ describe('extension localization catalog', () => {
         expect(website[key], `website locale "${locale}" is missing extension key "${key}"`).toEqual(value);
       }
     }
+  });
+
+  it('keeps the website German and English catalogs in key parity', () => {
+    const english = Object.keys(JSON.parse(readRepo('website/public/locales/en.json'))).sort();
+    const german = Object.keys(JSON.parse(readRepo('website/public/locales/de.json'))).sort();
+    expect(german).toEqual(english);
   });
 });
 
@@ -74,28 +88,26 @@ describe('user-selected UI language', () => {
 
   it('follows the browser UI language when set to auto', async () => {
     storage.browserLanguage = 'de';
-    const { initI18n, getResolvedLanguage, message } = await reimportModule();
+    const { initI18n, getUiLanguage, message } = await reimportModule();
     await initI18n();
-    expect(getResolvedLanguage()).toBe('de');
+    expect(getUiLanguage()).toBe('auto');
     expect(message('theme')).toBe('Design');
   });
 
   it('uses the explicitly selected catalog over the browser language', async () => {
     storage.browserLanguage = 'en';
     storage.data.uiLanguage = 'de';
-    const { initI18n, getResolvedLanguage, message, getUiLanguage } = await reimportModule();
+    const { initI18n, message, getUiLanguage } = await reimportModule();
     await initI18n();
     expect(getUiLanguage()).toBe('de');
-    expect(getResolvedLanguage()).toBe('de');
     expect(message('theme')).toBe('Design');
   });
 
   it('switches the catalog immediately without a reload', async () => {
     storage.browserLanguage = 'de';
-    const { initI18n, setUiLanguage, getResolvedLanguage, message } = await reimportModule();
+    const { initI18n, setUiLanguage, message } = await reimportModule();
     await initI18n();
     await setUiLanguage('en');
-    expect(getResolvedLanguage()).toBe('en');
     expect(message('theme')).toBe('Theme');
     expect(storage.data.uiLanguage).toBe('en');
   });

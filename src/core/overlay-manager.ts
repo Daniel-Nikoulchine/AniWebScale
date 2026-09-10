@@ -1,5 +1,5 @@
 import type { RenderStats } from '../types';
-import { fullscreenContainsVideo, getFullscreenElement } from '../shared/fullscreen-video';
+import { fullscreenContainsVideo } from '../shared/fullscreen-video';
 import { fullscreenContext } from './fullscreen-context';
 import { choosePlayerSurface } from '../shared/player-surface';
 import { EventScope } from '../shared/event-scope';
@@ -11,6 +11,19 @@ import {
 
 const MIN_VIDEO_WIDTH = 240;
 const MIN_VIDEO_HEIGHT = 135;
+/** A path/slot share at or above this percentage is reported as the majority. */
+const MAJORITY_PCT = 50;
+
+/**
+ * Runner label for the RealESRGAN overlay line. The native Vulkan host also
+ * serves through the runner slot, so runnerPct alone cannot tell it apart
+ * from the ORT worker — nativePct (a subset of runnerPct) decides first.
+ * Pure for tests; thresholds mirror the compose-path majority rule below.
+ */
+export function runnerLabelForStats(stats: { nativePct: number; runnerPct: number }): string {
+  if (stats.nativePct >= MAJORITY_PCT) return 'native-gpu';
+  return stats.runnerPct >= MAJORITY_PCT ? 'runner' : 'main';
+}
 
 export class OverlayManager {
   private video: HTMLVideoElement;
@@ -28,18 +41,24 @@ export class OverlayManager {
   private readonly mutationObserver: MutationObserver;
   private readonly updateBound = () => this.schedulePositionUpdate();
   private readonly fullscreenBound = () => this.handleFullscreenChange();
-  private readonly unsubscribeFullscreen: () => void;
+  private unsubscribeFullscreen!: () => void;
+  private globalListenersAttached = false;
   private readonly videoEvents = new EventScope();
+  private reconnectTimer: number | null = null;
 
   private static readonly HOST_MARKER = 'data-anime4k-overlay-host';
+  /** Live managers by video id: recreating for one video destroys the old
+   * manager instead of orphaning its observers and global listeners. */
+  private static readonly live = new Map<string, OverlayManager>();
 
   public static create(video: HTMLVideoElement): OverlayManager {
     const videoId = video.dataset.anime4kVideoId;
-    if (videoId) {
-      document.querySelectorAll<HTMLElement>(`[${OverlayManager.HOST_MARKER}="${CSS.escape(videoId)}"]`)
-        .forEach(host => host.remove());
-    }
-    return new OverlayManager(video);
+    // Recreating for one video destroys the old manager, which removes its
+    // host through the stored reference — no DOM re-discovery needed.
+    if (videoId) OverlayManager.live.get(videoId)?.destroy();
+    const manager = new OverlayManager(video);
+    if (videoId) OverlayManager.live.set(videoId, manager);
+    return manager;
   }
 
   private constructor(video: HTMLVideoElement) {
@@ -52,7 +71,17 @@ export class OverlayManager {
       zIndex: '2147483646',
       display: 'none',
     });
-    document.body.appendChild(this.host);
+    // Mirror reattach/fullscreenchange placement: a manager created while its
+    // video is already fullscreen must not park the host in <body>, where the
+    // fullscreen layout's visibility rules would hide the stats panel.
+    if (document.body) {
+      const initialFullscreen = fullscreenContext.element;
+      if (fullscreenContainsVideo(initialFullscreen, video) && initialFullscreen) {
+        choosePlayerSurface(video, initialFullscreen).appendChild(this.host);
+      } else {
+        document.body.appendChild(this.host);
+      }
+    }
 
     this.shadowRoot = this.host.attachShadow({ mode: 'closed' });
     this.injectStyles();
@@ -64,10 +93,8 @@ export class OverlayManager {
 
     this.resizeObserver = new ResizeObserver(this.updateBound);
     this.mutationObserver = new MutationObserver(this.updateBound);
-    this.unsubscribeFullscreen = fullscreenContext.subscribe(this.fullscreenBound);
+    this.attachGlobalListeners();
     this.observeVideo();
-    window.addEventListener('resize', this.updateBound);
-    window.addEventListener('scroll', this.updateBound, { capture: true, passive: true });
     this.updatePosition();
   }
 
@@ -86,6 +113,32 @@ export class OverlayManager {
     this.mutationObserver.disconnect();
     this.videoEvents.dispose();
     this.cancelPositionUpdate();
+    this.clearReconnectTimer();
+  }
+
+  /** window is unavailable in DOM-less unit tests; never crash teardown. */
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === null) return;
+    if (typeof window !== 'undefined' && typeof window.clearTimeout === 'function') {
+      window.clearTimeout(this.reconnectTimer);
+    }
+    this.reconnectTimer = null;
+  }
+
+  private attachGlobalListeners(): void {
+    if (this.globalListenersAttached) return;
+    this.globalListenersAttached = true;
+    this.unsubscribeFullscreen = fullscreenContext.subscribe(this.fullscreenBound);
+    window.addEventListener('resize', this.updateBound);
+    window.addEventListener('scroll', this.updateBound, { capture: true, passive: true });
+  }
+
+  private detachGlobalListeners(): void {
+    if (!this.globalListenersAttached) return;
+    this.globalListenersAttached = false;
+    window.removeEventListener('resize', this.updateBound);
+    window.removeEventListener('scroll', this.updateBound, true);
+    this.unsubscribeFullscreen();
   }
 
   private schedulePositionUpdate(): void {
@@ -105,7 +158,22 @@ export class OverlayManager {
   private updatePosition(): void {
     if (this.destroyed || !this.video.isConnected) {
       this.host.style.display = 'none';
+      // A temporarily removed video (player re-parenting) fires no observer
+      // the manager watches; re-check shortly after re-insertion instead of
+      // staying hidden until the next random layout event. The retry chain
+      // ends with the manager (destroy clears the timer; unobserve on
+      // detach/reattach resets it). Skipped where no window exists (tests).
+      if (!this.destroyed && this.reconnectTimer === null && typeof window !== 'undefined'
+        && typeof window.setTimeout === 'function') {
+        this.reconnectTimer = window.setTimeout(() => {
+          this.reconnectTimer = null;
+          this.updatePosition();
+        }, 1000);
+      }
       return;
+    }
+    if (this.reconnectTimer !== null) {
+      this.clearReconnectTimer();
     }
 
     const rect = this.video.getBoundingClientRect();
@@ -123,8 +191,16 @@ export class OverlayManager {
     if (!visible) return;
 
     const parent = this.host.parentElement;
-    const parentRect = parent && parent !== document.body
-      ? parent.getBoundingClientRect()
+    // The absolutely-positioned host aligns to its offsetParent (nearest
+    // positioned ancestor), which need not be its DOM parent when the player
+    // nests it inside static wrappers. Measure against the offsetParent so
+    // coordinates land correctly in both cases.
+    const offsetParent = this.host.offsetParent;
+    const relativeTo = offsetParent instanceof HTMLElement && offsetParent !== this.host
+      ? offsetParent
+      : parent && parent !== document.body ? parent : null;
+    const parentRect = relativeTo
+      ? relativeTo.getBoundingClientRect()
       : { top: -window.scrollY, left: -window.scrollX };
     Object.assign(this.host.style, {
       top: `${rect.top - parentRect.top}px`,
@@ -151,11 +227,11 @@ export class OverlayManager {
   }
 
   private handleFullscreenChange(): void {
-    const fullscreen = getFullscreenElement();
+    const fullscreen = fullscreenContext.element;
     if (fullscreenContainsVideo(fullscreen, this.video)) {
       choosePlayerSurface(this.video, fullscreen).appendChild(this.host);
     }
-    else if (this.host.parentElement !== document.body) document.body.appendChild(this.host);
+    else if (this.host.parentElement !== document.body && document.body) document.body.appendChild(this.host);
     this.updatePosition();
   }
 
@@ -166,6 +242,11 @@ export class OverlayManager {
       this.canvas.style.visibility = 'hidden';
     }
     return this.canvas;
+  }
+
+  /** True once a rendered frame was presented on the output canvas. */
+  public get isCanvasVisible(): boolean {
+    return this.canvasVisible;
   }
 
   public showCanvas(): void {
@@ -190,15 +271,40 @@ export class OverlayManager {
   public setStats(stats: RenderStats | null): void {
     if (!stats) {
       this.statsPanel.hidden = true;
+      this.statsPanel.textContent = '';
       return;
     }
-    this.statsPanel.textContent = `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
+    if (stats.realesrgan) {
+      const r = stats.realesrgan;
+      const composePath = r.gpuComposePct >= MAJORITY_PCT ? 'gpu' : 'cpu';
+      const worker = runnerLabelForStats(r);
+      const precision = r.precision === 'fp16' ? 'FP16' : r.precision === 'int8' ? 'INT8' : 'FP32';
+      const head = typeof r.enhancedFps === 'number' && typeof r.count === 'number'
+        ? `${stats.fps.toFixed(1)} present / ${r.enhancedFps.toFixed(1)} enhance FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped (${r.count} enhanced)`
+        : `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
+      this.statsPanel.replaceChildren();
+      const line1 = document.createElement('div');
+      line1.textContent = head;
+      const line2 = document.createElement('div');
+      line2.textContent =
+        `readback ${r.readbackMs.toFixed(1)}ms  infer ${r.inferMs.toFixed(1)}ms  ` +
+        `compose ${r.composeMs.toFixed(1)}ms (${composePath}, ${worker}, ${precision})`;
+      line2.style.marginTop = '3px';
+      line2.style.opacity = '0.85';
+      this.statsPanel.appendChild(line1);
+      this.statsPanel.appendChild(line2);
+    } else {
+      const head = `${stats.fps.toFixed(1)} FPS  ${stats.renderMs.toFixed(1)} ms  ${stats.droppedFrames} dropped`;
+      this.statsPanel.textContent = head;
+    }
     this.statsPanel.hidden = false;
     this.statsPanel.classList.toggle('overloaded', stats.warning);
   }
 
   public detach(): void {
     this.unobserveVideo();
+    this.detachGlobalListeners();
+    this.setStats(null);
     this.host.style.display = 'none';
     this.host.remove();
     this.canvas?.remove();
@@ -206,21 +312,30 @@ export class OverlayManager {
   }
 
   public reattach(newVideo: HTMLVideoElement): void {
+    if (this.destroyed) return;
+    // A re-homed overlay must not show the previous video's stats until the
+    // new source renders its first frame (detach() already blanks them).
+    this.setStats(null);
     const wasVisible = this.canvasVisible;
-    const canvasWasAttached = Boolean(this.canvas?.parentNode);
+    // detach() removes the canvas from the DOM while keeping the reference;
+    // a still-visible canvas must be re-homed to the new video, not stranded.
+    const canvasNeedsHome = Boolean(this.canvas) && (wasVisible || Boolean(this.canvas?.parentNode));
     if (wasVisible) this.restoreVideoOpacity();
+    // Drop the old video's observations before subscribing to the new one:
+    // observers and the event scope accumulate targets otherwise.
+    this.unobserveVideo();
     this.video = newVideo;
     this.video.dataset.anime4kVideoId = this.host.getAttribute(OverlayManager.HOST_MARKER) ?? '';
     // A mid-fullscreen reattach must not park the host in <body>, where the
     // fullscreen layout's visibility rules would hide the stats panel until
     // the next fullscreen toggle; mirror the fullscreenchange placement.
-    const fullscreen = getFullscreenElement();
+    const fullscreen = fullscreenContext.element;
     if (fullscreenContainsVideo(fullscreen, newVideo)) {
       choosePlayerSurface(newVideo, fullscreen).appendChild(this.host);
-    } else {
+    } else if (document.body) {
       document.body.appendChild(this.host);
     }
-    if (this.canvas && canvasWasAttached) {
+    if (this.canvas && canvasNeedsHome) {
       newVideo.parentNode?.insertBefore(this.canvas, newVideo);
     }
     if (this.canvas && wasVisible) {
@@ -231,16 +346,21 @@ export class OverlayManager {
       this.canvasVisible = false;
     }
     this.observeVideo();
+    this.attachGlobalListeners();
     this.updatePosition();
   }
 
   public destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.clearReconnectTimer();
+    OverlayManager.live.delete(
+      typeof this.host.getAttribute === 'function'
+        ? this.host.getAttribute(OverlayManager.HOST_MARKER) ?? ''
+        : '',
+    );
     this.unobserveVideo();
-    window.removeEventListener('resize', this.updateBound);
-    window.removeEventListener('scroll', this.updateBound, true);
-    this.unsubscribeFullscreen();
+    this.detachGlobalListeners();
     this.hideCanvas();
     this.host.remove();
   }

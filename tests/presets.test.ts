@@ -4,16 +4,12 @@ import {
   AI_UPSCALE_MODES,
   ENHANCEMENT_MODES,
   ID_TO_MODE,
-  LEGACY_BASE_TO_MODE,
   MODE_TO_ID,
-  MODE_TO_LEGACY_BASE,
   QUALITY_TIERS,
   calculateAutoTargetSize,
-  isDoubleMode,
   legacyTierToQuality,
   isProcessingEnabled,
   modeUsesQuality,
-  qualityToLegacyTier,
 } from '../src/shared/presets';
 import {
   scheduleEffectsForTarget,
@@ -35,22 +31,17 @@ describe('official Anime4K presets', () => {
     expect(new Set(combinations).size).toBe(18);
   });
 
-  it('round-trips current and legacy mode identifiers', () => {
+  it('round-trips current mode identifiers', () => {
     for (const mode of ANIME4K_MODES) {
       expect(ID_TO_MODE[MODE_TO_ID[mode]]).toBe(mode);
-      expect(LEGACY_BASE_TO_MODE[MODE_TO_LEGACY_BASE[mode]]).toBe(mode);
     }
   });
 
-  it('identifies only the chained double-upscale modes', () => {
-    expect(ANIME4K_MODES.filter(isDoubleMode)).toEqual(['AA', 'BB', 'CA']);
-  });
-
   it('migrates legacy performance tiers deterministically', () => {
-    expect(qualityToLegacyTier('M')).toBe('performance');
-    expect(qualityToLegacyTier('VL')).toBe('balanced');
-    expect(qualityToLegacyTier('UL')).toBe('ultra');
+    expect(legacyTierToQuality('performance')).toBe('M');
+    expect(legacyTierToQuality('balanced')).toBe('VL');
     expect(legacyTierToQuality('quality')).toBe('UL');
+    expect(legacyTierToQuality('ultra')).toBe('UL');
     expect(legacyTierToQuality(undefined)).toBe('VL');
   });
 
@@ -110,7 +101,7 @@ describe('official Anime4K presets', () => {
 
   it('exposes CNN and GLSL anime upscalers at fixed scales', () => {
     expect(AI_UPSCALE_MODES).toEqual([
-      'CNNX2', 'ARTCNN', 'ACNET', 'ARNET',
+      'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'REALESRGAN',
     ]);
     expect(resolveEnhancementGraph('CNNX2', 'VL')[0]).toMatchObject({
       className: 'CNNx2VL', upscaleFactor: 2, alwaysApply: true,
@@ -124,6 +115,23 @@ describe('official Anime4K presets', () => {
     expect(resolveEnhancementGraph('ARNET', 'M')[0]).toMatchObject({
       className: 'ARNetX2', upscaleFactor: 2, alwaysApply: true,
     });
+    expect(resolveEnhancementGraph('REALESRGAN', 'M')[0]).toMatchObject({
+      className: 'RealEsrganX4', upscaleFactor: 4, alwaysApply: true,
+    });
+  });
+
+  it('maps the RealESRGAN cap preset to maxInferenceHeight', () => {
+    expect(resolveEnhancementGraph('REALESRGAN', 'M')[0].params).toMatchObject({
+      maxInferenceHeight: 480,
+    });
+    expect(resolveEnhancementGraph('REALESRGAN', 'M', 432)[0].params).toMatchObject({
+      maxInferenceHeight: 432,
+    });
+    expect(resolveEnhancementGraph('REALESRGAN', 'M', 405)[0].params).toMatchObject({
+      maxInferenceHeight: 405,
+    });
+    // Other AI modes ignore the cap.
+    expect(resolveEnhancementGraph('CNNX2', 'VL', 405)[0].params).toBeUndefined();
   });
 
   it('exposes an off mode that can still run frame generation', () => {

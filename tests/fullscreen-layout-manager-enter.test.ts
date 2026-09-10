@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FullscreenLayoutManager } from '../src/core/fullscreen-layout-manager';
+import {
+  activeFullscreenLayout,
+  FullscreenLayoutManager,
+  resetActiveFullscreenLayout,
+} from '../src/core/fullscreen-layout-manager';
 
 class FakeElement {
   attributes = new Map<string, string>();
@@ -95,5 +99,21 @@ describe('fullscreen layout manager enter/exit transaction', () => {
     const manager = new FullscreenLayoutManager(new FakeElement() as unknown as HTMLVideoElement);
 
     expect(() => manager.enter(null)).not.toThrow();
+  });
+
+  it('exposes the single active layout and resets the singleton', () => {
+    installDocument();
+    vi.stubGlobal('ShadowRoot', class {});
+    vi.stubGlobal('HTMLElement', FakeHTMLElement);
+    resetActiveFullscreenLayout();
+    expect(activeFullscreenLayout()).toBeNull();
+
+    const manager = new FullscreenLayoutManager(new FakeElement() as unknown as HTMLVideoElement);
+    const root = new FakeHTMLElement();
+    manager.enter(root as unknown as HTMLElement);
+    expect(activeFullscreenLayout()).toBe(manager);
+
+    manager.exit();
+    expect(activeFullscreenLayout()).toBeNull();
   });
 });

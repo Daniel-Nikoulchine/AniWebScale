@@ -19,71 +19,80 @@ import {
 } from '../shared/backend-selection';
 import type { SelectedBackend } from '../shared/backend-selection';
 import { assertBackendCompatibility, classifyFallbackReason } from './video-backend-policy';
-import { electFullscreenCandidate, fullscreenContext } from './fullscreen-context';
+import { fullscreenContext } from './fullscreen-context';
 import type { NativeFallbackReason } from '../shared/native-fallback-request';
-import { blocksNativeRetry } from '../shared/native-retry';
 import {
   createNativeSessionClient,
   type NativeFallbackOutcome,
   type NativeSessionClient,
 } from './native-session-client';
-import { matchesExpectedNativeEvent } from '../shared/session-recovery';
 import { getEffectsForPreset, getSettings } from '../utils/settings';
-import { isVideoInFullscreenContext } from '../shared/fullscreen-video';
 import { OverlayManager } from './overlay-manager';
 import { FullscreenLayoutManager } from './fullscreen-layout-manager';
 import { BackendState } from './backend-state';
 import { EnhancerLifecycle } from './enhancer-lifecycle';
-import { OverloadTracker } from './render-stats';
+import { NativeSwitchLedger } from './native-switch';
 import { EventScope } from '../shared/event-scope';
 import type { Renderer } from './renderer';
-import { hasPlayerFullscreenSignal, showEnhancementNotification } from './video-enhancer-view';
+import { showEnhancementNotification } from './video-enhancer-view';
+import { EnhancerStatsConsumer } from './enhancer-stats-consumer';
+import {
+  FullscreenReconciler,
+  FULLSCREEN_RECONCILE_IMMEDIATE_MS,
+} from './enhancer-fullscreen-reconciler';
+import { NativeSessionObserver } from './enhancer-native-observer';
 
 export class VideoEnhancer {
   private static activeEnhancer: VideoEnhancer | null = null;
-  private static readonly managedEnhancers = new Set<VideoEnhancer>();
 
   private renderer: Renderer | null = null;
   private video!: HTMLVideoElement;
   private readonly backend = new BackendState();
-  private nativeSessionId: string | null = null;
   private currentModeId: string | null = null;
   private currentSettings: Anime4KWebExtSettings | null = null;
   private readonly overlay: OverlayManager;
   private readonly fullscreenLayout: FullscreenLayoutManager;
   private readonly videoId: string;
   private encryptedDetected = false;
-  private performanceWarning = false;
-  private lastNativeDroppedFrames = 0;
-  private readonly nativeOverloadTracker = new OverloadTracker();
   private destroyed = false;
-  private switchingFromNativeRevision: number | null = null;
+  private lastEncryptedHandlingAt = 0;
   private readonly targetResizeObserver: ResizeObserver;
-  private targetUpdateTimer?: number;
-  private nativePlaybackTimer?: number;
-  private fullscreenDebounceTimer?: number;
-  private fullscreenRevision = 0;
+  /**
+   * First-frame watchdog: a renderer that never presents (transient device
+   * loss at first start, observed flaky in Zen E2E) leaves applied set with
+   * no canvas and no error. One restart heals it (proven by manual retry);
+   * the flag bounds it to a single restart per enhancer life.
+   */
+  private firstFrameWatchdogTimer?: number;
+  private firstFrameWatchdogFired = false;
   /** The one serialized lifecycle: settings and fullscreen reconcile never interleave. */
   private readonly lifecycle = new EnhancerLifecycle();
+  /** Intentional native→webgpu switch: the abandoned session ledger. */
+  private readonly nativeSwitch = new NativeSwitchLedger();
   private readonly events = new EventScope();
-  private automaticSession = false;
-  private nativeRetryBlocked = false;
+  private videoEvents = new EventScope();
+  /** Native session id + 1 Hz playback heartbeat + overload metrics. */
+  private readonly nativeObserver: NativeSessionObserver;
+  /** Stats fan-out (overlay + Auto-Cap) and ephemeral inference-cap ladder. */
+  private readonly statsConsumer: EnhancerStatsConsumer;
+  /** Debounced fullscreen reconciliation and the auto-fullscreen marker. */
+  private readonly reconciler: FullscreenReconciler;
 
   private readonly targetChangeHandler = () => {
-    this.scheduleAutoTargetUpdate();
-    this.scheduleFullscreenReconcile();
+    this.statsConsumer.scheduleTargetUpdate();
+    this.reconciler.schedule();
   };
   private readonly videoFrameHandler = () => {
-    this.scheduleFullscreenReconcile(0);
+    this.reconciler.schedule(FULLSCREEN_RECONCILE_IMMEDIATE_MS);
   };
   private readonly fullscreenChangeHandler = () => {
-    this.scheduleFullscreenReconcile(0);
+    this.reconciler.schedule(FULLSCREEN_RECONCILE_IMMEDIATE_MS);
   };
   private readonly mediaActivityHandler = () => {
-    this.scheduleFullscreenReconcile(0);
+    this.reconciler.schedule(FULLSCREEN_RECONCILE_IMMEDIATE_MS);
   };
   private readonly windowScrollHandler = () => {
-    this.scheduleFullscreenReconcile(0);
+    this.reconciler.schedule(FULLSCREEN_RECONCILE_IMMEDIATE_MS);
   };
   private readonly unsubscribeFullscreenContext: () => void;
 
@@ -93,77 +102,28 @@ export class VideoEnhancer {
     // native-active enhancer wired to a session that no longer exists.
     if (!(event as PageTransitionEvent).persisted || !this.backend.isNativeActive) return;
     void this.stopEnhancement().then(
-      () => this.scheduleFullscreenReconcile(0),
+      () => this.reconciler.schedule(FULLSCREEN_RECONCILE_IMMEDIATE_MS),
       () => undefined,
     );
   };
 
   private readonly nativeSessionHandler = (event: Event) => {
-    if (this.destroyed) return;
-    const detail = (event as CustomEvent<Record<string, unknown>>).detail;
-    if (!detail || typeof detail.type !== 'string') return;
-    // Events are matched to the live session id, not to the transition
-    // phase: a terminal host event can arrive while a configuration update
-    // is between phases, and dropping it would leave a zombie session whose
-    // cleanup never runs. Expected-stop paths null the session id first, so
-    // their events no longer match.
-    if (!matchesExpectedNativeEvent(this.nativeSessionId, detail.sessionId)) return;
-    if (blocksNativeRetry(detail)) this.nativeRetryBlocked = true;
-    if (detail.type === 'metrics') {
-      if (!this.backend.isNativeActive) return;
-      const fps = Number(detail.fps) || 0;
-      const renderMs = Number(detail.frameTimeMs) || 0;
-      const droppedFrames = Number(detail.droppedFrames) || 0;
-      const budgetMs = 1000 / Math.max(24, fps || 24);
-      const now = performance.now();
-      this.performanceWarning = this.nativeOverloadTracker.recordSample(
-        renderMs > budgetMs || droppedFrames > this.lastNativeDroppedFrames,
-        now,
-      );
-      this.lastNativeDroppedFrames = droppedFrames;
-      const stats: RenderStats = {
-        fps,
-        renderMs,
-        droppedFrames,
-        warning: this.performanceWarning,
-      };
-      if (this.currentSettings?.statsEnabled) this.overlay.setStats(stats);
-      else this.overlay.setStats(null);
-      return;
-    }
-    const state = detail.state;
-    const ended = detail.type === 'stopped'
-      || detail.type === 'error'
-      || detail.type === 'status' && (state === 'stopped' || state === 'failed');
-    if (!ended) return;
-    const retryCaptureAfterFailedExit = detail.type === 'stopped'
-      && detail.reason === 'capture_window_closed'
-      && isVideoInFullscreenContext(this.video);
-    if (this.switchingFromNativeRevision !== null
-      && this.lifecycle.isCurrent(this.switchingFromNativeRevision)) {
-      this.backend.markIdle();
-      this.nativeSessionId = null;
-      this.stopNativePlaybackHeartbeat();
-      return;
-    }
-    this.backend.markIdle();
-    this.nativeSessionId = null;
-    this.stopNativePlaybackHeartbeat();
-    this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
-    this.currentModeId = null;
-    this.performanceWarning = false;
-    this.nativeOverloadTracker.reset();
-    this.lastNativeDroppedFrames = 0;
-    this.overlay.setStats(null);
-    this.automaticSession = false;
-    this.fullscreenLayout.exit();
-    if (VideoEnhancer.activeEnhancer === this) VideoEnhancer.activeEnhancer = null;
-    void this.native.release(this.videoId);
-    if ((detail.type === 'error' || state === 'failed') && typeof detail.message === 'string') {
-      showEnhancementNotification(detail.message);
-    }
-    if (retryCaptureAfterFailedExit) this.scheduleFullscreenReconcile(250);
+    this.nativeObserver.handleEvent(event);
   };
+
+  /**
+   * Terminal native-session teardown callback for the observer: the enhancer
+   * still owns renderer/layout/active-slot state, so the observer reports the
+   * event and this runs the shared reset in order.
+   */
+  private handleNativeSessionEnded(ended: { message: string | null; retryCaptureAfterFailedExit: boolean }): void {
+    this.resetEnhancementState();
+    this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
+    this.fullscreenLayout.exit();
+    this.releaseActiveEnhancer();
+    void this.native.release(this.videoId);
+    if (ended.message !== null) showEnhancementNotification(ended.message);
+  }
 
   private readonly encryptedHandler = () => {
     this.encryptedDetected = true;
@@ -176,11 +136,10 @@ export class VideoEnhancer {
     void this.handleEncryptedPlayback();
   };
 
-  private constructor(video: HTMLVideoElement, private readonly native: NativeSessionClient = createNativeSessionClient()) {
+  private constructor(video: HTMLVideoElement, private readonly native: NativeSessionClient) {
     this.video = video;
     this.videoId = crypto.randomUUID?.() ?? `anime4k-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     this.video.dataset.anime4kVideoId = this.videoId;
-    VideoEnhancer.managedEnhancers.add(this);
     this.video.addEventListener('encrypted', this.encryptedHandler);
     this.events.on(window, 'anime4k-protected-playback', this.pageProtectedPlaybackHandler);
     if (document.documentElement?.hasAttribute(ANIME4K_PROTECTED_PLAYBACK_ATTR)) {
@@ -188,24 +147,64 @@ export class VideoEnhancer {
     }
     this.overlay = OverlayManager.create(this.video);
     this.fullscreenLayout = new FullscreenLayoutManager(this.video);
+    // Stats fan-out: overlay forwarding and auto-cap ride the tap, so the
+    // next consumer subscribes instead of touching the producer.
+    this.statsConsumer = new EnhancerStatsConsumer({
+      isDestroyed: () => this.destroyed,
+      getSettings: () => this.currentSettings,
+      getRenderer: () => this.renderer,
+      isWebGPUActive: () => this.backend.isWebGPUActive,
+      getVideo: () => this.video,
+      getCanvas: () => this.overlay.getCanvas(),
+      setOverlayStats: stats => this.overlay.setStats(stats),
+      enqueue: operation => this.lifecycle.enqueue(operation),
+      onRendererError: error => this.handleRendererError(error),
+    });
+    this.reconciler = new FullscreenReconciler({
+      isDestroyed: () => this.destroyed,
+      getVideo: () => this.video,
+      getSettings: () => this.currentSettings,
+      setSettings: settings => { this.currentSettings = settings; },
+      loadSettings: () => getSettings(),
+      hasRenderer: () => this.renderer !== null,
+      isNativeActive: () => this.backend.isNativeActive,
+      isStarting: () => this.backend.isStarting,
+      hasActiveFallback: () => this.native.hasActiveFallback(this.videoId),
+      hasPendingFallback: () => this.native.hasPendingFallback(this.videoId),
+      enterLayout: () => this.fullscreenLayout.enter(),
+      exitLayout: () => this.fullscreenLayout.exit(),
+      start: settings => this.startEnhancement(settings),
+      stop: () => this.stopEnhancement(),
+      beginReconcile: () => this.lifecycle.beginReconcile(),
+      isReconcileCurrent: token => this.lifecycle.isReconcileCurrent(token),
+      enqueue: operation => this.lifecycle.enqueue(operation),
+    });
+    this.nativeObserver = new NativeSessionObserver({
+      isDestroyed: () => this.destroyed,
+      isNativeActive: () => this.backend.isNativeActive,
+      getVideo: () => this.video,
+      getVideoId: () => this.videoId,
+      isAbandonedSwitchCurrent: () => this.nativeSwitch.isCurrent(revision => this.lifecycle.isCurrent(revision)),
+      abandonsSwitch: sessionId => this.nativeSwitch.abandons(sessionId),
+      recordStats: stats => this.handleStats(stats),
+      markIdle: () => this.backend.markIdle(),
+      blockAutoRetry: () => this.reconciler.blockAutoRetry(),
+      scheduleFullscreenReconcile: delay => this.reconciler.schedule(delay),
+      onSessionTerminated: ended => this.handleNativeSessionEnded(ended),
+    }, native);
     this.targetResizeObserver = new ResizeObserver(this.targetChangeHandler);
     this.targetResizeObserver.observe(this.video);
     this.events.on(window, 'resize', this.targetChangeHandler);
     this.events.on(window, 'scroll', this.windowScrollHandler, true);
     this.unsubscribeFullscreenContext = fullscreenContext.subscribe(this.fullscreenChangeHandler);
-    this.events.on(this.video, 'loadedmetadata', this.mediaActivityHandler);
-    this.events.on(this.video, 'playing', this.mediaActivityHandler);
-    this.events.on(this.video, 'resize', this.mediaActivityHandler);
-    this.events.on(this.video, 'timeupdate', this.videoFrameHandler);
+    this.observeVideoEvents(this.video);
     this.events.on(window, 'anime4k-native-session', this.nativeSessionHandler);
     this.events.on(window, 'pageshow', this.bfcacheRestoreHandler);
     void getSettings().then(settings => {
       if (this.destroyed) return;
       this.currentSettings = settings;
-      this.applyFullscreenMarker(
-        isProcessingEnabled(settings.mode, settings.frameGenerationEnabled),
-      );
-      this.scheduleFullscreenReconcile(0);
+      this.reconciler.applyMarker(settings);
+      this.reconciler.schedule(FULLSCREEN_RECONCILE_IMMEDIATE_MS);
     }).catch(error => {
       console.info('[Anime4K] Could not initialize fullscreen automation:', error instanceof Error ? error.message : String(error));
     });
@@ -219,6 +218,32 @@ export class VideoEnhancer {
     const revision = this.lifecycle.begin();
     this.backend.beginTransition();
     return revision;
+  }
+
+  /**
+   * Stop a competing active enhancer so this one can take the single active
+   * slot, then confirm this transition still owns the lifecycle. The caller
+   * commits with commitActiveSlot() once its backend is live.
+   */
+  private async claimActiveSlot(revision: number): Promise<boolean> {
+    if (VideoEnhancer.activeEnhancer && VideoEnhancer.activeEnhancer !== this) {
+      await VideoEnhancer.activeEnhancer.stopEnhancement({ releaseClaim: false });
+      if (!this.isTransitionCurrent(revision)) return false;
+    }
+    return true;
+  }
+
+  /** Commit this enhancer as the single active owner of the slot. */
+  private commitActiveSlot(): void {
+    VideoEnhancer.activeEnhancer = this;
+    this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+  }
+
+  private observeVideoEvents(video: HTMLVideoElement): void {
+    this.videoEvents.on(video, 'loadedmetadata', this.mediaActivityHandler);
+    this.videoEvents.on(video, 'playing', this.mediaActivityHandler);
+    this.videoEvents.on(video, 'resize', this.mediaActivityHandler);
+    this.videoEvents.on(video, 'timeupdate', this.videoFrameHandler);
   }
 
   private isTransitionCurrent(revision: number): boolean {
@@ -253,7 +278,7 @@ export class VideoEnhancer {
       if (!isProcessingEnabled(settings.mode, settings.frameGenerationEnabled)) {
         this.currentSettings = settings;
         this.currentModeId = null;
-        this.applyFullscreenMarker(false);
+        this.reconciler.applyMarker(null);
         this.backend.markIdle();
         return;
       }
@@ -263,10 +288,7 @@ export class VideoEnhancer {
       const claim = await this.native.claim(this.videoId);
       if (!this.isTransitionCurrent(revision)) return;
       if (!claim.ok) throw new Error(claim.message || 'Another Anime4K instance could not be stopped.');
-      if (VideoEnhancer.activeEnhancer && VideoEnhancer.activeEnhancer !== this) {
-        await VideoEnhancer.activeEnhancer.stopEnhancement({ releaseClaim: false });
-        if (!this.isTransitionCurrent(revision)) return;
-      }
+      if (!await this.claimActiveSlot(revision)) return;
 
       if (selectedBackend === 'native') {
         const reason: NativeFallbackReason = settings.backend === 'native'
@@ -282,8 +304,8 @@ export class VideoEnhancer {
         if (!await this.initRenderer(settings, revision)) return;
       }
       if (!this.isTransitionCurrent(revision)) return;
-      VideoEnhancer.activeEnhancer = this;
-      this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+      this.commitActiveSlot();
+      this.armFirstFrameWatchdog();
     } catch (error) {
       if (!this.isTransitionCurrent(revision)) return;
       // Renderer/backend failures are operational errors and are shown in the
@@ -327,7 +349,7 @@ export class VideoEnhancer {
     const canvas = this.overlay.getCanvas();
     canvas.width = rendererTargetDimensions.width;
     canvas.height = rendererTargetDimensions.height;
-    const effects = getEffectsForPreset(settings.mode, settings.quality);
+    const effects = getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight);
     this.currentModeId = MODE_TO_ID[settings.mode];
 
     let createdRenderer: Renderer | null = null;
@@ -438,8 +460,7 @@ export class VideoEnhancer {
       throw new Error(response.message || 'The native Anime4K renderer is unavailable.');
     }
     this.backend.markNativeActive();
-    this.nativeSessionId = response.sessionId;
-    this.startNativePlaybackHeartbeat();
+    this.nativeObserver.beginSession(response.sessionId);
     this.currentModeId = MODE_TO_ID[settings.mode];
     return true;
   }
@@ -459,10 +480,9 @@ export class VideoEnhancer {
       fallbackErrorMessage: string;
       throwOnFailure?: boolean;
     },
+    existingRevision?: number,
   ): Promise<boolean> {
-    const revision = this.beginTransition();
-    this.releaseWebGPUResources();
-    this.overlay.hideCanvas();
+    const revision = existingRevision ?? this.beginTransition();
     if (!allowsNativeFallback(settings.backend)) {
       await this.stopEnhancement({ stopNative: false });
       const blockedMessage = options.blockedMessage
@@ -471,6 +491,8 @@ export class VideoEnhancer {
       if (options.throwOnFailure) throw new Error(blockedMessage);
       return false;
     }
+    this.releaseWebGPUResources();
+    this.overlay.hideCanvas();
     try {
       if (!await this.requestNativeFallback(reason, settings, revision)) return false;
     } catch (error) {
@@ -483,21 +505,33 @@ export class VideoEnhancer {
       return false;
     }
     if (!this.isTransitionCurrent(revision)) return false;
-    VideoEnhancer.activeEnhancer = this;
-    this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
+    // Only one enhancer may own the active slot: a competing video could
+    // have committed while this fallback was in flight (mirrors startEnhancement).
+    if (!await this.claimActiveSlot(revision)) return false;
+    this.commitActiveSlot();
     return true;
   }
 
   private async handleEncryptedPlayback(): Promise<void> {
-    if (this.destroyed || (!this.renderer && !this.backend.isNativeActive)) return;
+    if (this.destroyed) return;
+    // EME fires once: don't drop it while a WebGPU start is still in flight.
+    // Beginning a new transition invalidates the pending start so the native
+    // path below wins instead of leaving protected content on WebGPU.
+    if (!this.renderer && !this.backend.isNativeActive && !this.backend.isStarting) return;
     if (this.backend.isNativeActive) return;
+    // The encrypted + page-protected signals often arrive as a burst for the
+    // same key session; revision guards would absorb the duplicates anyway,
+    // but skip the redundant settings fetch + transition churn outright.
+    const now = Date.now();
+    if (now - this.lastEncryptedHandlingAt < 500) return;
+    this.lastEncryptedHandlingAt = now;
     const revision = this.beginTransition();
     const settings = this.currentSettings ?? await getSettings();
     if (!this.isTransitionCurrent(revision)) return;
     await this.switchToNative('eme', settings, {
       blockedMessage: 'Protected playback cannot use the forced WebGPU backend. Select Auto or Native instead.',
       fallbackErrorMessage: 'Protected playback cannot be captured.',
-    });
+    }, revision);
   }
 
   private async handleRendererError(error: Error): Promise<void> {
@@ -513,38 +547,41 @@ export class VideoEnhancer {
     await this.switchToNative(reason, settings, {
       blockedMessage: error.message || 'The video frame cannot be processed with WebGPU.',
       fallbackErrorMessage: 'Video frames cannot be processed on this site.',
-    });
+    }, revision);
   }
 
   private handleStats(stats: RenderStats): void {
-    this.performanceWarning = stats.warning;
-    if (this.currentSettings?.statsEnabled) this.overlay.setStats(stats);
-    else this.overlay.setStats(null);
+    this.statsConsumer.handleStats(stats);
   }
 
-
-  private scheduleAutoTargetUpdate(): void {
-    if (!this.renderer || this.destroyed) return;
-    if (this.targetUpdateTimer) window.clearTimeout(this.targetUpdateTimer);
-    this.targetUpdateTimer = window.setTimeout(() => void this.refreshAutoTarget(), 150);
+  /**
+   * Test-only: feed one synthetic sustained-overload sample so E2E runs can
+   * prove the live Auto-Cap step without waiting for real GPU overload.
+   * No-op in production builds. Returns the effective cap afterwards.
+   */
+  public e2eInjectOverloadStats(): number | null {
+    if (typeof __ANIME4K_E2E__ === 'undefined' || !__ANIME4K_E2E__) return null;
+    this.handleStats({
+      fps: 24,
+      renderMs: 60,
+      droppedFrames: 0,
+      warning: true,
+      realesrgan: {
+        readbackMs: 5, inferMs: 50, composeMs: 2, runnerPct: 100, gpuComposePct: 0, nativePct: 100,
+        count: 12, enhancedFps: 10,
+      },
+      frameBudgetMs: 1000 / 24,
+    });
+    return this.statsConsumer.effectiveAutoCap;
   }
 
-  private async refreshAutoTarget(): Promise<void> {
-    if (!this.renderer || !this.currentSettings || this.destroyed) return;
-    const renderer = this.renderer;
-    const settings = this.currentSettings;
-    const targetDimensions = calculateAutoTargetDimensions(this.video);
-    const canvas = this.overlay.getCanvas();
-    if (canvas.width === targetDimensions.width && canvas.height === targetDimensions.height) return;
-    try {
-      await renderer.updateConfiguration({
-        effects: getEffectsForPreset(settings.mode, settings.quality),
-        targetDimensions,
-        frameGenerationEnabled: settings.frameGenerationEnabled,
-      });
-    } catch (error) {
-      if (!this.destroyed && this.renderer === renderer) await this.handleRendererError(error as Error);
-    }
+  /**
+   * Test-only: latest stats window for E2E timing gates. No-op in
+   * production builds. Returns the RealESRGAN slice or null.
+   */
+  public e2eLastStats(): RenderStats['realesrgan'] {
+    if (typeof __ANIME4K_E2E__ === 'undefined' || !__ANIME4K_E2E__) return undefined;
+    return this.statsConsumer.lastRenderedStats?.realesrgan;
   }
 
   public updateSettings(newSettings: Anime4KWebExtSettings): Promise<void> {
@@ -560,166 +597,198 @@ export class VideoEnhancer {
     const previousModeId = this.currentModeId;
     this.currentSettings = newSettings;
     this.currentModeId = processingEnabled ? MODE_TO_ID[newSettings.mode] : null;
-    this.applyFullscreenMarker(processingEnabled);
+    // Hebel C: a settings change owns the cap again — retarget (or drop)
+    // the ephemeral override so it can never fight the stored setting.
+    this.statsConsumer.applySettings(newSettings);
+    this.reconciler.applyMarker(newSettings);
 
     if (!processingEnabled) {
-      this.automaticSession = false;
-      if (this.renderer || this.backend.isNativeActive || this.backend.isStarting
-          || this.native.hasPendingFallback(this.videoId)) await this.stopEnhancement();
-      else {
-        this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
-        this.fullscreenLayout.exit();
-      }
+      await this.applyDisabledSettings();
       return;
     }
-
     if (!this.renderer && !this.backend.isNativeActive) {
-      if (this.backend.isStarting || this.native.hasPendingFallback(this.videoId)) {
-        await this.stopEnhancement();
-        if (this.destroyed) return;
-      }
-      this.scheduleFullscreenReconcile(0);
+      await this.startWhenIdle();
       return;
     }
-
     if (this.backend.isNativeActive) {
       if (selectedBackend === 'native') {
-        const revision = this.beginTransition();
-        try {
-          const response = await this.native.updateConfiguration({
-            ...(this.nativeSessionId ? { sessionId: this.nativeSessionId } : {}),
-            videoId: this.videoId,
-            configuration: {
-              mode: newSettings.mode,
-              quality: newSettings.quality,
-              frameGenerationEnabled: newSettings.frameGenerationEnabled,
-            },
-          });
-          if (!this.isTransitionCurrent(revision)) return;
-          if (!response.ok) {
-            throw new Error(response.message || 'The native renderer could not apply the selected configuration.');
-          }
-          // The host can stop while the update is in flight; the terminal
-          // event then already cleaned the session up (nativeSessionId
-          // cleared). Re-committing it would leave a zombie native-active
-          // enhancer whose session no longer exists.
-          if (this.nativeSessionId === null) {
-            throw new Error('The native renderer stopped during the configuration update.');
-          }
-          this.backend.markNativeActive();
-        } catch (error) {
-          if (!this.isTransitionCurrent(revision)) return;
-          // Only re-commit the previous configuration when the session
-          // survived the update; a session that ended mid-update stays idle
-          // so fullscreen reconciliation can restart enhancement.
-          if (this.nativeSessionId !== null) this.backend.markNativeActive();
-          this.currentSettings = previousSettings;
-          this.currentModeId = previousModeId;
-          this.applyFullscreenMarker(
-            previousSettings !== null
-              && isProcessingEnabled(previousSettings.mode, previousSettings.frameGenerationEnabled),
-          );
-          throw error;
-        }
+        await this.updateActiveNativeConfiguration(newSettings, previousSettings, previousModeId);
         return;
       }
-
-      const revision = this.beginTransition();
-      this.switchingFromNativeRevision = revision;
-      const nativeSessionId = this.nativeSessionId;
-      this.nativeSessionId = null;
-      this.stopNativePlaybackHeartbeat();
-      this.nativeOverloadTracker.reset();
-      this.lastNativeDroppedFrames = 0;
-      this.overlay.setStats(null);
-      try {
-        await this.native.stop(
-          nativeSessionId ? { sessionId: nativeSessionId, videoId: this.videoId } : { videoId: this.videoId },
-        );
-        if (!this.isTransitionCurrent(revision)) return;
-
-        if (selectedBackend !== 'webgpu') {
-          throw new Error('WebGPU is unavailable. Select Auto or Native instead.');
-        }
-
-        const claim = await this.native.claim(this.videoId);
-        if (!this.isTransitionCurrent(revision)) return;
-        if (!claim.ok) throw new Error(claim.message || 'Anime4K could not reclaim the active video.');
-        if (!await this.initRenderer(newSettings, revision)) return;
-        if (!this.isTransitionCurrent(revision)) return;
-        VideoEnhancer.activeEnhancer = this;
-        this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
-        return;
-      } catch (error) {
-        if (!this.isTransitionCurrent(revision)) return;
-        await this.stopEnhancement({ stopNative: this.backend.isNativeActive });
-        if (!this.destroyed) {
-          showEnhancementNotification(error instanceof Error ? error.message : 'The backend could not be changed.');
-        }
-        throw error;
-      } finally {
-        if (this.switchingFromNativeRevision === revision) this.switchingFromNativeRevision = null;
-      }
+      await this.switchActiveNativeToWebGPU(newSettings, selectedBackend);
+      return;
     }
     if (!this.renderer) return;
     if (selectedBackend === 'native') {
-      await this.switchToNative('native-selected', newSettings, {
-        fallbackErrorMessage: 'The native renderer could not be started.',
-        throwOnFailure: true,
-      });
+      await this.switchActiveWebGPUToNative(newSettings);
       return;
     }
+    await this.reconfigureActiveRenderer(newSettings, previousSettings, previousModeId);
+  }
 
+  private async applyDisabledSettings(): Promise<void> {
+    this.reconciler.resetAutomaticSession();
+    if (this.renderer || this.backend.isNativeActive || this.backend.isStarting
+        || this.native.hasPendingFallback(this.videoId)) await this.stopEnhancement();
+    else {
+      this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
+      this.fullscreenLayout.exit();
+    }
+  }
+
+  private async startWhenIdle(): Promise<void> {
+    if (this.backend.isStarting || this.native.hasPendingFallback(this.videoId)) {
+      await this.stopEnhancement();
+      if (this.destroyed) return;
+    }
+    this.reconciler.schedule(FULLSCREEN_RECONCILE_IMMEDIATE_MS);
+  }
+
+  private async updateActiveNativeConfiguration(newSettings: Anime4KWebExtSettings, previousSettings: Anime4KWebExtSettings | null, previousModeId: string | null): Promise<void> {
+    const revision = this.beginTransition();
+    try {
+      const response = await this.native.updateConfiguration({
+        ...(this.nativeObserver.currentSessionId ? { sessionId: this.nativeObserver.currentSessionId } : {}),
+        videoId: this.videoId,
+        configuration: {
+          mode: newSettings.mode,
+          quality: newSettings.quality,
+          frameGenerationEnabled: newSettings.frameGenerationEnabled,
+        },
+      });
+      if (!this.isTransitionCurrent(revision)) return;
+      if (!response.ok) {
+        throw new Error(response.message || 'The native renderer could not apply the selected configuration.');
+      }
+      // The host can stop while the update is in flight; the terminal
+      // event then already cleaned the session up (native session id
+      // cleared). Re-committing it would leave a zombie native-active
+      // enhancer whose session no longer exists.
+      if (this.nativeObserver.currentSessionId === null) {
+        throw new Error('The native renderer stopped during the configuration update.');
+      }
+      this.backend.markNativeActive();
+    } catch (error) {
+      if (!this.isTransitionCurrent(revision)) return;
+      // Only re-commit the previous configuration when the session
+      // survived the update; a session that ended mid-update stays idle
+      // so fullscreen reconciliation can restart enhancement.
+      if (this.nativeObserver.currentSessionId !== null) this.backend.markNativeActive();
+      this.restoreSettings(previousSettings, previousModeId);
+      throw error;
+    }
+  }
+
+  private async switchActiveNativeToWebGPU(newSettings: Anime4KWebExtSettings, selectedBackend: SelectedBackend): Promise<void> {
+    const revision = this.beginTransition();
+    const nativeSessionId = this.nativeObserver.currentSessionId;
+    this.nativeSwitch.arm(revision, nativeSessionId);
+    this.nativeObserver.reset();
+    this.overlay.setStats(null);
+    try {
+      await this.native.stop(
+        nativeSessionId ? { sessionId: nativeSessionId, videoId: this.videoId } : { videoId: this.videoId },
+      );
+      if (!this.isTransitionCurrent(revision)) return;
+
+      if (selectedBackend !== 'webgpu') {
+        throw new Error('WebGPU is unavailable. Select Auto or Native instead.');
+      }
+
+      const claim = await this.native.claim(this.videoId);
+      if (!this.isTransitionCurrent(revision)) return;
+      if (!claim.ok) throw new Error(claim.message || 'Anime4K could not reclaim the active video.');
+      if (!await this.initRenderer(newSettings, revision)) return;
+      if (!this.isTransitionCurrent(revision)) return;
+      if (!await this.claimActiveSlot(revision)) return;
+      this.commitActiveSlot();
+      return;
+    } catch (error) {
+      if (!this.isTransitionCurrent(revision)) return;
+      await this.stopEnhancement({ stopNative: this.backend.isNativeActive });
+      if (!this.destroyed) {
+        showEnhancementNotification(error instanceof Error ? error.message : 'The backend could not be changed.');
+      }
+      throw error;
+    } finally {
+      this.nativeSwitch.clear(revision);
+    }
+  }
+
+  private async switchActiveWebGPUToNative(newSettings: Anime4KWebExtSettings): Promise<void> {
+    await this.switchToNative('native-selected', newSettings, {
+      fallbackErrorMessage: 'The native renderer could not be started.',
+      throwOnFailure: true,
+    });
+  }
+
+  private async reconfigureActiveRenderer(newSettings: Anime4KWebExtSettings, previousSettings: Anime4KWebExtSettings | null, previousModeId: string | null): Promise<void> {
     const targetDimensions = calculateAutoTargetDimensions(this.video);
     const renderer = this.renderer;
+    if (!renderer) return;
     try {
       await renderer.updateConfiguration({
-        effects: getEffectsForPreset(newSettings.mode, newSettings.quality),
+        effects: getEffectsForPreset(newSettings.mode, newSettings.quality, newSettings.realesrganCapHeight),
         targetDimensions,
         frameGenerationEnabled: newSettings.frameGenerationEnabled,
       });
     } catch (error) {
-      this.currentSettings = previousSettings;
-      this.currentModeId = previousModeId;
-      this.applyFullscreenMarker(
-        previousSettings !== null
-          && isProcessingEnabled(previousSettings.mode, previousSettings.frameGenerationEnabled),
-      );
+      this.restoreSettings(previousSettings, previousModeId);
       if (this.renderer === renderer && renderer.isDestroyed()) await this.stopEnhancement({ stopNative: false });
       throw error;
     }
   }
 
-  public getCurrentModeId(): string | null {
-    return this.currentModeId;
+  private restoreSettings(previousSettings: Anime4KWebExtSettings | null, previousModeId: string | null): void {
+    this.currentSettings = previousSettings;
+    this.currentModeId = previousModeId;
+    this.reconciler.applyMarker(previousSettings);
   }
 
   /** Whether a backend is currently committed for this video. */
   public isActive(): boolean {
-    return this.renderer !== null || this.backend.isNativeActive;
+    return this.backend.isActive;
   }
 
   public getVideoElement(): HTMLVideoElement {
     return this.video;
   }
 
+  public getVideoId(): string {
+    return this.videoId;
+  }
+
+  /** Whether destroy() already ran; population/election exclude these. */
+  public get isDestroyed(): boolean {
+    return this.destroyed;
+  }
+
   public detach(): void {
     this.overlay.detach();
+    this.targetResizeObserver.disconnect();
+    this.video.removeEventListener('encrypted', this.encryptedHandler);
+    this.statsConsumer.clearTargetUpdate();
+    this.reconciler.clearDebounce();
     this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
     this.video.removeAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR);
   }
 
   public async reattach(newVideo: HTMLVideoElement): Promise<void> {
     if (this.destroyed) return;
+    // Drop pending debounce work tied to the old node: a queued auto-target
+    // refresh or fullscreen reconcile could otherwise fire mid-swap against
+    // half-updated state. Both are rescheduled below as needed.
+    this.statsConsumer.clearTargetUpdate();
+    this.reconciler.clearDebounce();
     this.video.removeEventListener('encrypted', this.encryptedHandler);
+    this.videoEvents.dispose();
+    this.videoEvents = new EventScope();
     this.video = newVideo;
+    this.observeVideoEvents(this.video);
     this.fullscreenLayout.updateVideo(newVideo);
     this.video.dataset.anime4kVideoId = this.videoId;
     this.video.addEventListener('encrypted', this.encryptedHandler);
-    this.applyFullscreenMarker(
-      this.currentSettings !== null
-        && isProcessingEnabled(this.currentSettings.mode, this.currentSettings.frameGenerationEnabled),
-    );
+    this.reconciler.applyMarker(this.currentSettings);
     this.targetResizeObserver.disconnect();
     this.targetResizeObserver.observe(this.video);
     this.overlay.reattach(newVideo);
@@ -739,50 +808,90 @@ export class VideoEnhancer {
     }
     if (this.destroyed) return;
     if (this.renderer || this.backend.isNativeActive) this.video.setAttribute(ANIME4K_APPLIED_ATTR, 'true');
-    this.scheduleFullscreenReconcile(0);
+    this.reconciler.schedule(FULLSCREEN_RECONCILE_IMMEDIATE_MS);
   }
 
   public destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
     this.lifecycle.invalidate();
-    this.backend.destroy();
-    VideoEnhancer.managedEnhancers.delete(this);
-    this.video.removeEventListener('encrypted', this.encryptedHandler);
-    this.targetResizeObserver.disconnect();
-    this.events?.dispose();
-    this.unsubscribeFullscreenContext();
-    if (this.targetUpdateTimer) window.clearTimeout(this.targetUpdateTimer);
-    if (this.fullscreenDebounceTimer) window.clearTimeout(this.fullscreenDebounceTimer);
-    this.stopNativePlaybackHeartbeat();
+    // Stop the backend BEFORE backend.destroy() flips the phase to idle:
+    // stopEnhancement snapshots native ownership from the backend phase, and
+    // a destroyed machine reads as idle — the native host would keep
+    // capturing a dead player's region with no owner left to stop it.
     void this.stopEnhancement().catch(error => {
       console.warn('[Anime4K] Failed to finish enhancement cleanup:', error);
     });
+    this.backend.destroy();
+    this.video.removeEventListener('encrypted', this.encryptedHandler);
+    this.targetResizeObserver.disconnect();
+    this.events?.dispose();
+    this.videoEvents.dispose();
+    this.unsubscribeFullscreenContext();
+    this.statsConsumer.clearTargetUpdate();
+    this.reconciler.clearDebounce();
+    this.nativeObserver.clearSession();
     this.overlay.destroy();
     this.fullscreenLayout.exit();
     if (this.video.dataset.anime4kVideoId === this.videoId) delete this.video.dataset.anime4kVideoId;
     this.video.removeAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR);
   }
 
+  /**
+   * Arms the first-frame watchdog after a successful start: if no frame was
+   * presented within 8 s (applied set, WebGPU renderer alive, canvas still
+   * hidden, native not active), the first start hit a silent stall and one
+   * restart is attempted. Healthy starts present in well under a second, so
+   * the timeout never fires for them; the fired flag bounds it to one retry.
+   */
+  private armFirstFrameWatchdog(): void {
+    if (this.firstFrameWatchdogFired || this.destroyed) return;
+    this.disarmFirstFrameWatchdog();
+    this.firstFrameWatchdogTimer = window.setTimeout(() => {
+      this.firstFrameWatchdogTimer = undefined;
+      if (this.destroyed || this.firstFrameWatchdogFired) return;
+      if (this.backend.isNativeActive) return;
+      if (!this.renderer) return;
+      if (this.video.getAttribute(ANIME4K_APPLIED_ATTR) !== 'true') return;
+      if (this.overlay.isCanvasVisible) return;
+      this.firstFrameWatchdogFired = true;
+      console.warn('[Anime4K] First frame never presented; restarting enhancement once.');
+      void this.stopEnhancement()
+        .then(() => { if (!this.destroyed) return this.startEnhancement(); })
+        .catch(error => {
+          console.warn('[Anime4K] First-frame watchdog restart failed:', error);
+        });
+    }, 8000);
+  }
+
+  private disarmFirstFrameWatchdog(): void {
+    if (this.firstFrameWatchdogTimer !== undefined) {
+      window.clearTimeout(this.firstFrameWatchdogTimer);
+      this.firstFrameWatchdogTimer = undefined;
+    }
+  }
+
   public async stopEnhancement(options: { stopNative?: boolean; releaseClaim?: boolean } = {}): Promise<void> {
     const { stopNative = true, releaseClaim = true } = options;
-    this.beginTransition();
+    this.disarmFirstFrameWatchdog();
+    // Snapshot native ownership BEFORE beginTransition() flips the phase to
+    // 'starting' — reading it afterwards made this guard permanently false,
+    // so an active native session was only ever stopped while a fallback
+    // request was still in flight.
     const wasNativeActive = this.backend.isNativeActive;
-    const nativeSessionId = this.nativeSessionId;
+    const nativeSessionId = this.nativeObserver.currentSessionId;
+    this.beginTransition();
+    // Invalidate any debounced fullscreen reconcile: without this a pending
+    // timer could restart enhancement right after this explicit stop.
+    this.lifecycle.invalidateReconcile();
+    this.reconciler.clearDebounce();
     this.releaseWebGPUResources();
-    this.backend.markIdle();
-    this.nativeSessionId = null;
-    this.switchingFromNativeRevision = null;
-    this.stopNativePlaybackHeartbeat();
+    this.resetEnhancementState();
+    this.nativeSwitch.clear();
     this.overlay.hideCanvas();
     this.fullscreenLayout.exit();
     this.video.removeAttribute(ANIME4K_APPLIED_ATTR);
-    this.currentModeId = null;
-    this.performanceWarning = false;
-    this.nativeOverloadTracker.reset();
-    this.lastNativeDroppedFrames = 0;
-    this.automaticSession = false;
-    if (VideoEnhancer.activeEnhancer === this) VideoEnhancer.activeEnhancer = null;
+    this.releaseActiveEnhancer();
     if (releaseClaim) {
       void this.native.release(this.videoId);
     }
@@ -801,91 +910,21 @@ export class VideoEnhancer {
   private releaseWebGPUResources(): void {
     const renderer = this.renderer;
     this.renderer = null;
+    this.statsConsumer.releaseResources();
     renderer?.destroy();
   }
 
-  private applyFullscreenMarker(enabled: boolean): void {
-    if (enabled && !this.destroyed) this.video.setAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR, 'true');
-    else this.video.removeAttribute(ANIME4K_FULLSCREEN_AUTO_ATTR);
+  /** Field resets common to every full native-session teardown. */
+  private resetEnhancementState(): void {
+    this.backend.markIdle();
+    this.nativeObserver.reset();
+    this.currentModeId = null;
+    this.overlay.setStats(null);
+    this.reconciler.resetAutomaticSession();
   }
 
-  private scheduleFullscreenReconcile(delay = 90): void {
-    if (this.destroyed) return;
-    const revision = ++this.fullscreenRevision;
-    if (this.fullscreenDebounceTimer) window.clearTimeout(this.fullscreenDebounceTimer);
-    this.fullscreenDebounceTimer = window.setTimeout(() => {
-      this.fullscreenDebounceTimer = undefined;
-        void this.lifecycle.enqueue(() => this.reconcileFullscreen(revision));
-    }, delay);
-  }
-
-  private async reconcileFullscreen(revision: number): Promise<void> {
-    if (this.destroyed || revision !== this.fullscreenRevision) return;
-    const settings = this.currentSettings ?? await getSettings();
-    if (this.destroyed || revision !== this.fullscreenRevision) return;
-    this.currentSettings = settings;
-    const processingEnabled = isProcessingEnabled(settings.mode, settings.frameGenerationEnabled);
-    this.applyFullscreenMarker(processingEnabled);
-    const preferredFullscreenVideo = this.isPreferredFullscreenVideo();
-    const explicitContext = fullscreenContext.hasContext(this.video);
-    const playerFullscreenSignal = hasPlayerFullscreenSignal(this.video);
-    if (!explicitContext && !playerFullscreenSignal) this.nativeRetryBlocked = false;
-    const shouldRun = processingEnabled
-      && preferredFullscreenVideo
-      && (explicitContext || playerFullscreenSignal)
-      && !this.nativeRetryBlocked;
-
-    if (shouldRun) {
-      if (!this.renderer && !this.backend.isNativeActive && !this.backend.isStarting
-          && !this.native.hasPendingFallback(this.videoId)) {
-        this.fullscreenLayout.enter();
-        this.automaticSession = true;
-        await this.startEnhancement(settings);
-        if (!this.renderer && !this.backend.isNativeActive) this.automaticSession = false;
-      }
-      return;
-    }
-
-    if (this.automaticSession || this.renderer || this.backend.isNativeActive
-        || this.backend.isStarting || this.native.hasPendingFallback(this.videoId)) {
-      this.automaticSession = false;
-      await this.stopEnhancement();
-    }
-  }
-
-  private isPreferredFullscreenVideo(): boolean {
-    // The fullscreen context owns the election: every managed, undestroyed
-    // enhancer's video competes; larger rendered area wins, ties break by
-    // the lower video id.
-    const candidates = [...VideoEnhancer.managedEnhancers]
-      .filter(enhancer => !enhancer.destroyed)
-      .map(enhancer => ({ video: enhancer.video, videoId: enhancer.videoId }));
-    return electFullscreenCandidate(candidates)?.video === this.video;
-  }
-
-  private startNativePlaybackHeartbeat(): void {
-    this.stopNativePlaybackHeartbeat();
-    if (!this.backend.isNativeActive || this.destroyed) return;
-    void this.sendNativePlaybackState();
-    this.nativePlaybackTimer = window.setInterval(() => void this.sendNativePlaybackState(), 1000);
-  }
-
-  private stopNativePlaybackHeartbeat(): void {
-    if (this.nativePlaybackTimer !== undefined) {
-      window.clearInterval(this.nativePlaybackTimer);
-      this.nativePlaybackTimer = undefined;
-    }
-  }
-
-  private async sendNativePlaybackState(): Promise<void> {
-    if (!this.backend.isNativeActive || this.destroyed) return;
-    if (this.nativeSessionId === null) return;
-    await this.native.sendPlaybackState({
-      sessionId: this.nativeSessionId,
-      videoId: this.videoId,
-      playbackActive: !this.video.paused && !this.video.ended,
-      mediaTime: Number.isFinite(this.video.currentTime) ? Math.max(0, this.video.currentTime) : 0,
-    });
+  private releaseActiveEnhancer(): void {
+    if (VideoEnhancer.activeEnhancer === this) VideoEnhancer.activeEnhancer = null;
   }
 
 }

@@ -9,18 +9,34 @@ export interface RecoverableTab {
 export const NATIVE_SESSION_VERSION = 3 as const;
 export type NativeCaptureKind = 'direct-fullscreen' | 'legacy-popup';
 
+/**
+ * The one legacy-popup predicate. A v1 record that does not explicitly say
+ * `direct-fullscreen` is the blanket-permissions popup era; v2+ records carry
+ * the explicit captureKind. `requiresLegacyPopupRestore` and the metadata
+ * migration both consume this so the rule exists once.
+ */
+export function isLegacyPopupSession(session: {
+  version?: unknown;
+  captureKind?: unknown;
+}): boolean {
+  return session.captureKind === 'legacy-popup'
+    || session.version === 1 && session.captureKind !== 'direct-fullscreen';
+}
+
 export function migrateNativeSessionMetadata(session: {
   version?: unknown;
   captureKind?: unknown;
 }): { version: typeof NATIVE_SESSION_VERSION; captureKind: NativeCaptureKind } | null {
+  // Callers feed parsed storage JSON: a corrupt entry can be null or a
+  // primitive, which must migrate to null (no restore) instead of throwing
+  // a TypeError on the property read below.
+  if (!session || typeof session !== 'object') return null;
   if (session.version !== 1 && session.version !== 2 && session.version !== NATIVE_SESSION_VERSION) {
     return null;
   }
-  const legacyPopup = session.captureKind === 'legacy-popup'
-    || session.version === 1 && session.captureKind !== 'direct-fullscreen';
   return {
     version: NATIVE_SESSION_VERSION,
-    captureKind: legacyPopup ? 'legacy-popup' : 'direct-fullscreen',
+    captureKind: isLegacyPopupSession(session) ? 'legacy-popup' : 'direct-fullscreen',
   };
 }
 
@@ -39,8 +55,7 @@ export function requiresLegacyPopupRestore(session: {
   version?: number;
   captureKind?: string;
 }): boolean {
-  return session.captureKind === 'legacy-popup'
-    || session.version === 1 && session.captureKind !== 'direct-fullscreen';
+  return isLegacyPopupSession(session);
 }
 
 /** Guards delayed cleanup so an event from an old session cannot stop its replacement. */

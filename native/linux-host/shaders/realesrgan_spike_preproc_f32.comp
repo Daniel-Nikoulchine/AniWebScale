@@ -1,0 +1,9 @@
+#version 450
+#extension GL_GOOGLE_include_directive: require
+
+// GPU preproc for the RealESRGAN fp32-storage path: RGBA8 interleaved ->
+// planar float32 RGB [0,1]. Byte-for-byte the fp16 shader's logic with a
+// 32-bit destination channel type; ncnn's extractor input blob for
+// use_fp16_storage=false is elemsize 4, so the write type must match.
+// Shared math lives in realesrgan_spike_preproc_body.comp.
+#include "realesrgan_spike_preproc_body.comp"

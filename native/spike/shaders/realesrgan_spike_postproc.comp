@@ -1,0 +1,49 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage: require
+
+// AniWebScale ncnn-Vulkan spike: GPU post-process for the RealESRGAN path.
+// Reads the network's planar fp16 RGB output (cstep-strided channels) and
+// writes packed RGBA8 bytes. Replaces the CPU fp16->fp32 cast + planar->packed
+// conversion + large host readback with a single GPU pass and one small
+// download. Rounding matches the reference implementation (x * 255 + 0.5,
+// floor, clamp) and the spike's previous CPU path exactly.
+
+layout (constant_id = 0) const int bgr = 0;
+
+layout (binding = 0) readonly buffer bottom_blob { float16_t bottom_blob_data[]; };
+layout (binding = 1) writeonly buffer top_blob { uint top_blob_data[]; };
+
+layout (push_constant) uniform parameter
+{
+    int w;
+    int h;
+    int cstep;
+} p;
+
+void main()
+{
+    const int gx = int(gl_GlobalInvocationID.x);
+    const int gy = int(gl_GlobalInvocationID.y);
+
+    if (gx >= p.w || gy >= p.h)
+        return;
+
+    const float r = float(bottom_blob_data[0 * p.cstep + gy * p.w + gx]);
+    const float g = float(bottom_blob_data[1 * p.cstep + gy * p.w + gx]);
+    const float b = float(bottom_blob_data[2 * p.cstep + gy * p.w + gx]);
+
+    const float cr = r * 255.f + 0.5f;
+    const float cg = g * 255.f + 0.5f;
+    const float cb = b * 255.f + 0.5f;
+
+    // bgr flag mirrors the reference preproc convention (0 on non-Windows).
+    uint ur = clamp(uint(floor(cr)), 0u, 255u);
+    uint ug = clamp(uint(floor(cg)), 0u, 255u);
+    uint ub = clamp(uint(floor(cb)), 0u, 255u);
+    if (bgr == 1)
+    {
+        uint t = ur; ur = ub; ub = t;
+    }
+
+    top_blob_data[gy * p.w + gx] = (ub << 16) | (ug << 8) | (ur << 0) | 0xFF000000u;
+}

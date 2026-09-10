@@ -14,3 +14,16 @@ export function createAsyncSerializer(): <T>(operation: () => Promise<T>) => Pro
     return result;
   };
 }
+
+/**
+ * Run fire-and-forget work with a rejection handler. A bare `void promise`
+ * drops the operation promise and turns a mid-cleanup failure (storage, tab
+ * queries, window creation) into an unhandled rejection; this reports it
+ * under one scope/label pair. Shared by the background worker and the native
+ * session so both detached-task paths behave identically.
+ */
+export function fireAndForget(promise: Promise<unknown>, scope: string, label: string): void {
+  promise.catch(error => {
+    console.warn(`[${scope}] ${label} failed:`, error);
+  });
+}

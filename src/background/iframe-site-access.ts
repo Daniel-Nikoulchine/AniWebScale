@@ -21,15 +21,15 @@
  * is testable with fakes.
  */
 import { sitePatternForUrl } from '../site-access';
+import type { ResponseEnvelope } from '../shared/runtime-messages';
 
 export type FrameAccessOutcome = 'injected' | 'prompting' | 'suppressed';
 
 export type FrameAccessResultOutcome = 'granted' | 'denied' | 'failed';
 
-export interface FrameAccessReply {
-  ok: boolean;
+/** Shares the common `{ ok, message }` response envelope with the other seams. */
+export interface FrameAccessReply extends ResponseEnvelope {
   outcome?: FrameAccessOutcome;
-  message?: string;
 }
 
 export interface IframeSiteAccessDeps {

@@ -1,3 +1,4 @@
+import { walkElementTree } from './dom-tree-walker';
 import { fullscreenContainsVideo } from '../shared/fullscreen-video';
 import {
   choosePlayerSurface,
@@ -83,24 +84,15 @@ export class NativeIsolationSession {
 
   findVideosDeep(root: Document | ShadowRoot = document): HTMLVideoElement[] {
     const videos: HTMLVideoElement[] = [];
-    const elements = root.querySelectorAll('*');
-    for (let index = 0; index < elements.length; index += 1) {
-      const element = elements[index];
+    const collect = (element: Element): void => {
       if (element instanceof HTMLVideoElement) videos.push(element);
-      if (element.shadowRoot) videos.push(...this.findVideosDeep(element.shadowRoot));
+    };
+    if ('documentElement' in root) {
+      walkElementTree(root.documentElement, collect);
+    } else {
+      for (const child of Array.from(root.children)) walkElementTree(child, collect);
     }
     return videos;
-  }
-
-  findFramesDeep(root: Document | ShadowRoot = document): HTMLIFrameElement[] {
-    const frames: HTMLIFrameElement[] = [];
-    const elements = root.querySelectorAll('*');
-    for (let index = 0; index < elements.length; index += 1) {
-      const element = elements[index];
-      if (element instanceof HTMLIFrameElement) frames.push(element);
-      if (element.shadowRoot) frames.push(...this.findFramesDeep(element.shadowRoot));
-    }
-    return frames;
   }
 
   private visibleRect(element: Element): DOMRect | null {
@@ -128,34 +120,6 @@ export class NativeIsolationSession {
       const area = rect.width * rect.height;
       if (area > selectedArea) {
         selected = video;
-        selectedArea = area;
-      }
-    }
-    return selected;
-  }
-
-  private normalizeUrl(value: string): string | null {
-    try {
-      const url = new URL(value, document.baseURI);
-      url.hash = '';
-      return url.href;
-    } catch {
-      return null;
-    }
-  }
-
-  /** The iframe embedding the given source URL, or the largest visible frame. */
-  selectSourceFrame(sourceUrl: string): HTMLIFrameElement | null {
-    const target = this.normalizeUrl(sourceUrl);
-    let selected: HTMLIFrameElement | null = null;
-    let selectedArea = 0;
-    for (const frame of this.findFramesDeep()) {
-      const rect = this.visibleRect(frame);
-      if (!rect) continue;
-      if (this.normalizeUrl(frame.src) === target) return frame;
-      const area = rect.width * rect.height;
-      if (area > selectedArea) {
-        selected = frame;
         selectedArea = area;
       }
     }

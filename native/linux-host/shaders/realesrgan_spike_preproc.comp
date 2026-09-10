@@ -1,0 +1,9 @@
+#version 450
+#extension GL_GOOGLE_include_directive: require
+#extension GL_EXT_shader_16bit_storage: require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16: require
+
+// GPU preproc for RealESRGAN: RGBA8 interleaved -> planar fp16 RGB [0,1].
+// Inverse of postproc: replaces CPU scalar loop + CPU f32->f16 cast.
+// Shared math lives in realesrgan_spike_preproc_body.comp.
+#include "realesrgan_spike_preproc_body.comp"

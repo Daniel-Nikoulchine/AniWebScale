@@ -5,7 +5,7 @@
  * gesture forwarding.
  */
 import { initializeOnPage, reapplySettings } from './core/video-manager';
-import { getEnhancer } from './core/enhancer-map';
+import { getAllManagedVideos, getEnhancer } from './core/video-population';
 import { NativeIsolationSession } from './core/native-isolation';
 import { NativeInputBridge, showNotice } from './core/native-input-bridge';
 import { installIframeSiteAccessProbe } from './core/iframe-site-access';
@@ -16,6 +16,7 @@ import { nativeStopMessage } from './shared/runtime-messages';
 import { nativeConsentPrompt } from './shared/native-consent';
 import { shouldApplySettingsChange } from './utils/settings-change';
 import { initDebugLogging, setVerboseLogging } from './utils/debug-log';
+import { E2E_BRIDGE_ACTIONS, E2E_BRIDGE_MESSAGE, E2E_KNOBS, knobStorageFromBridge } from './shared/realesrgan-e2e-knobs.js';
 
 const CONTENT_INSTANCE_KEY = '__anime4kContentInstalledV1';
 const contentGlobal = globalThis as typeof globalThis & { [CONTENT_INSTANCE_KEY]?: boolean };
@@ -23,21 +24,101 @@ const contentGlobal = globalThis as typeof globalThis & { [CONTENT_INSTANCE_KEY]
 const isolation = new NativeIsolationSession();
 const inputBridge = new NativeInputBridge(isolation);
 
+/**
+ * Forward content-script-world console lines to the page world as
+ * `anime4k-e2e-log` CustomEvents. E2E runners assert on extension logs, but
+ * the page shim only sees the page world. Installed FIRST, before anything
+ * logs (the build stamp must be visible to the runner).
+ */
+// Ring buffer of recent content-script log lines; E2E runners pull it via
+// the bridge 'get-logs' command (CustomEvents do NOT cross worlds on
+// Firefox, so push-based forwarding silently fails there). Sized so a full
+// verbose run (build stamp first, verdict last) survives until the pull:
+// at 200 the stamp was evicted before GET_LOGS on long runs.
+const E2E_LOG_BUFFER: string[] = [];
+const E2E_LOG_BUFFER_CAP = 2000;
+
+/**
+ * Compartment-safe single-arg formatting for the E2E log ring: Firefox
+ * content scripts can hold cross-compartment rejections where even
+ * `instanceof` or String() throws ("Permission denied to access property
+ * constructor", "non-unwrappable wrapper"). A throwing formatter used to
+ * lose exactly the failure lines E2E needs, so every read is guarded.
+ * Readable values keep their exact text (machine-parsed delimiters like
+ * the onFramePath parens must survive); only unreadable values degrade.
+ */
+function safeLogArg(value: unknown): string {
+  try {
+    const message = (value as { message?: unknown })?.message;
+    if (typeof message === 'string' && message.length > 0) return message;
+  } catch { /* cross-compartment: fall through to String() */ }
+  try {
+    return String(value);
+  } catch {
+    return '<unreadable cross-compartment value>';
+  }
+}
+
+function installLogForwarder(): void {
+  if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(location.origin)) return;
+  for (const level of ['log', 'info', 'warn', 'error'] as const) {
+    try {
+      const original = console[level].bind(console);
+      Object.defineProperty(console, level, {
+        value: (...args: unknown[]) => {
+          let text: string;
+          try {
+            text = args.map(safeLogArg).join(' ');
+          } catch {
+            text = '<unreadable log args>';
+          }
+          E2E_LOG_BUFFER.push(`[${level}] ${text}`);
+          if (E2E_LOG_BUFFER.length > E2E_LOG_BUFFER_CAP) E2E_LOG_BUFFER.shift();
+          original(...args);
+        },
+        writable: true,
+        configurable: true,
+      });
+    } catch { /* console level not overridable in this browser */ }
+  }
+}
+
 function installLocalE2ETestBridge(): void {
-  if (location.origin !== 'http://127.0.0.1:4173' || location.pathname !== '/firefox-self-test.html') return;
+  // Accept the bridge on any 127.0.0.1 loopback origin: the Firefox E2E
+  // fixture server uses 4173, the RealESRGAN clip runner uses 4188. Loopback
+  // only, and the page must still carry a token query param.
+  if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(location.origin)) return;
   const token = new URLSearchParams(location.search).get('token');
   if (!token) return;
   window.addEventListener('message', event => {
     const data = event.data as Record<string, unknown> | null;
-    if (event.source !== window || !data || data.type !== 'anime4k-e2e-command' || data.token !== token
+    if (event.source !== window || !data || data.type !== E2E_BRIDGE_MESSAGE.COMMAND || data.token !== token
         || typeof data.id !== 'string') return;
     void (async () => {
-      if (data.action === 'configure') {
+      if (data.action === E2E_BRIDGE_ACTIONS.CONFIGURE) {
         if (data.forceNoAdapter === true && navigator.gpu) {
+          // Stash the original so a later case can restore the real adapter:
+          // a permanent null would pollute every subsequent case in this page.
+          const gpu = navigator.gpu as unknown as Record<string, unknown>;
+          if (gpu.__aniwebscale_origRequestAdapter === undefined) {
+            // .bind() keeps the adapter as `this`: a bare method reference
+            // would later run with undefined `this` when restored.
+            gpu.__aniwebscale_origRequestAdapter = navigator.gpu.requestAdapter.bind(navigator.gpu);
+          }
           Object.defineProperty(navigator.gpu, 'requestAdapter', {
             configurable: true,
             value: async () => null,
           });
+        } else if (data.forceNoAdapter !== true && navigator.gpu) {
+          const gpu = navigator.gpu as unknown as Record<string, unknown>;
+          const original = gpu.__aniwebscale_origRequestAdapter;
+          if (typeof original === 'function') {
+            Object.defineProperty(navigator.gpu, 'requestAdapter', {
+              configurable: true,
+              value: original,
+            });
+            delete gpu.__aniwebscale_origRequestAdapter;
+          }
         }
         await chrome.storage.local.set({
           mode: 'A', quality: 'M', output: 'auto', backend: 'webgpu', statsEnabled: true,
@@ -45,11 +126,47 @@ function installLocalE2ETestBridge(): void {
         });
         return;
       }
+      if (data.action === E2E_BRIDGE_ACTIONS.CONFIGURE_REALESRGAN) {
+        // E2E knobs ride the registry table (env -> query -> bridge ->
+        // storage): new knobs arrive as one table row, never as new code.
+        const storagePatch = {
+          extensionEnabled: true, mode: 'REALESRGAN', quality: 'M', output: 'auto',
+          backend: 'webgpu', statsEnabled: true, autoFullscreenEnabled: true,
+          frameGenerationEnabled: false,
+        };
+        for (const knob of E2E_KNOBS) {
+          if (!knob.bridge) continue;
+          const patch = knobStorageFromBridge(knob, data[knob.bridge]);
+          if (patch) Object.assign(storagePatch, patch);
+        }
+        await chrome.storage.local.set(storagePatch);
+        return;
+      }
+      if (data.action === E2E_BRIDGE_ACTIONS.GET_LOGS) {
+        return { logs: E2E_LOG_BUFFER.slice() };
+      }
+      if (data.action === E2E_BRIDGE_ACTIONS.FORCE_OVERLOAD) {
+        // Hebel-C E2E proof: inject one synthetic overload sample into the
+        // live enhancer so the run can verify the cap step without real
+        // GPU overload. Returns the effective cap afterwards.
+        const videos = getAllManagedVideos();
+        const enhancer = videos.length > 0 ? getEnhancer(videos[0]!) : undefined;
+        if (!enhancer) throw new Error('no live enhancer for force-overload');
+        return { effectiveCap: enhancer.e2eInjectOverloadStats() };
+      }
+      if (data.action === E2E_BRIDGE_ACTIONS.GET_STATS) {
+        // E1 timing gate: sample the live RealESRGAN stats window so the
+        // runner can compare inference medians across runs (ORT vs engine).
+        const videos = getAllManagedVideos();
+        const enhancer = videos.length > 0 ? getEnhancer(videos[0]!) : undefined;
+        if (!enhancer) throw new Error('no live enhancer for get-stats');
+        return { stats: enhancer.e2eLastStats() ?? null };
+      }
       throw new Error('Unsupported local E2E command.');
     })().then(
-      () => window.postMessage({ type: 'anime4k-e2e-response', token, id: data.id, ok: true }, location.origin),
+      result => window.postMessage({ type: E2E_BRIDGE_MESSAGE.RESPONSE, token, id: data.id, ok: true, ...result }, location.origin),
       error => window.postMessage({
-        type: 'anime4k-e2e-response', token, id: data.id, ok: false,
+        type: E2E_BRIDGE_MESSAGE.RESPONSE, token, id: data.id, ok: false,
         message: error instanceof Error ? error.message : String(error),
       }, location.origin),
     );
@@ -70,10 +187,6 @@ async function handleRuntimeMessage(request: unknown): Promise<unknown> {
       await enhancer.stopEnhancement({ releaseClaim: false });
       return { ok: true };
     }
-
-    case 'URL_UPDATED':
-      // The manager remains active across same-document SPA navigation.
-      return { ok: true };
 
     case 'NATIVE_CONSENT_REQUEST': {
       const allowed = window.confirm(nativeConsentPrompt(message.origin ?? 'this website'));
@@ -162,9 +275,9 @@ async function handleRuntimeMessage(request: unknown): Promise<unknown> {
       };
 
     case 'NATIVE_SESSION_EVENT': {
-      const event = message.event as Record<string, unknown> | undefined;
-      if (event?.type === 'error') showNotice(String(event.message ?? 'Native renderer error.'), true);
-      else if (event?.type === 'status' && event.state === 'capturing') showNotice('AniWebScale native rendering is active.');
+      const event = message.event;
+      if (event.type === 'error') showNotice(event.message || 'Native renderer error.', true);
+      else if (event.type === 'status' && event.state === 'capturing') showNotice('AniWebScale native rendering is active.');
       window.dispatchEvent(new CustomEvent('anime4k-native-session', { detail: event }));
       return { ok: true };
     }
@@ -233,9 +346,15 @@ if (!contentGlobal[CONTENT_INSTANCE_KEY]) {
   });
 
   void initDebugLogging();
+  if (__ANIME4K_E2E__) installLogForwarder();
+  if (__ANIME4K_E2E__) installLocalE2ETestBridge();
+  // Build stamp: proves which bundle the browser actually loaded. Bump the
+  // git/package version whenever diagnosing "is the new build live? doubts."
+  // Logged AFTER installLogForwarder so the stamp lands in the E2E log ring;
+  // before the reorder it never reached the clip runner's assertions.
+  console.info('[AniWebScale] content build 1.0.14 (realesrgan freeDimensionOverrides, fp16 disabled)');
   void initializeOnPage();
   installIframeSiteAccessProbe();
-  if (__ANIME4K_E2E__) installLocalE2ETestBridge();
   window.addEventListener('anime4k-video-reattached', event => {
     const detail = (event as CustomEvent<{ videoId?: string; video?: HTMLVideoElement }>).detail;
     if (detail?.video instanceof HTMLVideoElement && typeof detail.videoId === 'string') {

@@ -1,0 +1,7 @@
+#version 450
+#extension GL_GOOGLE_include_directive: require
+#extension GL_EXT_shader_16bit_storage: require
+
+// AniWebScale ncnn-Vulkan: GPU post-process for the RealESRGAN fp16 path.
+// Shared math lives in realesrgan_spike_postproc_body.comp.
+#include "realesrgan_spike_postproc_body.comp"

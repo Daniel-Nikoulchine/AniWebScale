@@ -1,0 +1,9 @@
+#version 450
+#extension GL_GOOGLE_include_directive: require
+
+// AniWebScale ncnn-Vulkan: GPU post-process for the RealESRGAN fp32-storage
+// path. 32-bit read of the network's planar float RGB output (cstep-strided
+// channels) writing packed RGBA8; identical math to the fp16 postproc shader
+// (identity + exact fractional-edge box average), only the source channel
+// type differs. Shared math lives in realesrgan_spike_postproc_body.comp.
+#include "realesrgan_spike_postproc_body.comp"

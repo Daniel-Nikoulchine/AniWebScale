@@ -1,0 +1,19 @@
+// Shared bias + exact ONNX PReLU epilogue of the hand-written srvgg conv
+// kernels. srvgg_conv.comp (naive direct) and srvgg_conv_tiled.comp
+// (shared-memory tiled) differ only in how they accumulate the conv sum; the
+// tail that turns the raw accumulator into an activated output is identical.
+//
+// Factored as macros (not functions) and included textually with
+// GL_GOOGLE_include_directive so the preprocessor expands the same tokens in
+// both kernels: the generated SPIR-V carries the same instructions as the
+// inlined originals, no extra OpFunction/OpFunctionCall. The bias is kept an
+// expression (the naive kernel does `acc += bias`, the tiled kernel fuses it
+// into `float acc = accs[i] + bias`) so neither kernel's structure changes.
+// Requires the weights buffer `w_data`, the output channel `oc` and the
+// push-constant block `p` in scope.
+//
+// Exact ONNX PReLU: x >= 0 ? x : slope * x (conv17: hasPrelu = 0).
+#define SRVGG_CONV_BIAS(oc) (w_data[p.bBase + oc])
+#define SRVGG_CONV_PRELU(acc, oc)     \
+    if (p.hasPrelu == 1 && acc < 0.0) \
+        acc *= w_data[p.sBase + oc];

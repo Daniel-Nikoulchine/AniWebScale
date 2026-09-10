@@ -51,9 +51,7 @@ describe('native session client', () => {
     expect(sent[0]).toEqual({
       type: 'NATIVE_FALLBACK_REQUEST',
       videoId: 'video-1',
-      reason: 'eme',
       configuration: { mode: 'A', quality: 'M', frameGenerationEnabled: false },
-      output: 'auto',
       videoRect: { x: 0, y: 0, width: 320, height: 180, devicePixelRatio: 1 },
     });
   });
@@ -171,5 +169,103 @@ describe('native session client', () => {
       { type: 'NATIVE_STOP', videoId: 'video-1' },
       { type: 'NATIVE_STOP', sessionId: 'session-late', videoId: 'video-1' },
     ]);
+  });
+
+  it('absorbs the late success of a request superseded by a newer one', async () => {
+    let resolveFirst!: (value: unknown) => void;
+    const firstResponse = new Promise<unknown>(resolve => { resolveFirst = resolve; });
+    const sent: Array<Record<string, unknown>> = [];
+    let calls = 0;
+    const client = createNativeSessionClient(async message => {
+      const record = message as Record<string, unknown>;
+      sent.push(record);
+      if (record.type !== 'NATIVE_FALLBACK_REQUEST') return { ok: true };
+      calls += 1;
+      return calls === 1
+        ? firstResponse
+        : { ok: true, sessionId: 'session-new', status: 'started' };
+    });
+    const input = {
+      videoId: 'video-1',
+      reason: 'eme' as const,
+      configuration: { mode: 'A' as const, quality: 'M' as const, frameGenerationEnabled: false },
+      rect: { x: 0, y: 0, width: 320, height: 180, devicePixelRatio: 1 },
+    };
+
+    const first = client.requestFallback(input);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const second = client.requestFallback(input);
+    // The superseded first request must not resolve as a second live session.
+    resolveFirst({ ok: true, sessionId: 'session-old', status: 'started' });
+
+    await expect(first).resolves.toEqual({
+      ok: false,
+      message: 'The native renderer start was stopped before it completed.',
+    });
+    await expect(second).resolves.toEqual({ ok: true, sessionId: 'session-new' });
+
+    const stops = sent.filter(message => message.type === 'NATIVE_STOP');
+    expect(stops).toEqual([
+      { type: 'NATIVE_STOP', sessionId: 'session-old', videoId: 'video-1' },
+    ]);
+    expect(client.hasPendingFallback('video-1')).toBe(false);
+  });
+
+  it('reports a superseded late failure as cancellation, not as an error', async () => {
+    let resolveFirst!: (value: unknown) => void;
+    const firstResponse = new Promise<unknown>(resolve => { resolveFirst = resolve; });
+    let calls = 0;
+    const client = createNativeSessionClient(async message => {
+      const record = message as Record<string, unknown>;
+      if (record.type !== 'NATIVE_FALLBACK_REQUEST') return { ok: true };
+      calls += 1;
+      return calls === 1
+        ? firstResponse
+        : { ok: true, sessionId: 'session-new', status: 'started' };
+    });
+    const input = {
+      videoId: 'video-1',
+      reason: 'eme' as const,
+      configuration: { mode: 'A' as const, quality: 'M' as const, frameGenerationEnabled: false },
+      rect: { x: 0, y: 0, width: 320, height: 180, devicePixelRatio: 1 },
+    };
+
+    const first = client.requestFallback(input);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const second = client.requestFallback(input);
+    resolveFirst({ ok: false, message: 'host exploded' });
+
+    await expect(first).resolves.toEqual({
+      ok: false,
+      message: 'The native renderer start was stopped before it completed.',
+    });
+    await expect(second).resolves.toEqual({ ok: true, sessionId: 'session-new' });
+  });
+
+  it('distinguishes cancelled from live pending fallbacks', async () => {
+    let resolveRequest!: (value: unknown) => void;
+    const response = new Promise<unknown>(resolve => { resolveRequest = resolve; });
+    const client = createNativeSessionClient(async message => {
+      const record = message as Record<string, unknown>;
+      if (record.type !== 'NATIVE_FALLBACK_REQUEST') return { ok: true };
+      return response;
+    });
+    const input = {
+      videoId: 'video-1',
+      reason: 'eme' as const,
+      configuration: { mode: 'A' as const, quality: 'M' as const, frameGenerationEnabled: false },
+      rect: { x: 0, y: 0, width: 320, height: 180, devicePixelRatio: 1 },
+    };
+
+    const pending = client.requestFallback(input);
+    expect(client.hasPendingFallback('video-1')).toBe(true);
+    expect(client.hasActiveFallback('video-1')).toBe(true);
+    await client.stop({ videoId: 'video-1' });
+    expect(client.hasPendingFallback('video-1')).toBe(true);
+    expect(client.hasActiveFallback('video-1')).toBe(false);
+    resolveRequest({ ok: false, message: 'nope' });
+    await pending;
+    expect(client.hasPendingFallback('video-1')).toBe(false);
+    expect(client.hasActiveFallback('video-1')).toBe(false);
   });
 });

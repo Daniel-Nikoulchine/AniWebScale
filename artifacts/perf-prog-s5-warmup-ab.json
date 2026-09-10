@@ -1,0 +1,30 @@
+{
+  "n": 5,
+  "case": "640x360-target",
+  "vorher_frame0": {
+    "mean": 41.5,
+    "min": 39.1,
+    "max": 44.3,
+    "n": 5
+  },
+  "vorher_frame1": {
+    "mean": 27.3,
+    "min": 27.1,
+    "max": 27.5,
+    "n": 5
+  },
+  "nachher_frame0": {
+    "mean": 28.6,
+    "min": 28.4,
+    "max": 28.9,
+    "n": 5
+  },
+  "nachher_frame1": {
+    "mean": 27.1,
+    "min": 27.0,
+    "max": 27.3,
+    "n": 5
+  },
+  "delta_ms": 12.9,
+  "speedup": 1.45
+}

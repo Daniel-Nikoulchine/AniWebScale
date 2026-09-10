@@ -24,16 +24,27 @@ if (!/^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/.test(identities.nativeHostName)) {
   throw new Error('Native host name is invalid.');
 }
 
+// Files that must embed the current Firefox extension ID verbatim.
 const identityFiles = [
-  'webpack.config.js',
   'native/manifests/native-host-allowlist.json',
   'native/README.md',
 ];
 for (const path of identityFiles) {
   const content = await readFile(new URL(path, root), 'utf8');
-  if (path !== 'webpack.config.js' && !content.includes(identities.firefoxExtensionId)) {
+  if (!content.includes(identities.firefoxExtensionId)) {
     throw new Error(`${path} does not contain the current Firefox extension ID.`);
   }
+}
+
+// webpack.config.js must not hard-code an ID; it has to import the shared
+// identity JSON and read firefoxExtensionId from it, so a rotated ID reaches
+// the built Firefox manifest.
+const webpackConfig = await readFile(new URL('webpack.config.js', root), 'utf8');
+if (!/native\/extension-identities\.json/.test(webpackConfig)) {
+  throw new Error('webpack.config.js does not import native/extension-identities.json.');
+}
+if (!/extensionIdentities\.firefoxExtensionId/.test(webpackConfig)) {
+  throw new Error('webpack.config.js does not read extensionIdentities.firefoxExtensionId.');
 }
 
 console.log(`OK Chrome extension ID ${identities.chromeExtensionId}`);

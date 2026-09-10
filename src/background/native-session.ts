@@ -18,19 +18,27 @@
  * control of chrome.tabs.* access.
  */
 import {
-  createRequestId,
   NativeHostUnavailableError,
   NativeMessagingClient,
 } from '../native/client';
-import type { NativePointerPayload } from '../shared/runtime-messages';
+import {
+  anime4kForceStopMessage,
+  nativeMeasureFullscreenMessage,
+  nativeMediaCommandEventMessage,
+  nativePointerEventMessage,
+  nativePrepareFullscreenMessage,
+  nativeRestoreSessionMessage,
+  nativeRestoreTitleMessage,
+  nativeSessionEventMessage,
+  nativeSetTitleNonceMessage,
+} from '../shared/runtime-messages';
 import {
   type NativeConfiguration,
   type NativeEvent,
-  type NativeMediaCommandName,
-  type NativePointerEventType,
+  type NativeRequest,
   type NativeStatusEvent,
-  NATIVE_PROTOCOL_VERSION,
 } from '../native/protocol';
+import { fireAndForget } from '../shared/async-serializer';
 import { calculateVideoCaptureRegion } from '../shared/popup-geometry';
 import {
   NATIVE_SESSION_VERSION,
@@ -51,19 +59,35 @@ import {
 import type { NativeFallbackRequest } from '../shared/native-fallback-request';
 import {
   generateNonce,
+  nativeConfigurationBody,
   nativeRequestBase,
   sourceOrigin,
   topLevelOrigin,
 } from '../background-helpers';
 import { NativeSessionStore } from './session-store';
 import { NativeBridge } from './native-bridge';
-import { NativeSessionTransport } from './native-session-transport';
+import {
+  NativeBridgeTransport,
+  type NativeEventHandler,
+  type NativeSessionTransport,
+} from './native-session-transport';
+import {
+  readMeasurementReply,
+  readPrepareReply,
+  readTitleNonceReply,
+} from './native-session-replies';
 import type {
   NativeSessionRecord,
   NativeStatusSnapshot,
-  PopupMeasurement,
   PreparedVideo,
 } from '../background-types';
+
+/**
+ * A native event guaranteed to carry the session it belongs to. The session
+ * machine scopes forwarded events with this instead of spreading an untyped
+ * `{ ...event, sessionId } as NativeEvent`.
+ */
+type SessionScopedNativeEvent = NativeEvent & { sessionId: string };
 
 /** How the session machine reports the outcome of a fallback start. */
 export interface NativeFallbackStartResult {
@@ -83,6 +107,8 @@ export interface SessionDependencies {
   isExtensionEnabled(): Promise<boolean>;
   /** Run a state transition without overlapping another. */
   serialized<T>(operation: () => Promise<T>): Promise<T>;
+  /** Build the transport bound to this machine's event handler. Defaults to the real bridge transport. */
+  createTransport?(onEvent: NativeEventHandler): NativeSessionTransport;
 }
 
 export class NativeSession {
@@ -91,12 +117,18 @@ export class NativeSession {
   private readonly transport: NativeSessionTransport;
   private latestStatus: NativeStatusSnapshot = { active: false };
   private fullscreenExitSessionId: string | null = null;
+  /** Request IDs of playback heartbeats; their status replies stay internal. */
+  private readonly playbackRequestIds = new Set<string>();
   private deps: SessionDependencies;
 
   constructor(deps: SessionDependencies) {
     this.store = new NativeSessionStore();
     this.bridge = new NativeBridge();
-    this.transport = new NativeSessionTransport(this.bridge, (event, client) => this.routeNativeEvent(event, client));
+    // The transport drops the handler return, so a rejection here would be
+    // an MV3 unhandled rejection — catch it into a warning instead.
+    this.transport = (deps.createTransport ?? (onEvent => new NativeBridgeTransport(this.bridge, onEvent)))((event, client) => this.routeNativeEvent(event, client).catch(error => {
+      console.warn('[NativeSession] host event handling failed:', error);
+    }));
     this.deps = deps;
   }
 
@@ -153,6 +185,15 @@ export class NativeSession {
     return this.deps.serialized(operation);
   }
 
+  /**
+   * Fire-and-forget serialized stop with a rejection handler. Bare `void
+   * runSerialized(...)` drops the operation promise and turns a mid-cleanup
+   * failure into an MV3 unhandled rejection.
+   */
+  private runStopTask(promise: Promise<unknown>, label: string): void {
+    fireAndForget(promise, 'NativeSession', label);
+  }
+
   /** Claim a video enhancement (serialized). */
   async claimEnhancement(
     videoId: string,
@@ -181,10 +222,8 @@ export class NativeSession {
           && this.store.activeSession.videoId === previous.videoId) {
         await this.stopNativeSession('Another video was selected.', true);
       } else {
-        await this.deps.sendToFrame(previous.tabId, previous.frameId, {
-          type: 'ANIME4K_FORCE_STOP',
-          videoId: previous.videoId,
-        }).catch(() => undefined);
+        await this.deps.sendToFrame(previous.tabId, previous.frameId,
+          anime4kForceStopMessage(previous.videoId)).catch(() => undefined);
       }
     }
     await this.store.persistActiveEnhancement(next);
@@ -214,29 +253,9 @@ export class NativeSession {
     request: NativeFallbackRequest,
     sender: chrome.runtime.MessageSender,
   ): Promise<NativeFallbackStartResult> {
-    const tabId = sender.tab?.id;
-    const frameId = sender.frameId ?? 0;
-    const senderOrigin = sourceOrigin(sender);
-    if (tabId === undefined || senderOrigin === null) {
-      return { ok: false, status: 'denied', message: 'The native request did not come from a trusted HTTP(S) page origin.' };
-    }
-
-    const activeEnhancement = await this.store.loadActiveEnhancement();
-    if (!activeEnhancement
-        || activeEnhancement.tabId !== tabId
-        || activeEnhancement.frameId !== frameId
-        || activeEnhancement.videoId !== request.videoId) {
-      return { ok: false, status: 'denied', message: 'The native request did not belong to the active video.' };
-    }
-
-    // Consent is keyed to the user-visible top-level website, not a CDN/player
-    // iframe origin. MessageSender.origin is authoritative here: location.origin
-    // serializes as "null" in inherited about:blank/srcdoc frames even though the
-    // extension sender retains the parent's effective HTTP(S) origin.
-    const consentOrigin = topLevelOrigin(sender) ?? senderOrigin;
-    if (!await this.deps.requestOriginConsent(tabId, consentOrigin)) {
-      return { ok: false, status: 'denied', message: 'Native capture was not allowed for this website.' };
-    }
+    const resolved = await this.resolveTrustedSender(request, sender);
+    if (!resolved.ok) return resolved.result;
+    const { tabId, frameId, consentOrigin } = resolved;
 
     if (this.store.activeSession
         && this.store.activeSession.tabId === tabId
@@ -258,48 +277,23 @@ export class NativeSession {
       return { ok: false, status: 'unavailable', message: 'The source tab has no browser window.' };
     }
 
-    const session: NativeSessionRecord = {
-      version: NATIVE_SESSION_VERSION,
-      captureKind: 'direct-fullscreen',
-      phase: 'preparing',
-      sessionId: crypto.randomUUID(),
-      nonce: generateNonce(),
+    const session = this.buildNativeSessionRecord({
       tabId,
       frameId,
       videoId: request.videoId,
-      origin: consentOrigin,
-      sourceUrl: sender.url ?? tab.url ?? senderOrigin,
-      topLevelUrl: tab.url ?? senderOrigin,
-      sourceWindowId: tab.windowId,
+      consentOrigin,
+      sourceUrl: sender.url ?? tab.url ?? consentOrigin,
+      topLevelUrl: tab.url ?? consentOrigin,
+      windowId: tab.windowId,
       configuration: request.configuration,
-      output: 'auto',
-      createdAt: Date.now(),
-    };
+    });
 
     await this.store.persistSession(session);
     try {
       const prepared = await this.prepareDirectFullscreen(session);
       await this.store.persistSession(session);
 
-      // Let the site's fullscreen transition and controls settle before
-      // measuring the exact visible decoded-video rectangle.
-      await new Promise<void>(resolve => setTimeout(resolve, 250));
-      const captureMeasurement = await this.deps.sendToFrame<PopupMeasurement>(session.tabId, session.frameId, {
-        type: 'NATIVE_MEASURE_FULLSCREEN',
-        sessionId: session.sessionId,
-        videoId: session.videoId,
-      }).catch(() => null);
-      if (!captureMeasurement?.ok || !captureMeasurement.videoRect) {
-        throw new Error('Player fullscreen ended before native capture could start.');
-      }
-      const captureRegion = captureMeasurement?.videoRect
-        ? calculateVideoCaptureRegion({
-          ...captureMeasurement.videoRect,
-          viewportWidth: captureMeasurement.innerWidth ?? 0,
-          viewportHeight: captureMeasurement.innerHeight ?? 0,
-          devicePixelRatio: captureMeasurement.devicePixelRatio ?? request.videoRect.devicePixelRatio,
-        })
-        : undefined;
+      const captureRegion = await this.measureDirectFullscreenCapture(request, session);
 
       session.intrinsicWidth = prepared.intrinsicWidth;
       session.intrinsicHeight = prepared.intrinsicHeight;
@@ -311,25 +305,9 @@ export class NativeSession {
 
       const client = await this.transport.connect();
       this.bridge.assertSupportsConfiguration(session.configuration);
-      const started = await client.request<NativeStatusEvent>({
-        ...nativeRequestBase(),
-        type: 'start',
-        sessionId: session.sessionId,
-        windowNonce: session.nonce,
-        mode: session.configuration.mode,
-        quality: session.configuration.quality,
-        frameGenerationEnabled: session.configuration.frameGenerationEnabled,
-        ...(prepared.targetWidth && prepared.targetHeight ? {
-          targetWidth: prepared.targetWidth,
-          targetHeight: prepared.targetHeight,
-        } : {}),
-        ...(captureRegion ? {
-          captureX: captureRegion.x,
-          captureY: captureRegion.y,
-          captureWidth: captureRegion.width,
-          captureHeight: captureRegion.height,
-        } : {}),
-      }, 15_000);
+      // The client already validated this is a native event; consume it typed.
+      const started = await client.request<NativeStatusEvent>(
+        this.buildNativeStartRequest(session, prepared, captureRegion), 15_000);
       if (started.type !== 'status' || started.sessionId !== session.sessionId
           || (started.state !== 'starting' && started.state !== 'capturing')) {
         throw new Error(started.type === 'status' && started.message
@@ -367,6 +345,120 @@ export class NativeSession {
     }
   }
 
+  /** Resolve and authorize the sender and written consent for a fallback start. */
+  private async resolveTrustedSender(
+    request: NativeFallbackRequest,
+    sender: chrome.runtime.MessageSender,
+  ): Promise<
+    | { ok: true; tabId: number; frameId: number; consentOrigin: string }
+    | { ok: false; result: NativeFallbackStartResult }
+  > {
+    const tabId = sender.tab?.id;
+    const frameId = sender.frameId ?? 0;
+    const senderOrigin = sourceOrigin(sender);
+    if (tabId === undefined || senderOrigin === null) {
+      return { ok: false, result: { ok: false, status: 'denied', message: 'The native request did not come from a trusted HTTP(S) page origin.' } };
+    }
+
+    const activeEnhancement = await this.store.loadActiveEnhancement();
+    if (!activeEnhancement
+        || activeEnhancement.tabId !== tabId
+        || activeEnhancement.frameId !== frameId
+        || activeEnhancement.videoId !== request.videoId) {
+      return { ok: false, result: { ok: false, status: 'denied', message: 'The native request did not belong to the active video.' } };
+    }
+
+    // Consent is keyed to the user-visible top-level website, not a CDN/player
+    // iframe origin. MessageSender.origin is authoritative here: location.origin
+    // serializes as "null" in inherited about:blank/srcdoc frames even though the
+    // extension sender retains the parent's effective HTTP(S) origin.
+    const consentOrigin = topLevelOrigin(sender) ?? senderOrigin;
+    if (!await this.deps.requestOriginConsent(tabId, consentOrigin)) {
+      return { ok: false, result: { ok: false, status: 'denied', message: 'Native capture was not allowed for this website.' } };
+    }
+
+    return { ok: true, tabId, frameId, consentOrigin };
+  }
+
+  /** Measure the decoded-video rectangle and convert it to physical pixels. */
+  private async measureDirectFullscreenCapture(
+    request: NativeFallbackRequest,
+    session: NativeSessionRecord,
+  ): Promise<ReturnType<typeof calculateVideoCaptureRegion> | undefined> {
+    // Let the site's fullscreen transition and controls settle before
+    // measuring the exact visible decoded-video rectangle.
+    await new Promise<void>(resolve => setTimeout(resolve, 250));
+    const captureMeasurement = readMeasurementReply(await this.deps.sendToFrame(
+      session.tabId, session.frameId,
+      nativeMeasureFullscreenMessage({ sessionId: session.sessionId, videoId: session.videoId })).catch(() => null));
+    if (!captureMeasurement?.ok || !captureMeasurement.videoRect) {
+      throw new Error('Player fullscreen ended before native capture could start.');
+    }
+    return calculateVideoCaptureRegion({
+      ...captureMeasurement.videoRect,
+      viewportWidth: captureMeasurement.innerWidth ?? 0,
+      viewportHeight: captureMeasurement.innerHeight ?? 0,
+      devicePixelRatio: captureMeasurement.devicePixelRatio ?? request.videoRect.devicePixelRatio,
+    });
+  }
+
+  /** Pure construction of the persisted native session record. */
+  private buildNativeSessionRecord(args: {
+    tabId: number;
+    frameId: number;
+    videoId: string;
+    consentOrigin: string;
+    sourceUrl: string;
+    topLevelUrl: string;
+    windowId: number;
+    configuration: NativeConfiguration;
+  }): NativeSessionRecord {
+    return {
+      version: NATIVE_SESSION_VERSION,
+      captureKind: 'direct-fullscreen',
+      phase: 'preparing',
+      sessionId: crypto.randomUUID(),
+      nonce: generateNonce(),
+      tabId: args.tabId,
+      frameId: args.frameId,
+      videoId: args.videoId,
+      origin: args.consentOrigin,
+      sourceUrl: args.sourceUrl,
+      topLevelUrl: args.topLevelUrl,
+      sourceWindowId: args.windowId,
+      configuration: args.configuration,
+      output: 'auto',
+      createdAt: Date.now(),
+    };
+  }
+
+  /** Pure construction of the native host `start` request body. */
+  private buildNativeStartRequest(
+    session: NativeSessionRecord,
+    prepared: PreparedVideo,
+    captureRegion: ReturnType<typeof calculateVideoCaptureRegion> | undefined,
+  ): NativeRequest {
+    return {
+      ...nativeRequestBase(),
+      type: 'start',
+      sessionId: session.sessionId,
+      windowNonce: session.nonce,
+      ...nativeConfigurationBody(session.configuration),
+      ...(prepared.targetWidth && prepared.targetHeight ? {
+        targetWidth: prepared.targetWidth,
+        targetHeight: prepared.targetHeight,
+      } : {}),
+      // calculateVideoCaptureRegion can reject a too-small region; only send
+      // the capture rect when one was measured.
+      ...(captureRegion ? {
+        captureX: captureRegion.x,
+        captureY: captureRegion.y,
+        captureWidth: captureRegion.width,
+        captureHeight: captureRegion.height,
+      } : {}),
+    };
+  }
+
   /** Update the active session's renderer configuration. */
   async updateNativeConfiguration(configuration: NativeConfiguration): Promise<void> {
     const session = this.store.activeSession;
@@ -377,9 +469,7 @@ export class NativeSession {
       ...nativeRequestBase(),
       type: 'updateConfiguration',
       sessionId: session.sessionId,
-      mode: configuration.mode,
-      quality: configuration.quality,
-      frameGenerationEnabled: configuration.frameGenerationEnabled,
+      ...nativeConfigurationBody(configuration),
     });
     session.configuration = configuration;
     this.latestStatus = { ...this.latestStatus, configuration };
@@ -397,10 +487,9 @@ export class NativeSession {
 
     if (event.type === 'pointer' || event.type === 'mediaCommand') {
       if (session && event.sessionId === session.sessionId) {
-        const message = {
-          ...event,
-          type: event.type === 'pointer' ? 'NATIVE_POINTER_EVENT' : 'NATIVE_MEDIA_COMMAND_EVENT',
-        };
+        const message = event.type === 'pointer'
+          ? nativePointerEventMessage(event)
+          : nativeMediaCommandEventMessage(event.command, event.value);
         if (event.type === 'mediaCommand' && event.command === 'exitFullscreen') {
           await this.exitNativeFullscreen(session, message);
         } else {
@@ -439,9 +528,16 @@ export class NativeSession {
         state: event.state,
         message: event.message,
       };
-      if (!event.requestId?.startsWith('playback-')) await this.sendSessionEvent(session, event);
+      // Playback heartbeat replies are internal: the pending request ID set is
+      // the typed marker, replacing the old `playback-` requestId prefix.
+      const requestId = event.requestId;
+      if (typeof requestId === 'string' && this.playbackRequestIds.delete(requestId)) {
+        // Consumed as a playback reply; do not forward it as a session event.
+      } else {
+        await this.sendSessionEvent(session, event);
+      }
       if (event.state === 'failed' || event.state === 'stopped') {
-        void this.runSerialized(() => this.stopNativeSession(event.message ?? event.state, false, true, session.sessionId));
+        this.runStopTask(this.runSerialized(() => this.stopNativeSession(event.message ?? event.state, false, true, session.sessionId)), 'stopping the session on host status');
       }
       return;
     }
@@ -453,14 +549,14 @@ export class NativeSession {
         // A renderer error invalidates the capture surface even when the host
         // classifies it as theoretically recoverable. Use the same idempotent
         // restore path for device loss, capture loss, and fatal protocol errors.
-        void this.runSerialized(() => this.stopNativeSession(event.message, false, true, session.sessionId));
+        this.runStopTask(this.runSerialized(() => this.stopNativeSession(event.message, false, true, session.sessionId)), 'stopping the session on host error');
       }
       return;
     }
 
     if (event.type === 'stopped' && session && event.sessionId === session.sessionId) {
       await this.sendSessionEvent(session, event);
-      void this.runSerialized(() => this.stopNativeSession(event.reason, false, true, session.sessionId));
+      this.runStopTask(this.runSerialized(() => this.stopNativeSession(event.reason, false, true, session.sessionId)), 'stopping the session on host stop');
     }
   }
 
@@ -504,33 +600,24 @@ export class NativeSession {
 
   /** Forward a session event to the source frame. */
   private async sendSessionEvent(session: NativeSessionRecord, event: NativeEvent): Promise<void> {
-    await this.deps.sendToFrame(session.tabId, session.frameId, {
-      type: 'NATIVE_SESSION_EVENT',
-      // Some host-level errors do not carry a session ID. Scope every forwarded
-      // event here so a delayed delivery cannot tear down a replacement session.
-      event: { ...event, sessionId: session.sessionId },
-    }).catch(() => undefined);
+    // Some host-level errors do not carry a session ID. Scope every forwarded
+    // event here so a delayed delivery cannot tear down a replacement session.
+    const scoped: SessionScopedNativeEvent = { ...event, sessionId: session.sessionId };
+    await this.deps.sendToFrame(session.tabId, session.frameId,
+      nativeSessionEventMessage(scoped)).catch(() => undefined);
   }
 
   /** Prepare a direct-fullscreen capture session. */
   private async prepareDirectFullscreen(session: NativeSessionRecord): Promise<PreparedVideo> {
-    const prepared = await this.deps.sendToFrame<PreparedVideo>(session.tabId, session.frameId, {
-      type: 'NATIVE_PREPARE_FULLSCREEN',
-      sessionId: session.sessionId,
-      videoId: session.videoId,
-      nonce: session.nonce,
-    });
+    const prepared = readPrepareReply(await this.deps.sendToFrame(session.tabId, session.frameId,
+      nativePrepareFullscreenMessage({ sessionId: session.sessionId, nonce: session.nonce, videoId: session.videoId })));
     if (!prepared?.ok) throw new Error(prepared?.message ?? 'The selected video is not in player fullscreen.');
     if (session.frameId === 0) {
       session.originalTitle = prepared.originalTitle;
       return prepared;
     }
-    const title = await this.deps.sendToFrame<{ ok?: boolean; originalTitle?: string }>(session.tabId, 0, {
-      type: 'NATIVE_SET_TITLE_NONCE',
-      captureKind: 'direct-fullscreen',
-      sessionId: session.sessionId,
-      nonce: session.nonce,
-    });
+    const title = readTitleNonceReply(await this.deps.sendToFrame(session.tabId, 0,
+      nativeSetTitleNonceMessage({ sessionId: session.sessionId, nonce: session.nonce, captureKind: 'direct-fullscreen' })));
     if (!title?.ok) throw new Error('The fullscreen browser window could not be marked for capture.');
     session.originalTitle = title.originalTitle;
     return prepared;
@@ -539,27 +626,24 @@ export class NativeSession {
   /** Restore the page content after a capture session ends. */
   private async restoreContent(session: NativeSessionRecord): Promise<void> {
     if (session.captureKind === 'direct-fullscreen') {
-      const restoreSession = {
-        type: 'NATIVE_RESTORE_SESSION',
+      const restoreSession = nativeRestoreSessionMessage({
         sessionId: session.sessionId,
         nonce: session.nonce,
         originalTitle: session.originalTitle,
-      };
+      });
       await this.deps.sendToFrame(session.tabId, session.frameId, restoreSession).catch(() => undefined);
-      await this.deps.sendToFrame(session.tabId, 0, {
-        type: 'NATIVE_RESTORE_TITLE',
+      await this.deps.sendToFrame(session.tabId, 0, nativeRestoreTitleMessage({
         sessionId: session.sessionId,
         nonce: session.nonce,
         originalTitle: session.originalTitle,
-      }).catch(() => undefined);
+      })).catch(() => undefined);
       return;
     }
-    const message = {
-      type: 'NATIVE_RESTORE_SESSION',
+    const message = nativeRestoreSessionMessage({
       sessionId: session.sessionId,
       nonce: session.nonce,
       originalTitle: session.originalTitle,
-    };
+    });
     await this.deps.sendToFrame(session.tabId, session.frameId, message).catch(() => undefined);
     if (session.frameId !== 0) {
       await this.deps.sendToFrame(session.tabId, 0, message).catch(() => undefined);
@@ -615,21 +699,25 @@ export class NativeSession {
 
   /** Find the tab that matches a persisted session's nonce. */
   private async findRecoveredSessionTab(session: NativeSessionRecord): Promise<chrome.tabs.Tab | null> {
-    const tabs = await chrome.tabs.query({});
-    const candidates = await Promise.all(tabs
+    const [tabs, windows] = await Promise.all([chrome.tabs.query({}), chrome.windows.getAll()]);
+    const windowTypes = new Map<number, string | undefined>();
+    for (const window of windows) {
+      if (window.id !== undefined) windowTypes.set(window.id, window.type);
+    }
+    const candidates = tabs
       .filter((tab): tab is chrome.tabs.Tab & { id: number; windowId: number } => (
         tab.id !== undefined && tab.windowId !== undefined
       ))
-      .map(async tab => ({
+      .map(tab => ({
         tab,
         recovery: {
           id: tab.id,
           windowId: tab.windowId,
           title: tab.title,
           url: tab.url,
-          windowType: (await chrome.windows.get(tab.windowId).catch(() => null))?.type,
+          windowType: windowTypes.get(tab.windowId),
         },
-      })));
+      }));
     const recovered = selectRecoveredSessionTab(
       candidates.map(candidate => candidate.recovery),
       session.nonce,
@@ -707,42 +795,6 @@ export class NativeSession {
     await this.stopNativeSession('The saved native session is no longer running.', true);
   }
 
-  /** Forward a media command to the native host. */
-  async forwardMediaCommand(command: NativeMediaCommandName, value?: number): Promise<void> {
-    const session = this.store.activeSession;
-    if (!session) throw new Error('No native session is active.');
-    const client = await this.transport.connect();
-    client.post({
-      ...nativeRequestBase(),
-      type: 'mediaCommand',
-      sessionId: session.sessionId,
-      command,
-      ...(Number.isFinite(value) ? { value } : {}),
-    });
-  }
-
-  /** Forward a pointer event to the native host. */
-  async forwardPointer(request: NativePointerPayload): Promise<void> {
-    const session = this.store.activeSession;
-    if (!session) throw new Error('No native session is active.');
-    const client = await this.transport.connect();
-    client.post({
-      ...nativeRequestBase(),
-      type: 'pointer',
-      sessionId: session.sessionId,
-      event: request.event as NativePointerEventType,
-      x: request.x,
-      y: request.y,
-      ...(typeof request.button === 'number' ? { button: request.button } : {}),
-      ...(typeof request.buttons === 'number' ? { buttons: request.buttons } : {}),
-      ...(typeof request.deltaX === 'number' ? { deltaX: request.deltaX } : {}),
-      ...(typeof request.deltaY === 'number' ? { deltaY: request.deltaY } : {}),
-      ...(typeof request.shiftKey === 'boolean' ? { shiftKey: request.shiftKey } : {}),
-      ...(typeof request.ctrlKey === 'boolean' ? { ctrlKey: request.ctrlKey } : {}),
-      ...(typeof request.altKey === 'boolean' ? { altKey: request.altKey } : {}),
-    });
-  }
-
   /** Stop the active native session and restore the browser state (idempotent). */
   async stopNativeSession(
     reason: string,
@@ -776,6 +828,7 @@ export class NativeSession {
       if (requiresLegacyPopupRestore(session)) await this.restoreTab(session);
     }
     this.transport.disconnect();
+    this.playbackRequestIds.clear();
     await this.store.persistSession(null);
     const currentEnhancement = await this.store.loadActiveEnhancement();
     if (currentEnhancement?.tabId === session.tabId
@@ -793,9 +846,12 @@ export class NativeSession {
     mediaTime: number,
   ): Promise<void> {
     const client = await this.transport.connect();
+    const base = nativeRequestBase();
+    // Mark the request ID before posting so its status reply is recognized as
+    // a playback heartbeat (and not forwarded) even if it returns immediately.
+    this.playbackRequestIds.add(base.requestId);
     client.post({
-      protocolVersion: NATIVE_PROTOCOL_VERSION,
-      requestId: `playback-${createRequestId()}`,
+      ...base,
       type: 'status',
       sessionId,
       playbackActive,

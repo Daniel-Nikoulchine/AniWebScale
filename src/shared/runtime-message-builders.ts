@@ -1,17 +1,27 @@
-import type { NativeConfiguration } from '../native/protocol';
+import type { NativeConfiguration, NativeEvent, NativeMediaCommandName } from '../native/protocol';
+import type { NativePointerPayload } from './native-pointer';
 import type { NativeFallbackRequest } from './native-fallback-request';
 import type {
+  Anime4kForceStopMessage,
   EnhancementClaimRequest,
   EnhancementReleaseRequest,
+  NativeMediaCommandEventMessage,
+  NativeMeasureFullscreenMessage,
   NativePlaybackStateRequest,
+  NativePointerEventMessage,
+  NativePrepareFullscreenMessage,
   NativeResetConsentRequest,
+  NativeRestoreSessionMessage,
+  NativeRestoreTitleMessage,
+  NativeSessionEventMessage,
+  NativeSetTitleNonceMessage,
   NativeStopRequest,
   NativeUpdateConfigurationRequest,
+  RealEsrganHttpInfoRequest,
   SettingsUpdatedRequest,
   SiteAccessIframeRequest,
   SiteAccessResultMessage,
   SiteAccessSyncRequest,
-  UrlUpdatedMessage,
   NativeConsentRequestMessage,
 } from './runtime-messages';
 
@@ -74,10 +84,70 @@ export function nativeResetConsentMessage(origin?: string): NativeResetConsentRe
   return { type: 'NATIVE_RESET_CONSENT', ...(origin !== undefined ? { origin } : {}) };
 }
 
-export function urlUpdatedMessage(url?: string): UrlUpdatedMessage {
-  return { type: 'URL_UPDATED', ...(url !== undefined ? { url } : {}) };
+export function realEsrganHttpInfoMessage(): RealEsrganHttpInfoRequest {
+  return { type: 'REALESRGAN_HTTP_INFO' };
 }
 
 export function nativeConsentRequestMessage(origin?: string): NativeConsentRequestMessage {
   return { type: 'NATIVE_CONSENT_REQUEST', ...(origin !== undefined ? { origin } : {}) };
+}
+
+export function anime4kForceStopMessage(videoId: string): Anime4kForceStopMessage {
+  return { type: 'ANIME4K_FORCE_STOP', videoId };
+}
+
+export function nativePrepareFullscreenMessage(payload: {
+  sessionId: string;
+  nonce: string;
+  videoId?: string;
+}): NativePrepareFullscreenMessage {
+  return { type: 'NATIVE_PREPARE_FULLSCREEN', ...payload };
+}
+
+export function nativeMeasureFullscreenMessage(payload: {
+  sessionId?: string;
+  videoId?: string;
+} = {}): NativeMeasureFullscreenMessage {
+  return { type: 'NATIVE_MEASURE_FULLSCREEN', ...payload };
+}
+
+export function nativeSetTitleNonceMessage(payload: {
+  sessionId: string;
+  nonce: string;
+  captureKind?: string;
+}): NativeSetTitleNonceMessage {
+  return { type: 'NATIVE_SET_TITLE_NONCE', ...payload };
+}
+
+export function nativeRestoreSessionMessage(payload: {
+  sessionId?: string;
+  nonce?: string;
+  originalTitle?: string;
+} = {}): NativeRestoreSessionMessage {
+  return { type: 'NATIVE_RESTORE_SESSION', ...payload };
+}
+
+export function nativeRestoreTitleMessage(payload: {
+  sessionId?: string;
+  nonce?: string;
+  originalTitle?: string;
+} = {}): NativeRestoreTitleMessage {
+  return { type: 'NATIVE_RESTORE_TITLE', ...payload };
+}
+
+export function nativePointerEventMessage(payload: NativePointerPayload): NativePointerEventMessage {
+  // `type` after the spread: a host-side NativePointerRequest carries its own
+  // `type: 'pointer'`, which must not overwrite the frame message type.
+  return { ...payload, type: 'NATIVE_POINTER_EVENT' };
+}
+
+export function nativeMediaCommandEventMessage(
+  command: NativeMediaCommandName,
+  value?: number,
+): NativeMediaCommandEventMessage {
+  return { type: 'NATIVE_MEDIA_COMMAND_EVENT', command, ...(value !== undefined ? { value } : {}) };
+}
+
+export function nativeSessionEventMessage(event: NativeEvent): NativeSessionEventMessage {
+  return { type: 'NATIVE_SESSION_EVENT', event };
 }

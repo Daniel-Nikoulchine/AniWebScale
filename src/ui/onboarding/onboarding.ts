@@ -4,20 +4,32 @@ import './onboarding.css';
 import type { EnhancementMode, QualityTier, RenderBackend } from '../../types';
 import { renderEnhancementSelects, refreshEnhancementControlLabels, renderEnhancementToggles } from '../enhancement-controls';
 import { refreshModeUi } from '../mode-ui';
-import { DEFAULT_SETTINGS } from '../../utils/settings';
+import { DEFAULT_SETTINGS, getSettings } from '../../utils/settings';
+import { readTheme, type ThemeMode } from '../../utils/local-settings';
 import { themeManager } from '../theme-manager';
 import { applySettings } from '../../utils/apply-settings';
-import { localizeDocument, message, initI18n, setUiLanguage, getUiLanguage, type UiLanguage } from '../i18n';
+import { relocalize, message, initI18n, setUiLanguage, getUiLanguage, type UiLanguage } from '../i18n';
 
 document.addEventListener('DOMContentLoaded', async () => {
   await initI18n();
-  localizeDocument();
+  relocalize();
   themeManager.getTheme();
   const finish = document.getElementById('finish') as HTMLButtonElement;
+  // Prefill with the stored settings: onboarding reopens on update for
+  // existing users (site-access-model gate), and rendering bare 'A'/M/auto
+  // defaults would save over their customized mode on Finish.
+  const stored = await getSettings().catch(() => null);
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
+    stored?.mode ?? 'A',
+    // Erstlauf: kein RealESRGAN-Detailschalter, Default 480 greift.
+    { includeRealEsrganCap: false },
   );
   const { mode, quality, backend } = controls;
+  if (stored) {
+    quality.value = stored.quality;
+    backend.value = stored.backend;
+  }
   const toggles = renderEnhancementToggles(
     document.getElementById('enhancement-toggles') as HTMLDivElement,
     { includeStatistics: false },
@@ -30,26 +42,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   language.value = getUiLanguage();
   language.addEventListener('change', () => {
     void setUiLanguage(language.value as UiLanguage).then(() => {
-      localizeDocument();
+      relocalize();
       refreshEnhancementControlLabels(controls);
     });
   });
 
   const storedTheme = await chrome.storage.local.get(['theme']);
-  const initialTheme = ['light', 'dark', 'auto'].includes(storedTheme.theme)
-    ? storedTheme.theme as 'light' | 'dark' | 'auto'
-    : 'auto';
+  const initialTheme: ThemeMode = readTheme(storedTheme);
   themeManager.setTheme(initialTheme);
   theme.value = initialTheme;
   theme.addEventListener('change', () => {
-    themeManager.setTheme(theme.value as 'light' | 'dark' | 'auto');
+    themeManager.setTheme(theme.value as ThemeMode);
   });
+
+  if (stored) {
+    frameGeneration.checked = stored.frameGenerationEnabled;
+  }
 
   const updateModeUi = () => {
     refreshModeUi({ mode, quality, backend, frameGeneration });
     status.textContent = '';
   };
   mode.addEventListener('change', updateModeUi);
+  quality.addEventListener('change', updateModeUi);
   backend.addEventListener('change', updateModeUi);
   frameGeneration.addEventListener('change', updateModeUi);
   updateModeUi();
@@ -60,7 +75,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const update = {
       mode: mode.value as EnhancementMode,
       quality: quality.value as QualityTier,
-      output: 'auto' as const,
       backend: backend.value as RenderBackend,
       statsEnabled: DEFAULT_SETTINGS.statsEnabled,
       frameGenerationEnabled: frameGeneration.checked,

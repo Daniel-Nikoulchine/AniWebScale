@@ -25,6 +25,29 @@ python tests/golden/run_shader_golden.py --native-exe native/build/bin/Release/A
 
 Browser E2E fixtures are local (no streaming service). They cover same-origin/CORS media, iframes, dynamic video replacement, auto fullscreen, DOM subtitles, navigation, and teardown.
 
+## Linux native host (ncnn/Vulkan)
+
+The optional Linux RealESRGAN host has its own golden tests and benchmarks (all
+run against the built `native/linux-host/build/aniwebscale-ncnn-host`):
+
+```
+python3 tests/host-target-downscale.py                       # fp16 identity/box/tiled
+ANIWEBSCALE_NO_FP16=1 ANIWEBSCALE_FP32_BUDGET_MS=0 python3 tests/host-target-downscale.py
+python3 tests/host-http-transport.py                         # HTTP vs stdin parity
+ANIWEBSCALE_NO_FP16=1 python3 bench/wall-probe-e2e-sizes.py  # 15 fps budget
+.venv-realesrgan/bin/python bench/native-fp32-governor-evidence.py
+npm run bench:ncnn                                           # isolated GPU benchmark
+```
+
+Details, flags and environment variables are in
+[`native/linux-host/README.md`](../native/linux-host/README.md).
+
+The `generate:pixels-wasm` build step needs the `wasm32-unknown-unknown` Rust
+target. System toolchains without rustup keep a previously built
+`wasm/pixels.wasm` with a warning; CI (`--check`) still requires a real rebuild,
+so install the target (`rustup target add wasm32-unknown-unknown`) before
+releasing.
+
 ## Hardware performance (native Windows only)
 
 Run the bounded native acceptance benchmark on an RX 6750 XT:

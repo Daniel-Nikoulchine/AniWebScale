@@ -48,6 +48,17 @@ export class NativeSessionStore {
     if (!candidate || !metadata || typeof candidate.tabId !== 'number') {
       return null;
     }
+    // Identity fields are load-bearing downstream (host stop carries the
+    // sessionId, recovery nonce-matches `[AniWebScale:${nonce}]` against tab
+    // titles): a partial/corrupt record must not load with undefined ids.
+    // Mirrors the field checks of loadActiveEnhancement below.
+    const hasIdentity = (value: unknown): value is string =>
+      typeof value === 'string' && value.length > 0;
+    if (!hasIdentity(candidate.sessionId) || !hasIdentity(candidate.nonce)
+      || !hasIdentity(candidate.videoId) || !hasIdentity(candidate.origin)
+      || !Number.isInteger(candidate.frameId)) {
+      return null;
+    }
     const rawConfiguration = candidate.configuration ?? candidate.preset;
     const configuration = isNativeConfiguration(rawConfiguration)
       ? rawConfiguration

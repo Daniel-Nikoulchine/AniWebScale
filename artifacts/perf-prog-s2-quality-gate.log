@@ -1,0 +1,6 @@
+t=5s voll-vs-div2 27.91 dB  voll-vs-div4 21.03 dB  
+t=25s voll-vs-div2 33.65 dB  voll-vs-div4 25.96 dB  
+t=45s voll-vs-div2 29.69 dB  voll-vs-div4 21.66 dB  
+mean voll-vs-div2 30.42 dB  gate>=30.0: PASS
+mean voll-vs-div4 22.88 dB  gate>=30.0: FAIL
+QUALITY-GATE: FAIL

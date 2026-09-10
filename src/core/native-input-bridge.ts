@@ -7,6 +7,9 @@ import type { NativeIsolationSession } from './native-isolation';
 /** The pointer payload forwarded from the native output window. */
 export type NativePointerInput = NativePointerPayload;
 
+/** The controls a forwarded pointer may be considered to activate. */
+const INTERACTIVE_TARGET_SELECTOR = 'button, input, [role="button"], [role="slider"]';
+
 /**
  * Forwards pointer and media gestures from the native output window to the
  * page. Owns the DOM hit-test, the gesture resolution order, the synthetic
@@ -42,7 +45,7 @@ export class NativeInputBridge {
     }
     target ??= video;
 
-    const semanticTarget = target.closest('button, input, [role="button"], [role="slider"]') ?? target;
+    const semanticTarget = target.closest(INTERACTIVE_TARGET_SELECTOR) ?? target;
     const descriptor = [
       semanticTarget.tagName,
       semanticTarget.id,
@@ -55,7 +58,7 @@ export class NativeInputBridge {
     ].filter(value => typeof value === 'string').join(' ');
     const targetRect = semanticTarget.getBoundingClientRect();
     const targetRatioX = targetRect.width > 0 ? (clientX - targetRect.left) / targetRect.width : normalizedX;
-    const interactiveTarget = semanticTarget.matches('button, input, [role="button"], [role="slider"]');
+    const interactiveTarget = semanticTarget.matches(INTERACTIVE_TARGET_SELECTOR);
 
     const resolution = resolveNativePointerGesture({
       event: message.event as 'move' | 'down' | 'up' | 'wheel',

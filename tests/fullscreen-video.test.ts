@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ANIME4K_APPLIED_ATTR } from '../src/constants';
 import {
   FULLSCREEN_EXIT_GRACE_MS,
   fullscreenContainsVideo,
   getAuthoritativeFullscreenElement,
-  hasFullscreenContext,
   isFullscreenVideoEligible,
   isVideoInFullscreenContext,
   isWithinFullscreenExitGrace,
@@ -77,15 +77,6 @@ describe('fullscreen geometry fallback', () => {
       { width: 1920, height: 900 },
       { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040 },
     )).toBe(false);
-  });
-
-  it('keeps a terminal native failure blocked while fullscreen remains active', () => {
-    const viewport = { width: 1920, height: 900 };
-    const display = { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040 };
-    expect(hasFullscreenContext({} as Element, viewport, display)).toBe(true);
-    expect(hasFullscreenContext(null, { width: 1920, height: 1080 }, display)).toBe(true);
-    expect(hasFullscreenContext(null, { width: 1920, height: 1080 }, display, false)).toBe(false);
-    expect(hasFullscreenContext(null, viewport, display)).toBe(false);
   });
 
   it('rejects a video that does not fill the fullscreen frame', () => {
@@ -314,6 +305,7 @@ describe('videoFillsOwnViewport (embedded hoster players)', () => {
   }): HTMLVideoElement {
     return {
       isConnected: true,
+      getAttribute: () => null,
       getBoundingClientRect: () => ({
         left: rect.left,
         top: rect.top,
@@ -352,5 +344,29 @@ describe('videoFillsOwnViewport (embedded hoster players)', () => {
     expect(videoFillsOwnViewport(frameVideo({ left: 0, top: 0, width: 870, height: 490 }))).toBe(false);
     const detached = { ...frameVideo({ left: 0, top: 0, width: 870, height: 490 }), isConnected: false };
     expect(videoFillsOwnViewport(detached as unknown as HTMLVideoElement)).toBe(false);
+  });
+
+  it('treats any zero opacity spelling as hidden, like the visibility checks do', () => {
+    for (const opacity of ['0', '0.0', '0.00']) {
+      installHosterFrameViewport({ display: 'block', visibility: 'visible', opacity });
+      expect(videoFillsOwnViewport(frameVideo({ left: 0, top: 0, width: 870, height: 490 }))).toBe(false);
+    }
+    installHosterFrameViewport({ display: 'block', visibility: 'visible', opacity: '0.5' });
+    expect(videoFillsOwnViewport(frameVideo({ left: 0, top: 0, width: 870, height: 490 }))).toBe(true);
+  });
+
+  it('exempts the overlay-hidden video once Anime4K is applied (no start/stop loop)', () => {
+    // OverlayManager sets inline opacity: 0 on the source video while the
+    // output canvas renders. With the applied marker the fullscreen signal
+    // must survive that hidden state, or the first rendered frame flips the
+    // signal off and the reconcile starts/stops in a loop.
+    installHosterFrameViewport({ display: 'block', visibility: 'visible', opacity: '0' });
+    const applied = {
+      ...frameVideo({ left: 0, top: 0, width: 870, height: 490 }),
+      getAttribute: (name: string) => (name === ANIME4K_APPLIED_ATTR ? 'true' : null),
+    };
+    expect(videoFillsOwnViewport(applied as unknown as HTMLVideoElement)).toBe(true);
+    // Without the marker the opacity veto still applies.
+    expect(videoFillsOwnViewport(frameVideo({ left: 0, top: 0, width: 870, height: 490 }))).toBe(false);
   });
 });

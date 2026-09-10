@@ -1,0 +1,18 @@
+{
+  "_comment": "Single source of truth for RealESRGAN model assets. Runtime (src/shared/realesrgan-models.ts), the static-shape builder (scripts/build-realesrgan-static.mjs) and the coverage gate (scripts/check-realesrgan-assets.mjs) all read this file — add an asset here, never in only one consumer.",
+  "classToModelFile": {
+    "RealEsrganX4": "RealESR-AnimeVideo-v3_x4.onnx"
+  },
+  "classToFp16ModelFile": {
+    "RealEsrganX4": "RealESR-AnimeVideo-v3_x4.fp16.onnx"
+  },
+  "classToInt8ModelFile": {
+    "RealEsrganX4": "RealESR-AnimeVideo-v3_x4.int8.static.onnx"
+  },
+  "staticShapes": [
+    { "width": 853, "height": 480, "file": "RealESR-AnimeVideo-v3_x4.static-480x853.onnx" },
+    { "width": 640, "height": 480, "file": "RealESR-AnimeVideo-v3_x4.static-480x640.onnx" },
+    { "width": 768, "height": 432, "file": "RealESR-AnimeVideo-v3_x4.static-432x768.onnx" },
+    { "width": 720, "height": 405, "file": "RealESR-AnimeVideo-v3_x4.static-405x720.onnx" }
+  ]
+}

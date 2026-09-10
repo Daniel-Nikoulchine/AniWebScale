@@ -1,20 +1,19 @@
 import type {
   Anime4KMode,
-  BaseMode,
   Dimensions,
   EnhancementMode,
-  PerformanceTier,
   QualityTier,
 } from '../types';
 import {
   ANIME4K_MODES as GENERATED_ANIME4K_MODES,
   QUALITY_TIERS as GENERATED_QUALITY_TIERS,
 } from './generated-preset-graph';
+import { REALESRGAN_CAP_LADDER, type RealEsrganCapHeight } from './realesrgan-auto-cap';
 
 export const ANIME4K_MODES: readonly Anime4KMode[] = GENERATED_ANIME4K_MODES;
 export const QUALITY_TIERS: readonly QualityTier[] = GENERATED_QUALITY_TIERS;
 export const AI_UPSCALE_MODES = [
-  'CNNX2', 'ARTCNN', 'ACNET', 'ARNET',
+  'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'REALESRGAN',
 ] as const;
 export const ENHANCEMENT_MODES: readonly EnhancementMode[] = [
   'OFF',
@@ -22,37 +21,11 @@ export const ENHANCEMENT_MODES: readonly EnhancementMode[] = [
   ...AI_UPSCALE_MODES,
 ];
 
-export const MODE_DESCRIPTIONS: Record<EnhancementMode, string> = {
-  OFF: 'Disables image enhancement. Frame generation can still be enabled separately.',
-  A: 'Restores line detail, then applies Anime4K CNN upscaling. The balanced default for most anime.',
-  B: 'Uses softer restoration before Anime4K CNN upscaling to reduce ringing on blurry or compressed video.',
-  C: 'Denoises and upscales in one Anime4K CNN pass. Best suited to visibly noisy animation.',
-  AA: 'Runs the Anime4K A restoration chain twice for stronger detail and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline.',
-  BB: 'Runs the softer Anime4K B chain twice for blurry sources and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline.',
-  CA: 'Denoises and upscales first, then restores and can upscale again. UL is a high-end GPU profile outside the 24 FPS baseline.',
-  CNNX2: 'Official Anime4K CNN at a fixed 2x scale. Produces a sharp result; Quality changes model size and GPU load.',
-  ARTCNN: 'Fixed 2x GLSL network for reconstructing anime line art and natural detail at real-time speed.',
-  ACNET: 'Small fixed 2x GLSL network that prioritizes speed and very low GPU load over maximum detail recovery.',
-  ARNET: 'Deeper fixed 2x GLSL network with stronger detail recovery than ACNet at a higher, balanced GPU load.',
-};
-
-export const MODE_TO_LEGACY_BASE: Record<Anime4KMode, BaseMode> = {
-  A: 'A',
-  B: 'B',
-  C: 'C',
-  AA: 'A+A',
-  BB: 'B+B',
-  CA: 'C+A',
-};
-
-export const LEGACY_BASE_TO_MODE: Record<BaseMode, Anime4KMode> = {
-  A: 'A',
-  B: 'B',
-  C: 'C',
-  'A+A': 'AA',
-  'B+B': 'BB',
-  'C+A': 'CA',
-};
+/**
+ * The default RealESRGAN inference cap. Derived from the ladder's top rung so
+ * settings, migration, scheduling and effects share one number.
+ */
+export const DEFAULT_REALESRGAN_CAP_HEIGHT: RealEsrganCapHeight = REALESRGAN_CAP_LADDER[0];
 
 export const MODE_TO_ID: Record<EnhancementMode, string> = {
   OFF: 'disabled',
@@ -66,6 +39,7 @@ export const MODE_TO_ID: Record<EnhancementMode, string> = {
   ARTCNN: 'ai-artcnn-c4f16-glsl-x2',
   ACNET: 'ai-acnet-f8b4-glsl-x2',
   ARNET: 'ai-arnet-f8b8-glsl-x2',
+  REALESRGAN: 'ai-realesrgan-animevideo-v3-x4',
 };
 
 export const ID_TO_MODE: Record<string, EnhancementMode> = Object.fromEntries(
@@ -92,20 +66,11 @@ export function isQualityTier(value: unknown): value is QualityTier {
   return typeof value === 'string' && QUALITY_TIERS.includes(value as QualityTier);
 }
 
-export function qualityToLegacyTier(quality: QualityTier): PerformanceTier {
-  if (quality === 'M') return 'performance';
-  if (quality === 'VL') return 'balanced';
-  return 'ultra';
-}
-
 export function legacyTierToQuality(tier: unknown): QualityTier {
   if (tier === 'performance') return 'M';
+  if (tier === 'balanced') return 'VL';
   if (tier === 'quality' || tier === 'ultra') return 'UL';
   return 'VL';
-}
-
-export function isDoubleMode(mode: EnhancementMode): boolean {
-  return mode === 'AA' || mode === 'BB' || mode === 'CA';
 }
 
 export interface AutoTargetInput {

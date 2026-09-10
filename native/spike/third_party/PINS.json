@@ -1,0 +1,30 @@
+{
+  "description": "Pinned upstream sources for the ncnn-Vulkan RealESRGAN spike. Verify every hash before trusting the artifacts; fetch via native/spike/fetch-sources.py.",
+  "ncnn": {
+    "repo": "https://github.com/Tencent/ncnn",
+    "tag": "master-0a4e85ae4444b325bc6b67ca22000aef6df9b156",
+    "source_tarball": "https://github.com/Tencent/ncnn/archive/0a4e85ae4444b325bc6b67ca22000aef6df9b156.tar.gz",
+    "sha256": "1074da4049b9000ca03f4ea2dddb5600dc7c366a8503979fa7f85612a091cb7b",
+    "glslang_submodule_commit": "780b6a209132dc74e99458f62ebe5fa7e57c41cf",
+    "glslang_tarball": "https://github.com/nihui/glslang/archive/780b6a209132dc74e99458f62ebe5fa7e57c41cf.tar.gz",
+    "glslang_sha256": "9c80e985ae0ea5c7b6a0d59b99de3058ba170fcc0589a913023d12c3473a3617",
+    "license": "BSD 3-Clause (ncnn/LICENSE.txt)",
+    "pinned_date": "2026-09-02",
+    "notes": "master post #6751 (vulkan int8 kernels for convolution/convolutiondepthwise, merged 2026-06-17). No newer release tag exists (latest tag 20260526 predates #6751)."
+  },
+  "realesr_animevideov3_ncnn_artifacts": {
+    "source_release": "https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0",
+    "source_zip": "realesrgan-ncnn-vulkan-20220424-ubuntu.zip",
+    "upstream_model_origin": "xinntao/Real-ESRGAN v0.2.5.0 realesr-animevideov3.pth (same training revision as the browser ONNX in models/realesrgan/SOURCE_REVISION.json)",
+    "files": {
+      "realesr-animevideov3-x4.param": "850a248e7c14c27e5bd8cf7265113a9441036a7db63963bb8aa5169d788a435e",
+      "realesr-animevideov3-x4.bin": "548a36f9c3f4ab8da56cd3b13badf23968bee207b396dad14d04b830e5f2ab2d"
+    },
+    "license": "MIT (Real-ESRGAN-ncnn-vulkan), BSD 3-Clause (Real-ESRGAN model weights); see LICENSE-RealESRGAN.txt",
+    "prepadding": 10,
+    "input_blobs": ["data"],
+    "output_blobs": ["output"],
+    "scale": 4,
+    "pinned_date": "2026-08-28"
+  }
+}

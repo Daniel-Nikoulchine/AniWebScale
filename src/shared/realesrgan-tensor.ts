@@ -26,6 +26,31 @@ function ensureByteToF32(): Float32Array {
   return byteToF32Table;
 }
 
+const IS_LITTLE_ENDIAN: boolean = (() => {
+  try {
+    const probe = new ArrayBuffer(2);
+    new DataView(probe).setUint16(0, 1, true);
+    return new Uint16Array(probe)[0] === 1;
+  } catch {
+    return false;
+  }
+})();
+
+/**
+ * Uint32 view over an RGBA8 target for the pack loops: one 32-bit store per
+ * pixel instead of four byte stores. Requires little-endian and a 4-aligned
+ * view; callers fall back to the byte loop when this returns null. `length`
+ * is in u32 elements.
+ */
+function packedRgbaView(bytes: Uint8Array, length: number): Uint32Array | null {
+  try {
+    if (!IS_LITTLE_ENDIAN || bytes.byteOffset % 4 !== 0) return null;
+    return new Uint32Array(bytes.buffer, bytes.byteOffset, length);
+  } catch {
+    return null;
+  }
+}
+
 export function rgbaToPlanarRgb(rgba: Uint8Array, width: number, height: number): PlanarRgb {
   if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
     throw new Error(`rgbaToPlanarRgb: invalid dimensions ${width}x${height}.`);
@@ -39,6 +64,16 @@ export function rgbaToPlanarRgb(rgba: Uint8Array, width: number, height: number)
   const g = data.subarray(pixels, 2 * pixels);
   const b = data.subarray(2 * pixels, 3 * pixels);
   const lut = ensureByteToF32();
+  const words = packedRgbaView(rgba, pixels);
+  if (words) {
+    for (let i = 0; i < pixels; i += 1) {
+      const word = words[i]!;
+      r[i] = lut[word & 0xff]!;
+      g[i] = lut[(word >>> 8) & 0xff]!;
+      b[i] = lut[(word >>> 16) & 0xff]!;
+    }
+    return { data, channels: 3 };
+  }
   for (let i = 0; i < pixels; i += 1) {
     const o = i * 4;
     r[i] = lut[rgba[o]!]!;
@@ -60,13 +95,30 @@ export function rgbPlanarToRgba(planar: Float32Array, width: number, height: num
   const r = planar.subarray(0, pixels);
   const g = planar.subarray(pixels, 2 * pixels);
   const b = planar.subarray(2 * pixels, 3 * pixels);
+  const words = packedRgbaView(out, pixels);
+  // Branchless clamp + truncate-pack: bit-identical to
+  // Math.round(min(1, max(0, v)) * 255) for every float64 input (NaN and
+  // infinities included — NaN fails both comparisons and packs to 0). The
+  // u32 lane collapses four byte stores into one 32-bit store per pixel; the
+  // branch is hoisted out of the loop because a per-pixel check is slower
+  // than the stores it guards.
+  if (words) {
+    for (let i = 0; i < pixels; i += 1) {
+      const vr = r[i]!;
+      const vg = g[i]!;
+      const vb = b[i]!;
+      const cr = vr <= 0 ? 0 : vr >= 1 ? 1 : vr;
+      const cg = vg <= 0 ? 0 : vg >= 1 ? 1 : vg;
+      const cb = vb <= 0 ? 0 : vb >= 1 ? 1 : vb;
+      words[i] = ((((cr * 255 + 0.5) | 0))
+        | ((((cg * 255 + 0.5) | 0)) << 8)
+        | ((((cb * 255 + 0.5) | 0)) << 16)
+        | 0xff000000) >>> 0;
+    }
+    return out;
+  }
   for (let i = 0; i < pixels; i += 1) {
     const o = i * 4;
-    // Branchless clamp + truncate-pack: bit-identical to
-    // Math.round(min(1, max(0, v)) * 255) for every float64 input (NaN and
-    // infinities included — NaN fails both comparisons and packs to 0, just
-    // like Math.round(NaN) stored into a Uint8Array), but without three
-    // Math-call round trips per channel.
     const vr = r[i]!;
     const vg = g[i]!;
     const vb = b[i]!;
@@ -108,6 +160,19 @@ export function rgbPlanarToPaddedRgba(
       const r = planar.subarray(0, pixels);
       const g = planar.subarray(pixels, 2 * pixels);
       const b = planar.subarray(2 * pixels, 3 * pixels);
+      const words = packedRgbaView(out, pixels);
+      if (words) {
+        for (let i = 0; i < pixels; i += 1) {
+          const vr = r[i]!;
+          const vg = g[i]!;
+          const vb = b[i]!;
+          words[i] = ((((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0)
+            | ((((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0) << 8)
+            | ((((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0) << 16)
+            | 0xff000000) >>> 0;
+        }
+        return out;
+      }
       for (let i = 0; i < pixels; i += 1) {
         const o = i * 4;
         const vr = r[i]!;
@@ -129,6 +194,25 @@ export function rgbPlanarToPaddedRgba(
   const r = planar.subarray(0, pixels);
   const g = planar.subarray(pixels, 2 * pixels);
   const b = planar.subarray(2 * pixels, 3 * pixels);
+  const words = packedRgbaView(result, (bytesPerRow * height) / 4);
+  if (words) {
+    const rowWords = bytesPerRow / 4;
+    for (let row = 0; row < height; row += 1) {
+      const pixelBase = row * width;
+      const wordBase = row * rowWords;
+      for (let col = 0; col < width; col += 1) {
+        const p = pixelBase + col;
+        const vr = r[p]!;
+        const vg = g[p]!;
+        const vb = b[p]!;
+        words[wordBase + col] = ((((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0)
+          | ((((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0) << 8)
+          | ((((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0) << 16)
+          | 0xff000000) >>> 0;
+      }
+    }
+    return result;
+  }
   for (let row = 0; row < height; row += 1) {
     const rowBase = row * bytesPerRow;
     const pixelBase = row * width;
@@ -283,6 +367,19 @@ export async function inferTiledResults(options: ComposeOptions): Promise<TiledI
 }
 
 /**
+ * True when the tiled result is exactly one full-cover tile — the case
+ * `composeTileResults` handles without any accumulator/weight buffers. Callers
+ * use it to skip acquiring those (large) pooled buffers at all.
+ */
+export function isSingleFullCoverTile(tiled: TiledInferenceResult): boolean {
+  if (tiled.tiles.length !== 1) return false;
+  const tile = tiled.tiles[0]!;
+  return tile.x === 0 && tile.y === 0
+    && tile.width * 4 === tiled.outWidth && tile.height * 4 === tiled.outHeight
+    && tile.rgb.length === 3 * tiled.outWidth * tiled.outHeight;
+}
+
+/**
  * Feather already-inferred tiles into a single full-size result. Reproduces
  * the exact accumulation of the old inline loop (separable ramps, integer
  * weights, weighted average) so the CPU path stays bit-identical.
@@ -295,6 +392,16 @@ export function composeTileResults(
   const outWidth = tiled.outWidth;
   const outHeight = tiled.outHeight;
   const outPixels = outWidth * outHeight;
+  // Single-tile fast lane: with one tile the separable feather weight cancels
+  // in the weighted average, so the composed result is the tile's own planar
+  // data. Skips the full-size accumulator fill, the per-pixel accumulation
+  // and the division pass — the dominant CPU cost of the main-thread fallback,
+  // which runs one tile by construction at the 480p cap (singleTileMaxHeight
+  // 512/576). Mirrors the worker's composeSingleTileToRgba8 lane; the tiny
+  // float rounding difference is the same one that lane already accepts.
+  if (isSingleFullCoverTile(tiled)) {
+    return { rgb: tiled.tiles[0]!.rgb, width: outWidth, height: outHeight };
+  }
   const acc = accumulator ?? new Float32Array(3 * outPixels);
   if (acc.length !== 3 * outPixels) {
     throw new Error(`composeTileResults: accumulator must hold ${3 * outPixels} floats, got ${acc.length}.`);

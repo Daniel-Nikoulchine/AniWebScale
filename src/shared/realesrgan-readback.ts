@@ -143,6 +143,17 @@ function uint16ViewOf(padded: Uint8Array): Uint16Array | null {
   }
 }
 
+/** 4-aligned uint32 view for the packed-rgba read lanes (little-endian). */
+function uint32ViewOf(padded: Uint8Array): Uint32Array | null {
+  try {
+    if (!IS_LITTLE_ENDIAN) return null;
+    if (padded.byteOffset % 4 !== 0 || padded.byteLength % 4 !== 0) return null;
+    return new Uint32Array(padded.buffer, padded.byteOffset, padded.byteLength / 4);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Strip copy padding and return tightly packed RGBA bytes. For rgba16float
  * sources each 16-bit channel is decoded and quantised to 8-bit.
@@ -178,10 +189,29 @@ export function unpackReadback(
     }
     return result;
   }
-  // rgba16float: table-driven (see ensureF16Tables). The Uint16 fast path
-  // avoids per-channel DataView bounds/endian overhead; the fallback decodes
-  // through the same table so both agree bit for bit.
+  // rgba16float: table-driven (see ensureF16Tables). The Uint32 fast path
+  // reads two half-floats per load (fewer loads than the Uint16 lane), then
+  // the Uint16 lane, then the DataView fallback — all through the same table
+  // so every lane agrees bit for bit.
   const lut = ensureF16Tables().u8;
+  const u32 = uint32ViewOf(padded);
+  if (u32) {
+    const strideU32 = bytesPerRow / 4;
+    for (let row = 0; row < height; row += 1) {
+      const srcRow = row * strideU32;
+      const dstRow = (row * width) * 4;
+      for (let col = 0; col < width; col += 1) {
+        const w0 = u32[srcRow + col * 2]!;
+        const w1 = u32[srcRow + col * 2 + 1]!;
+        const dstByte = dstRow + col * 4;
+        result[dstByte] = lut[w0 & 0xffff]!;
+        result[dstByte + 1] = lut[(w0 >>> 16) & 0xffff]!;
+        result[dstByte + 2] = lut[w1 & 0xffff]!;
+        result[dstByte + 3] = lut[(w1 >>> 16) & 0xffff]!;
+      }
+    }
+    return result;
+  }
   const u16 = uint16ViewOf(padded);
   if (u16) {
     const strideU16 = bytesPerRow / 2;
@@ -287,6 +317,22 @@ export function unpackReadbackToPlanarRgb(
 
   if (format === 'rgba8unorm') {
     const byteToF32 = ensureByteToF32();
+    const words = uint32ViewOf(padded);
+    if (words) {
+      const strideWords = bytesPerRow / 4;
+      for (let row = 0; row < height; row += 1) {
+        const srcRow = row * strideWords;
+        const dstBase = row * width;
+        for (let col = 0; col < width; col += 1) {
+          const word = words[srcRow + col]!;
+          const p = dstBase + col;
+          r[p] = byteToF32[word & 0xff]!;
+          g[p] = byteToF32[(word >>> 8) & 0xff]!;
+          b[p] = byteToF32[(word >>> 16) & 0xff]!;
+        }
+      }
+      return { data, channels: 3 };
+    }
     for (let row = 0; row < height; row += 1) {
       const srcBase = row * bytesPerRow;
       const dstBase = row * width;
@@ -301,10 +347,27 @@ export function unpackReadbackToPlanarRgb(
     return { data, channels: 3 };
   }
 
-  // f16 planar: quantised table + Uint16 fast path (same saturation rule as
-  // unpackReadback: NaN -> 1, clamp to [0,1], quantised through 8-bit first
-  // so the result stays bit-identical to the two-step chain).
+  // f16 planar: quantised table + Uint32/Uint16 fast paths (same saturation
+  // rule as unpackReadback: NaN -> 1, clamp to [0,1], quantised through 8-bit
+  // first so the result stays bit-identical to the two-step chain).
   const qlut = ensureF16Tables().qf32;
+  const u32f = uint32ViewOf(padded);
+  if (u32f) {
+    const strideU32 = bytesPerRow / 4;
+    for (let row = 0; row < height; row += 1) {
+      const srcRow = row * strideU32;
+      const dstBase = row * width;
+      for (let col = 0; col < width; col += 1) {
+        const w0 = u32f[srcRow + col * 2]!;
+        const w1 = u32f[srcRow + col * 2 + 1]!;
+        const p = dstBase + col;
+        r[p] = qlut[w0 & 0xffff]!;
+        g[p] = qlut[(w0 >>> 16) & 0xffff]!;
+        b[p] = qlut[w1 & 0xffff]!;
+      }
+    }
+    return { data, channels: 3 };
+  }
   const u16 = uint16ViewOf(padded);
   if (u16) {
     const strideU16 = bytesPerRow / 2;

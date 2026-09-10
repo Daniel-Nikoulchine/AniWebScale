@@ -245,7 +245,10 @@ private:
         }
 
         bool read_exact(std::vector<unsigned char>& out, size_t n) {
-            out.reserve(out.size() + n);
+            // ncnn uploads a dims=2 Mat over total()==16-byte-aligned cstep, so
+            // the frame handler may read up to 12 bytes past n. Reserve the
+            // aligned capacity so that read stays inside the allocation.
+            out.reserve((out.size() + n + 15u) & ~(size_t)15u);
             while (n > 0) {
                 if (pos == len && !fill()) return false;
                 size_t take = n < len - pos ? n : len - pos;

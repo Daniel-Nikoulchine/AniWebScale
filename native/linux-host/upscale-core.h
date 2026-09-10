@@ -36,6 +36,7 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "net.h"
@@ -65,6 +66,15 @@ struct UpscaleCoreConfig {
     std::string int8_param;
     std::string int8_bin;
 };
+
+// ncnn wraps a dims=2 Mat with Mat::total() == cstep, i.e. the 16-byte-aligned
+// byte count. record_clone's upload/download memcpy moves total()*elemsize
+// bytes, so any external buffer handed to ncnn must be allocated to that
+// padded size or the copy runs up to 12 bytes past the end (heap overflow for
+// tile sizes whose w*h*4 is not 16-aligned, e.g. 675x675).
+static inline size_t alignedFrameBytes(size_t bytes) {
+    return (bytes + 15u) & ~(size_t)15u;
+}
 
 class UpscaleCore {
 public:
@@ -472,14 +482,9 @@ private:
             // been validated with tiles, so use it everywhere.
             ncnn::VkCompute cmd(device_);
             ncnn::Option topt = opt;
-            // Persistent upload staging: same dims every frame for one video,
-            // and Mat::create() is a no-op on matching dims — no per-frame
-            // multi-MB malloc/free after the first frame (mutex-held).
-            upload_mat_.create(iw, ih, (size_t)4, 1);
-            if (!upload_mat_.data) { emsg = "cpu upload alloc failed"; return false; }
-            memcpy(upload_mat_.data, rgba_src, (size_t)iw*ih*4);
             ncnn::VkMat rgba_gpu;
             ncnn::VkMat in_gpu_pre;
+            ncnn::Mat tile_rgba_cpu;
             if (pre_down2) {
                 // Stufe 2: full-res upload, down2 shader halves to iw x ih.
                 // Stufe 3 (Zero-Copy-Upload): der Frame-Puffer wird direkt
@@ -510,8 +515,10 @@ private:
                                       (size_t)4, 1);
             rgba_gpu.create(iw, ih, (size_t)4, 1, blob_);
             if (!rgba_gpu.data) { emsg = "gpu upload alloc failed"; return false; }
-            cmd.record_clone(upload_mat_, rgba_gpu, topt);
-            ncnn::VkMat in_gpu_pre;
+            cmd.record_clone(tile_rgba_cpu, rgba_gpu, topt);
+            // No local re-declaration here: it would shadow the outer
+            // in_gpu_pre that the extractor/srvgg path below actually uses,
+            // leaving that outer mat empty (SIGFPE deep in ncnn's Padding).
             in_gpu_pre.create(iw, ih, 3, (size_t)2, 1, blob_);
             if (!in_gpu_pre.data) { emsg = "gpu input alloc failed"; return false; }
             // A failed preproc pipeline creation (logged at load) must fail
@@ -586,7 +593,7 @@ private:
             // bringen, der Download landet direkt drin — create_like uebernimmt den
             // Puffer bei Formgleichheit (dims=2, w=pw, h=ph, e4/u1,
             // allocator=null==blob_allocator). Fallback unten falls nicht.
-            frame_out.resize((size_t)pw * ph * 4);
+            frame_out.resize(alignedFrameBytes((size_t)pw * ph * 4));
             dst = ncnn::Mat(pw, ph, frame_out.data(), (size_t)4, 1);
             cmd.record_clone(out_rgba_gpu, dst, topt);
             // Never ignore the submit result: a dead submit leaves every
@@ -626,7 +633,7 @@ private:
         // n=5: 480:399ms, 512:396ms, 576:395ms, 640:398ms, 960:470ms;
         // n=10: 576:396.0ms vs 640:396.9ms (Rauschen). 480-640 flach,
         // 960 +18% (Working-Set). 640 bleibt; PAD=32 ist Model-Eigenschaft.
-        const int TILE = 640, PAD = 32, scale = 4;
+        const int TILE = 642, PAD = 33, scale = 4;
         // Tiling DESIGN NOTE — this host tiles with a recompute-halo scheme
         // (PAD-halo around each tile, core-region copy, NO feathering), while
         // the ORT worker tiles with overlap + weighted feathering
@@ -637,14 +644,84 @@ private:
         // without an E2E gate on both engines.
         // Tiled path: when a presentation target is given, first compose the
         // full 4x frame (bit-identical to the untargeted path), then do ONE
-        // box-average pass over the composed bytes on the CPU. Composing on
-        // the GPU per tile and stitching the downscaled tiles would save more
-        // bandwidth, but the seam math (each output pixel can straddle tiles)
-        // makes it easy to get wrong; the CPU box pass is exact and the tiled
-        // path is the >720p exception, not the hot path.
+        // box-average pass over the composed bytes on the CPU. When the
+        // presentation target is an exact integer shrink f of the 4x output
+        // and every tile's target grid lines up with the global one, each tile
+        // is instead box-downscaled on the GPU and its core copied straight
+        // into the target, so the full-4x per-tile download and the CPU
+        // compose+downscale disappear. TILE/PAD are multiples of 3, so the
+        // common display ratios f=2/3/4/6 align for typical widths; anything
+        // that fails the per-tile check keeps the CPU box pass.
         out_w = width * scale; out_h = height * scale;
         const bool downscale = target_w > 0 && target_h > 0
             && (target_w < out_w || target_h < out_h);
+        int tile_ds_factor = 0;
+        if (downscale && out_w % target_w == 0 && out_h % target_h == 0) {
+            const int fw = out_w / target_w, fh = out_h / target_h;
+            if (fw == fh && fw > 1) {
+                const int f = fw;
+                bool aligned = true;
+                for (int ty = 0; ty < height && aligned; ty += TILE) {
+                    const int cy1 = std::min(ty + TILE, height);
+                    const int ey0 = std::max(0, ty - PAD), ey1 = std::min(height, cy1 + PAD);
+                    if ((ey0 * scale) % f != 0 || ((ty - ey0) * scale) % f != 0
+                        || ((cy1 - ty) * scale) % f != 0 || ((ey1 - ey0) * scale) % f != 0) aligned = false;
+                }
+                for (int tx = 0; tx < width && aligned; tx += TILE) {
+                    const int cx1 = std::min(tx + TILE, width);
+                    const int ex0 = std::max(0, tx - PAD), ex1 = std::min(width, cx1 + PAD);
+                    if ((ex0 * scale) % f != 0 || ((tx - ex0) * scale) % f != 0
+                        || ((cx1 - tx) * scale) % f != 0 || ((ex1 - ex0) * scale) % f != 0) aligned = false;
+                }
+                if (aligned) tile_ds_factor = f;
+            }
+        }
+        if (tile_ds_factor > 0) {
+            const int f = tile_ds_factor;
+            const int ds_w = out_w / f, ds_h = out_h / f; // == target_w / target_h
+            if (out.size() != (size_t)ds_w * ds_h * 4) out.resize((size_t)ds_w * ds_h * 4);
+            unsigned char* ds_dst = out.data();
+            for (int ty = 0; ty < height; ty += TILE) {
+                for (int tx = 0; tx < width; tx += TILE) {
+                    int cx0 = tx, cy0 = ty;
+                    int cx1 = std::min(tx + TILE, width), cy1 = std::min(ty + TILE, height);
+                    int ex0 = std::max(0, cx0 - PAD), ey0 = std::max(0, cy0 - PAD);
+                    int ex1 = std::min(width, cx1 + PAD), ey1 = std::min(height, cy1 + PAD);
+                    int ew = ex1 - ex0, eh = ey1 - ey0;
+                    const size_t tile_need = (size_t)ew * eh * 4;
+                    const size_t tile_alloc = alignedFrameBytes(tile_need);
+                    if (tile_input_.size() < tile_alloc) tile_input_.resize(tile_alloc);
+                    unsigned char* tile = tile_input_.data();
+                    for (int y = 0; y < eh; ++y) {
+                        memcpy(tile + (size_t)y * ew * 4,
+                               rgba + ((size_t)(ey0 + y) * width + ex0) * 4,
+                               (size_t)ew * 4);
+                    }
+                    const int dtw = (ew * scale) / f, dth = (eh * scale) / f;
+                    int tw = 0, th = 0;
+                    std::string terr;
+                    if (!run_gpu_frame(tile, ew, eh, dtw, dth, tile_downscaled_, tw, th, terr, false)) {
+                        err_msg = terr.empty() ? "tile failed" : terr;
+                        return false;
+                    }
+                    // Core region in the downscaled tile → its slot in the
+                    // target. The alignment check above keeps every offset
+                    // integral and the box windows identical to the global
+                    // downscale.
+                    const int gx0 = (cx0 * scale) / f, gy0 = (cy0 * scale) / f;
+                    const int ox = ((cx0 - ex0) * scale) / f, oy = ((cy0 - ey0) * scale) / f;
+                    const int cw = ((cx1 - cx0) * scale) / f, ch = ((cy1 - cy0) * scale) / f;
+                    const unsigned char* src = tile_downscaled_.data();
+                    for (int y = 0; y < ch; ++y) {
+                        memcpy(ds_dst + (((size_t)(gy0 + y) * ds_w) + gx0) * 4,
+                               src + ((size_t)(oy + y) * tw + ox) * 4,
+                               (size_t)cw * 4);
+                    }
+                }
+            }
+            out_w = ds_w; out_h = ds_h;
+            return true;
+        }
         const int comp_w = out_w, comp_h = out_h; // compose size
         // Persistent compose/tile buffers (mutex-held, single in-flight
         // upscale): the core regions partition the full frame, so every byte
@@ -662,7 +739,8 @@ private:
                 int ex1 = std::min(width, cx1 + PAD), ey1 = std::min(height, cy1 + PAD);
                 int ew = ex1 - ex0, eh = ey1 - ey0;
                 const size_t tile_need = (size_t)ew * eh * 4;
-                if (tile_input_.size() < tile_need) tile_input_.resize(tile_need);
+                const size_t tile_alloc = alignedFrameBytes(tile_need);
+                if (tile_input_.size() < tile_alloc) tile_input_.resize(tile_alloc);
                 unsigned char* tile = tile_input_.data();
                 for (int y = 0; y < eh; ++y) {
                     memcpy(tile + (size_t)y * ew * 4,
@@ -688,42 +766,22 @@ private:
             }
         }
         if (downscale) {
-            // Exact box average, same weights as the shader (fractional edges).
+            // Exact box average, same weights as the shader (fractional
+            // edges). ONE float path for every geometry: the old integer
+            // "fast lane" for exact power-of-two factors did a runtime
+            // integer division per channel per output pixel and measured
+            // 5-7x SLOWER than this loop (standalone + host A/B) - removed.
+            // This loop is bit-identical for those factors anyway: 1/area is
+            // exact and every partial sum stays < 2^24 in float32.
             const int nw = std::min(target_w, comp_w);
             const int nh = std::min(target_h, comp_h);
             std::vector<unsigned char> small((size_t)nw * nh * 4);
-            // Integer fast lane: exact per-axis division by a power of two
-            // (the common 4x transport-downscale case) makes every weight
-            // exactly 1.0 with a power-of-two area, so integer averaging is
-            // bit-identical to the float formula below (1/area exact, all
-            // partial sums < 2^24 exact) while skipping floorf/ceilf/min/max
-            // per output pixel. Other geometries keep the float path.
-            const bool exactX = (comp_w % nw == 0), exactY = (comp_h % nh == 0);
-            const int fx = exactX ? comp_w / nw : 0, fy = exactY ? comp_h / nh : 0;
-            const auto isPow2 = [](int v) { return v > 0 && (v & (v - 1)) == 0; };
-            if (exactX && exactY && isPow2(fx) && isPow2(fy)) {
-                const int area = fx * fy, half = area / 2;
-                for (int y = 0; y < nh; ++y) {
-                    const unsigned char* srcRows = comp + (size_t)(y * fy) * comp_w * 4;
-                    unsigned char* dstRow = small.data() + (size_t)y * nw * 4;
-                    for (int x = 0; x < nw; ++x) {
-                        uint32_t sr = 0, sg = 0, sb = 0;
-                        for (int sy = 0; sy < fy; ++sy) {
-                            const unsigned char* row = srcRows + (size_t)sy * comp_w * 4 + (size_t)(x * fx) * 4;
-                            for (int sx = 0; sx < fx; ++sx) {
-                                const unsigned char* px4 = row + (size_t)sx * 4;
-                                sr += px4[0]; sg += px4[1]; sb += px4[2];
-                            }
-                        }
-                        unsigned char* d = dstRow + (size_t)x * 4;
-                        d[0] = (unsigned char)((sr + half) / area);
-                        d[1] = (unsigned char)((sg + half) / area);
-                        d[2] = (unsigned char)((sb + half) / area);
-                        d[3] = 255;
-                    }
-                }
-            } else {
-            for (int y = 0; y < nh; ++y) {
+            // The CPU box pass is compute-bound (~2.4 cycles/tap) and reads the
+            // whole composed frame; split the output rows across cores. Each
+            // row writes disjoint bytes of `small` and only reads `comp`, so
+            // the result is bit-identical to the single-threaded loop.
+            auto downscale_rows = [&](int ry_begin, int ry_end) {
+            for (int y = ry_begin; y < ry_end; ++y) {
                 const float y0f = (float)y * comp_h / nh;
                 const float y1f = (float)(y + 1) * comp_h / nh;
                 const int y0 = (int)floorf(y0f), y1 = (int)ceilf(y1f);
@@ -752,6 +810,32 @@ private:
                     d[3] = 255;
                 }
             }
+            };
+            const unsigned hw_threads = std::thread::hardware_concurrency();
+            const int want_threads = std::max(1, std::min<int>((int)(hw_threads ? hw_threads : 1), 8));
+            const int rows_per_thread = (nh + want_threads - 1) / want_threads;
+            if (want_threads <= 1 || rows_per_thread == 0) {
+                downscale_rows(0, nh);
+            } else {
+                std::vector<std::thread> workers;
+                workers.reserve((size_t)want_threads);
+                bool spawn_failed = false;
+                try {
+                    for (int t = 0; t < want_threads; ++t) {
+                        const int a = t * rows_per_thread;
+                        const int b = std::min(nh, a + rows_per_thread);
+                        if (a < b) workers.emplace_back(downscale_rows, a, b);
+                    }
+                } catch (...) {
+                    // Thread creation failed (resource exhaustion): join what
+                    // exists first (a joinable std::thread destructor would
+                    // terminate), then recompute every row on this thread.
+                    // Rows are independent and idempotent, so the recompute is
+                    // bit-identical.
+                    spawn_failed = true;
+                }
+                for (auto& worker : workers) worker.join();
+                if (spawn_failed) downscale_rows(0, nh);
             }
             out.swap(small);
             out_w = nw; out_h = nh;
@@ -778,6 +862,7 @@ private:
     SrvggVulkan* srvgg_ = nullptr; // lazy, created on the first E4 frame
     std::string srvgg_models_dir_;
     bool use_srvgg_engine_ = false;
+    int infer_div_ = 1; // Stufe 1: 1 voll, 2 halb (Rest faellt auf 1)
     // Persistent tiled-path staging (mutex-held, see the tiled branch):
     // compose output, tile input gathering and per-tile network output.
     // Reused across frames to avoid per-frame big mallocs + the full-frame
@@ -785,8 +870,7 @@ private:
     std::vector<unsigned char> tiled_output_;
     std::vector<unsigned char> tile_input_;
     std::vector<unsigned char> tile_output_;
-    // Persistent CPU upload staging for run_gpu_frame (see above).
-    ncnn::Mat upload_mat_;
+    std::vector<unsigned char> tile_downscaled_; // per-tile GPU box-downscale output
 
     std::mutex upscale_mutex_;
     std::atomic<uint64_t> last_activity_ms_{now_ms()};

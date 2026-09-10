@@ -34,6 +34,7 @@ import { planReadback, planUpload, unpackReadback, unpackReadbackToPlanarRgb, co
 import {
   composeTileResults,
   inferTiledResults,
+  isSingleFullCoverTile,
   rgbPlanarToPaddedRgba,
   type TiledInferenceResult,
 } from '../shared/realesrgan-tensor';
@@ -1473,6 +1474,14 @@ export function createRealEsrganPipelineClass(
         }
       }
       const outPixels = tiled.outWidth * tiled.outHeight;
+      // Single full-cover tile: the compose fast lane needs no accumulator or
+      // weight buffers, so skip acquiring the (large) pooled buffers entirely
+      // (at the 480p cap this would otherwise pin ~105 MB for nothing).
+      if (isSingleFullCoverTile(tiled)) {
+        const composed = composeTileResults(tiled);
+        this.writeResult(composed.rgb, composed.width, composed.height);
+        return false;
+      }
       const accumulatorBuffer = this.pool.acquire(3 * outPixels * 4);
       const weightSumBuffer = this.pool.acquire(outPixels * 4);
       try {
@@ -1652,6 +1661,23 @@ export function createRealEsrganPipelineClass(
      * so the CPU feathering pass stays cheap.
      */
     private writeCroppedComposedResult(tiled: TiledInferenceResult, crop: ContentRect): boolean {
+      // Single full-cover tile: the compose fast lane needs no accumulator or
+      // weight buffers, so only acquire the RGBA pack buffer (see
+      // writeComposedResult).
+      if (isSingleFullCoverTile(tiled)) {
+        const composed = composeTileResults(tiled);
+        const tightRowBytes = composed.width * 4;
+        const rgbaBuffer = this.pool.acquire(tightRowBytes * composed.height);
+        try {
+          const rgba = rgbPlanarToPaddedRgba(
+            composed.rgb, composed.width, composed.height, tightRowBytes, new Uint8Array(rgbaBuffer),
+          );
+          this.presentCroppedResult(rgba, composed.width, composed.height, crop, 0, 0);
+        } finally {
+          this.pool.release(rgbaBuffer);
+        }
+        return false;
+      }
       const outPixels = tiled.outWidth * tiled.outHeight;
       const accumulatorBuffer = this.pool.acquire(3 * outPixels * 4);
       const weightSumBuffer = this.pool.acquire(outPixels * 4);

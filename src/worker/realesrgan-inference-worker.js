@@ -250,6 +250,30 @@ export function stackTilesToBatch(inputRgb, sourceWidth, sourceHeight, tiles) {
 
 // --- CPU compose -------------------------------------------------------------
 
+// Little-endian RGBA8 word packing for the compose pack loops: one 32-bit
+// store per pixel instead of four byte stores. Returns null (caller keeps the
+// byte lane) on big-endian or a 4-unaligned target.
+const IS_LITTLE_ENDIAN = (() => {
+  try {
+    const probe = new ArrayBuffer(2);
+    new DataView(probe).setUint16(0, 1, true);
+    return new Uint16Array(probe)[0] === 1;
+  } catch {
+    return false;
+  }
+})();
+function packedRgbaView(bytes, length) {
+  try {
+    if (!IS_LITTLE_ENDIAN || bytes.byteOffset % 4 !== 0) return null;
+    return new Uint32Array(bytes.buffer, bytes.byteOffset, length);
+  } catch {
+    return null;
+  }
+}
+function packRgbaWord(r, g, b) {
+  return (r | (g << 8) | (b << 16) | 0xff000000) >>> 0;
+}
+
 /**
  * CPU compose with the exact separable feathering math of
  * `composeTileResults` (integer ramps, weight = min(fx, fy), weighted
@@ -285,6 +309,21 @@ export function composeTilesToRgba8(tiles, outWidth, outHeight, featherWindow) {
         weights[outIndex] += weight;
       }
     }
+  }
+  const words = packedRgbaView(rgba, outPixels);
+  if (words) {
+    for (let i = 0; i < outPixels; i += 1) {
+      const w = weights[i] || 1;
+      const vr = acc[i] / w;
+      const vg = acc[outPixels + i] / w;
+      const vb = acc[2 * outPixels + i] / w;
+      words[i] = packRgbaWord(
+        ((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0,
+        ((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0,
+        ((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0,
+      );
+    }
+    return rgba;
   }
   for (let i = 0; i < outPixels; i += 1) {
     const w = weights[i] || 1;
@@ -342,6 +381,20 @@ export function composeSingleTileToRgba8(rgb, width, height) {
     throw new Error(`Invalid single-tile planar input: expected ${3 * pixels} floats.`);
   }
   const rgba = new Uint8Array(4 * pixels);
+  const words = packedRgbaView(rgba, pixels);
+  if (words) {
+    for (let i = 0; i < pixels; i += 1) {
+      const vr = rgb[i];
+      const vg = rgb[i + pixels];
+      const vb = rgb[i + 2 * pixels];
+      words[i] = packRgbaWord(
+        ((vr <= 0 ? 0 : vr >= 1 ? 1 : vr) * 255 + 0.5) | 0,
+        ((vg <= 0 ? 0 : vg >= 1 ? 1 : vg) * 255 + 0.5) | 0,
+        ((vb <= 0 ? 0 : vb >= 1 ? 1 : vb) * 255 + 0.5) | 0,
+      );
+    }
+    return rgba;
+  }
   for (let i = 0; i < pixels; i += 1) {
     const vr = rgb[i];
     const vg = rgb[i + pixels];

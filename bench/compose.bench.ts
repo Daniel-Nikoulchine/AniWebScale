@@ -93,13 +93,17 @@ for (let i = 0; i < padded640.length; i++) padded640[i] = (i * 31) & 0xff;
 // Pooled buffers — bench the hot reload path
 const pool = new RealEsrganBufferPool(2);
 
+// Full-frame single-tile fixture (module scope: the old inline fixture made
+// the allocation dominate the measurement and hid the whole-frame fast path).
+const planar360 = makePlanarInput(640, 360);
+const fullFrameTile360 = [{ x: 0, y: 0, width: 640, height: 360 }];
+
 describe('stackTilesToBatch', () => {
   bench('1280x720 6 tiles 512x512', () => {
     stackTilesToBatch(planar720, 1280, 720, tiles720_512);
   });
   bench('640x360 1 tile 640x360 (single batch)', () => {
-    const p = makePlanarInput(640, 360);
-    stackTilesToBatch(p, 640, 360, [{ x: 0, y: 0, width: 640, height: 360 }]);
+    stackTilesToBatch(planar360, 640, 360, fullFrameTile360);
   });
 });
 

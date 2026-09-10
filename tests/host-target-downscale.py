@@ -167,6 +167,17 @@ def main():
         print(f"[test] tiled box diff vs reference: {diff_big}/255")
         assert diff_big <= 1, f"tiled downscale differs from box reference by {diff_big}"
 
+        # Exact power-of-two ratio (f=4, display == input): the tiled path
+        # box-downscales each tile on the GPU and stitches the cores, skipping
+        # the full-4x download + CPU compose/downscale. Must match the box
+        # reference just like the CPU path.
+        small4, sw4, sh4 = http_upscale(port, token, big_frame, W2, H2, W2, H2)
+        assert (sw4, sh4) == (W2, H2), (sw4, sh4)
+        ref4 = box_average_reference(full_big, fbw, fbh, W2, H2)
+        diff4 = max_channel_diff(small4, ref4)
+        print(f"[test] per-tile GPU downscale (f=4) diff vs reference: {diff4}/255")
+        assert diff4 <= 1, f"per-tile GPU downscale differs by {diff4}"
+
         print("[test] ALL PASS")
     finally:
         proc.stdin.close()

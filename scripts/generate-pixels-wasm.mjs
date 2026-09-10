@@ -31,15 +31,22 @@ function haveCargo() {
 }
 
 /**
- * The classic fresh-checkout failure is a cargo WITHOUT the wasm target
- * (system toolchains ship host-only std): surface that as an actionable
- * hint instead of a raw rustc dump.
+ * System toolchains (distro `rust`, no rustup) ship host-only std, so the
+ * wasm32 target directory is absent and `cargo build --target …` fails with
+ * a raw rustc dump. Treat that like the cargo-missing case: keep a
+ * previously built artifact with a loud warning instead of aborting every
+ * dev/prod build. `--check` still fails so CI can require a real rebuild.
  */
-function missingWasmTargetHint() {
+function haveWasmTarget() {
   const sysroot = spawnSync('rustc', ['--print', 'sysroot'], { encoding: 'utf8' });
-  if (sysroot.status !== 0 || !sysroot.stdout) return '';
+  if (sysroot.status !== 0 || !sysroot.stdout) return true;
   const rustlib = join(sysroot.stdout.trim(), 'lib', 'rustlib', 'wasm32-unknown-unknown');
-  return existsSync(rustlib)
+  return existsSync(rustlib);
+}
+
+/** Actionable hint for a cargo without the wasm target. */
+function missingWasmTargetHint() {
+  return haveWasmTarget()
     ? ''
     : ' (missing wasm32-unknown-unknown target in this cargo toolchain — run: rustup target add wasm32-unknown-unknown)';
 }
@@ -82,6 +89,13 @@ async function main() {
       return;
     }
     throw new Error('pixels-wasm: cargo missing and no wasm/pixels.wasm present.');
+  }
+  if (!haveWasmTarget()) {
+    if (existsSync(outFile)) {
+      console.warn('pixels-wasm: wasm32-unknown-unknown target missing, keeping stale wasm/pixels.wasm.');
+      return;
+    }
+    throw new Error('pixels-wasm: wasm32-unknown-unknown target missing and no wasm/pixels.wasm present.' + missingWasmTargetHint());
   }
   build();
   console.log('pixels-wasm: built wasm/pixels.wasm.');

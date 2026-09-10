@@ -143,26 +143,6 @@ describe('official Anime4K presets', () => {
     expect(resolveEnhancementGraph('CNNX2', 'VL', 405)[0].params).toBeUndefined();
   });
 
-  it('carries the RealESRGAN precision selection in the effect params', () => {
-    // Default preserves the production behaviour (INT8 session preference).
-    expect(resolveEnhancementGraph('REALESRGAN', 'M')[0].params).toMatchObject({
-      precision: 'int8',
-    });
-    expect(resolveEnhancementGraph('REALESRGAN', 'M', 480, 'fp16')[0].params).toMatchObject({
-      maxInferenceHeight: 480,
-      precision: 'fp16',
-    });
-    expect(resolveEnhancementGraph('REALESRGAN', 'M', 432, 'fp32')[0].params).toMatchObject({
-      maxInferenceHeight: 432,
-      precision: 'fp32',
-    });
-    // A precision change lands in the params object, so the renderer's
-    // pipeline-effect key (className + params + factor) rebuilds pipelines.
-    const before = JSON.stringify(resolveEnhancementGraph('REALESRGAN', 'M', 480, 'int8')[0].params);
-    const after = JSON.stringify(resolveEnhancementGraph('REALESRGAN', 'M', 480, 'fp32')[0].params);
-    expect(before).not.toBe(after);
-  });
-
   it('exposes an off mode that can still run frame generation', () => {
     expect(ENHANCEMENT_MODES[0]).toBe('OFF');
     expect(resolveEnhancementGraph('OFF', 'M')).toEqual([]);

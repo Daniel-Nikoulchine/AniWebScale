@@ -4,7 +4,6 @@ import type {
   EnhancementMode,
   QualityTier,
   RealEsrganCapHeight,
-  RealEsrganPrecision,
 } from '../types';
 import {
   OFFICIAL_PRESET_GRAPHS,
@@ -33,10 +32,9 @@ export function resolveEnhancementGraph(
   mode: EnhancementMode,
   quality: QualityTier,
   realesrganCapHeight: RealEsrganCapHeight = 480,
-  realesrganPrecision: RealEsrganPrecision = 'int8',
 ): EnhancementEffect[] {
   if (mode === 'OFF') return [];
   return isAnime4KMode(mode)
     ? resolvePresetGraph(mode, quality)
-    : [resolveAiUpscaleEffect(mode, quality, realesrganCapHeight, realesrganPrecision)];
+    : [resolveAiUpscaleEffect(mode, quality, realesrganCapHeight)];
 }

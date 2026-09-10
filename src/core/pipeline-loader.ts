@@ -9,7 +9,6 @@ import { loadRealEsrganModelAssets, type RealEsrganModelAssets } from './realesr
 import type { RealEsrganRunnerBinding } from './realesrgan-pipeline';
 import type { GeneratedKernelSet, PipelineConstructor } from './pipeline-types';
 import type { InferenceSession } from 'onnxruntime-web';
-import type { RealEsrganPrecision } from '../types';
 
 type ModuleLoader = () => Promise<Record<string, unknown>>;
 type ConstructorLoader = () => Promise<PipelineConstructor>;
@@ -142,14 +141,14 @@ function realEsrganLoader(className: string): ConstructorLoader {
       : null;
     // Worker-death recovery: if the worker dies MID-STREAM, the pipeline's
     // runner is nulled and it needs a main-thread session that did not exist
-    // at load time. The session factory caches per class, shape AND
-    // precision, so the first frame at a new size pays the session cost and
-    // every later frame at that size reuses it. Precision arrives per call
-    // from the pipeline's own effect params (the factory default covers
-    // callers without one).
+    // at load time. The session factory caches per class, shape and model
+    // variant, so the first frame at a new size pays the session cost and
+    // every later frame at that size reuses it. The model variant (int8 on
+    // the WASM fallback, else fp32) is auto-selected by the factory's
+    // execution config — no user setting.
     const getSession = sessionFactory
-      ? (width: number, height: number, precision?: RealEsrganPrecision): Promise<InferenceSession> =>
-        sessionFactory.createSession(className, width, height, precision)
+      ? (width: number, height: number): Promise<InferenceSession> =>
+        sessionFactory.createSession(className, width, height)
       : null;
     return createRealEsrganPipelineClass(binding, getSession);
   };

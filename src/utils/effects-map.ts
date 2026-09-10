@@ -1,4 +1,4 @@
-import type { AiUpscaleMode, EnhancementEffect, QualityTier, RealEsrganCapHeight, RealEsrganPrecision } from '../types';
+import type { AiUpscaleMode, EnhancementEffect, QualityTier, RealEsrganCapHeight } from '../types';
 
 const restore = (quality: QualityTier): EnhancementEffect => ({
   id: `anime4k/Restore/CNN${quality}`,
@@ -57,7 +57,6 @@ export function resolveAiUpscaleEffect(
   mode: AiUpscaleMode,
   quality: QualityTier,
   capHeight: RealEsrganCapHeight = 480,
-  precision: RealEsrganPrecision = 'int8',
 ): EnhancementEffect {
   if (mode === 'CNNX2') {
     return { ...findEffect(`CNNx2${quality}`), alwaysApply: true };
@@ -106,7 +105,7 @@ export function resolveAiUpscaleEffect(
       // perceptual quality gain that justifies the extra latency on
       // consumer GPUs. The presentation pass upscales the 4x output to the
       // canvas with its adaptive area sampler.
-      params: { maxInferenceHeight: capHeight, precision },
+      params: { maxInferenceHeight: capHeight },
     };
   }
   throw new Error(`Unknown AI upscale mode: ${mode satisfies never}`);

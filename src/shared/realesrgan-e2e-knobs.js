@@ -33,7 +33,6 @@ export const E2E_BRIDGE_MESSAGE = {
 export const E2E_KNOBS = [
   { env: 'E2E_BACKEND', query: 'backend', bridge: 'backend', storage: 'backend', kind: 'backend' },
   { env: 'E2E_CAP_HEIGHT', query: 'cap', bridge: 'realesrganCapHeight', storage: 'realesrganCapHeight', kind: 'capHeight' },
-  { env: 'E2E_PRECISION', query: 'precision', bridge: 'realesrganPrecision', storage: 'realesrganPrecision', kind: 'precision' },
   { env: 'E2E_VULKAN_SRVGG', query: 'srvggVulkan', bridge: 'vulkanSrvgg', storage: 'vulkanSrvgg', kind: 'flag' },
   { env: 'E2E_FORCE_WORKER', query: 'forceWorker', bridge: 'forceWorker', storage: 'e2eForceWorker', kind: 'flag' },
   { env: 'E2E_MODEL_FILE', query: 'modelFile', bridge: 'modelFile', storage: 'e2eModelFile', kind: 'string' },
@@ -55,9 +54,6 @@ export function knobBridgeFromQuery(knob, queryValue) {
   if (knob.kind === 'capHeight') {
     const height = Number(queryValue);
     return height === 360 || height === 405 || height === 432 || height === 480 ? height : undefined;
-  }
-  if (knob.kind === 'precision') {
-    return queryValue === 'fp32' || queryValue === 'fp16' || queryValue === 'int8' ? queryValue : undefined;
   }
   return queryValue;
 }

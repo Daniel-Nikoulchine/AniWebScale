@@ -5,7 +5,6 @@ import type {
   LocalSettings,
   QualityTier,
   RealEsrganCapHeight,
-  RealEsrganPrecision,
   RenderBackend,
 } from '../types';
 import { ID_TO_MODE, isEnhancementMode, isQualityTier } from '../shared/presets';
@@ -25,7 +24,6 @@ export const DEFAULT_SETTINGS: Anime4KWebExtSettings = {
   autoFullscreenEnabled: true,
   frameGenerationEnabled: false,
   realesrganCapHeight: 480,
-  realesrganPrecision: 'int8',
 };
 
 function isBackend(value: unknown): value is RenderBackend {
@@ -34,10 +32,6 @@ function isBackend(value: unknown): value is RenderBackend {
 
 function isRealEsrganCapHeight(value: unknown): value is RealEsrganCapHeight {
   return value === 480 || value === 432 || value === 405 || value === 360;
-}
-
-function isRealEsrganPrecision(value: unknown): value is RealEsrganPrecision {
-  return value === 'fp32' || value === 'fp16' || value === 'int8';
 }
 
 export async function getSettings(): Promise<Anime4KWebExtSettings> {
@@ -65,9 +59,6 @@ export async function getSettings(): Promise<Anime4KWebExtSettings> {
     realesrganCapHeight: isRealEsrganCapHeight(data.realesrganCapHeight)
       ? data.realesrganCapHeight
       : DEFAULT_SETTINGS.realesrganCapHeight,
-    realesrganPrecision: isRealEsrganPrecision(data.realesrganPrecision)
-      ? data.realesrganPrecision
-      : DEFAULT_SETTINGS.realesrganPrecision,
   };
   return settings;
 }
@@ -102,9 +93,6 @@ export async function saveSettings(settings: Partial<Anime4KWebExtSettings>): Pr
   if (isRealEsrganCapHeight(settings.realesrganCapHeight)) {
     update.realesrganCapHeight = settings.realesrganCapHeight;
   }
-  if (isRealEsrganPrecision(settings.realesrganPrecision)) {
-    update.realesrganPrecision = settings.realesrganPrecision;
-  }
   // The output model is fixed to 'auto'; only persist it alongside a real
   // change so an empty update cannot emit a spurious render-key change that
   // re-applies every managed enhancer for nothing.
@@ -117,7 +105,6 @@ export function getEffectsForPreset(
   mode: EnhancementMode,
   quality: QualityTier,
   realesrganCapHeight: RealEsrganCapHeight = DEFAULT_SETTINGS.realesrganCapHeight,
-  realesrganPrecision: RealEsrganPrecision = DEFAULT_SETTINGS.realesrganPrecision,
 ): EnhancementEffect[] {
-  return resolveEnhancementGraph(mode, quality, realesrganCapHeight, realesrganPrecision);
+  return resolveEnhancementGraph(mode, quality, realesrganCapHeight);
 }

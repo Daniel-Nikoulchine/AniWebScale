@@ -31,13 +31,14 @@ type OutputMode = 'auto';
 type RealEsrganCapHeight = 480 | 432 | 405 | 360;
 
 /**
- * RealESRGAN inference precision (nur REALESRGAN-Modus, nur Browser-Pfade).
- * int8: statisch quantisiertes QDQ-Modell, ~1.8x auf WASM, PSNR 32.5 dB.
- * Läuft nur auf der WASM-EP (keine QDQ-Kernels in ORT-web 1.29 WebGPU),
- * der Worker bleibt FP32. fp16: WebGPU, scheitert auf RDNA2 am
- * Clip-WGSL-Bug und fällt pro Worker-Leben einmalig auf FP32 zurück.
- * fp32: Referenzqualität überall. Der native Vulkan-Host hat sein Modell
- * fest verdrahtet und ignoriert das Feld.
+ * RealESRGAN inference precision (intern, kein User-Setting mehr). Die
+ * automatische Policy pro Gerät/EP wählt sie:
+ * - native Vulkan-Host: fp16-Speicher (eigenes Modell, ignoriert das Feld),
+ * - ORT-Worker (WebGPU): fp32-Referenz,
+ * - Main-Thread-Session (WASM-Fallback): int8 (~1.8x, PSNR 32.5 dB).
+ * fp16 bleibt vorerst aus: ORT-web 1.29 scheitert am Clip-WGSL-Bug und
+ * würde pro Shape einen Timeout verbrennen. Der Typ bleibt als internes
+ * Vokabular von Session/Worker/Stats erhalten.
  */
 type RealEsrganPrecision = 'fp32' | 'fp16' | 'int8';
 
@@ -56,8 +57,6 @@ interface Anime4KWebExtSettings {
   frameGenerationEnabled: boolean;
   /** RealESRGAN-Cap (nur REALESRGAN-Modus); andere Modi ignorieren das Feld. */
   realesrganCapHeight: RealEsrganCapHeight;
-  /** RealESRGAN-Precision (nur REALESRGAN-Modus, nur Browser-Pfade). */
-  realesrganPrecision: RealEsrganPrecision;
 }
 
 interface LocalSettings {

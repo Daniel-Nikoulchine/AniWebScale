@@ -4,7 +4,7 @@ export interface E2eKnob {
   query: string;
   bridge: string | null;
   storage: string | null;
-  kind: 'flag' | 'backend' | 'capHeight' | 'precision' | 'string';
+  kind: 'flag' | 'backend' | 'capHeight' | 'string';
 }
 
 export declare const E2E_BRIDGE_ACTIONS: {

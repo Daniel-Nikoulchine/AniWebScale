@@ -64,6 +64,7 @@ import { RealEsrganGpuComposer } from './realesrgan-compose';
 import type { RealEsrganInferenceRunner, RealEsrganFrameResult } from './realesrgan-worker-client';
 import type { RealEsrganModelAssets } from './realesrgan-model-assets';
 import { RealEsrganFrameJobRunner } from './realesrgan-frame-job';
+import { isRealEsrganFloat16Preferred, isRealEsrganInt8Preferred } from './realesrgan-session';
 import { RealEsrganRunnerGuard } from './realesrgan-runner-guard';
 import { REALESRGAN_NATIVE_MAX_FRAME_DIM } from './realesrgan-native-vulkan-client';
 import type { Anime4KPipeline, PipelineConstructor } from './pipeline-types';
@@ -202,17 +203,6 @@ function parseMaxInferenceHeight(params: { [key: string]: unknown } | undefined)
 }
 
 /**
- * Precision selected for this pipeline instance (effect param `precision`,
- * set from the stored `realesrganPrecision` setting). Unknown values fall
- * back to int8, the production default — a typo in params must degrade to
- * the fastest verified path, not throw mid-render.
- */
-function parsePrecision(params: { [key: string]: unknown } | undefined): RealEsrganPrecision {
-  const value = params?.precision;
-  return value === 'fp32' || value === 'fp16' || value === 'int8' ? value : 'int8';
-}
-
-/**
  * Runner offload binding: a live Runner (native Vulkan host or ORT worker —
  * chosen by the Runner-Broker) plus the Modell-Auswahl that decides which
  * model asset serves each frame. The binding never mixes runner identity
@@ -234,7 +224,7 @@ export interface RealEsrganRunnerBinding {
 
 export function createRealEsrganPipelineClass(
   binding: RealEsrganRunnerBinding | null = null,
-  getSession: ((width: number, height: number, precision: RealEsrganPrecision) => Promise<InferenceSession>) | null = null,
+  getSession: ((width: number, height: number) => Promise<InferenceSession>) | null = null,
 ): PipelineConstructor {
   return class RealEsrganPipeline implements Anime4KPipeline {
     private readonly device: GPUDevice;
@@ -282,10 +272,6 @@ export function createRealEsrganPipelineClass(
     // maxInferenceHeight cap forced a GPU downscale.
     private readonly inferenceWidth: number;
     private readonly inferenceHeight: number;
-    // Precision selected via effect params (stored `realesrganPrecision`
-    // setting). Steers the main-thread session model file and gates the
-    // worker's fp16 probe; the native host ignores it (baked-in model).
-    private readonly precision: RealEsrganPrecision;
     // Output texture dimensions (p8: target-sized when the runner supports
     // transport downscaling, otherwise the full 4x frame).
     private readonly outputWidth: number;
@@ -440,7 +426,6 @@ export function createRealEsrganPipelineClass(
       this.readbackFormat = inputTexture.format;
 
       const maxHeight = parseMaxInferenceHeight(params);
-      this.precision = parsePrecision(params);
       if (maxHeight !== null && this.inputHeight > maxHeight) {
         this.inferenceHeight = maxHeight;
         this.inferenceWidth = Math.max(1, Math.round(this.inputWidth * maxHeight / this.inputHeight));
@@ -642,7 +627,7 @@ export function createRealEsrganPipelineClass(
       const key = `${width}x${height}`;
       let promise = this.fallbackSessionPromises.get(key);
       if (!promise) {
-        promise = getSession(width, height, this.precision).catch(error => {
+        promise = getSession(width, height).catch(error => {
           this.fallbackSessionPromises.delete(key);
           throw error;
         });
@@ -1118,13 +1103,14 @@ export function createRealEsrganPipelineClass(
           if (runnerPath.kind === 'runner-rgba') {
             result = await this.runNativeRgbaFrame(frameModelUrl, runnerPath.rgba, inferW, inferH, targetW, targetH);
           } else {
-            // The worker only probes its fp16 model when the user selected
-            // fp16: handing it the URL otherwise burns a session attempt
-            // plus a timed-out frame per shape on RDNA2 (Clip-WGSL bug).
+            // The worker only probes its fp16 model when the execution config
+            // prefers fp16 (auto-selected per device/EP; OFF until ORT-web's
+            // fp16 kernels stop failing on the Clip WGSL — otherwise the
+            // probe burns a session attempt plus a timed-out frame per shape).
             // INT8 never reaches the worker — QDQ has no WebGPU kernels in
             // ORT-web 1.29, so the worker lane stays FP32 and int8 serves
             // through the main-thread WASM session below.
-            const fp16Url = this.precision === 'fp16' ? modelAssets.fp16Url : null;
+            const fp16Url = isRealEsrganFloat16Preferred() ? modelAssets.fp16Url : null;
             result = await this.runWorkerInference(frameModelUrl, fp16Url, runnerPath.planar, inferW, inferH, targetW, targetH);
           }
           const targeted = targetW > 0 && targetH > 0;
@@ -1408,14 +1394,14 @@ export function createRealEsrganPipelineClass(
       // carry the worker's own report (fp16 model URL won or the silent
       // fp16→fp32 fallback did); the native client reports nothing and
       // counts as fp32 here — its share is tracked separately in
-      // nativePct anyway. Session frames serve this pipeline's selected
-      // precision (effect param, from the stored setting). Majority vote
-      // across the window.
+      // nativePct anyway. Session frames serve the execution config's
+      // auto-selected model (int8 on the WASM fallback, else fp32). Majority
+      // vote across the window.
       const runnerServed = a.runnerCount * 2 >= a.n;
       const workerFp16Served = a.runnerCount > 0 && a.workerFp16Count * 2 >= a.runnerCount;
       const precision: RealEsrganPrecision = runnerServed
         ? (workerFp16Served ? 'fp16' : 'fp32')
-        : this.precision;
+        : (isRealEsrganInt8Preferred() ? 'int8' : 'fp32');
       const snapshot: RealEsrganPhaseStats = {
         // Readback = GPU→CPU mapped-range copy + RGBA→planar unpack; both are
         // paid by the readback side of the pipeline, before inference starts.

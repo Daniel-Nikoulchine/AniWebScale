@@ -1,4 +1,4 @@
-import type { EnhancementMode, QualityTier, RealEsrganCapHeight, RealEsrganPrecision, RenderBackend } from '../types';
+import type { EnhancementMode, QualityTier, RealEsrganCapHeight, RenderBackend } from '../types';
 import type { LocalSettings } from '../types';
 import { DEFAULT_SETTINGS } from '../utils/settings';
 import { applySettings, type SettingsApplyResult, type SettingsUpdate } from '../utils/apply-settings';
@@ -8,7 +8,6 @@ export interface RenderControlElements {
   quality: HTMLSelectElement;
   backend: HTMLSelectElement;
   realesrganCap?: HTMLSelectElement;
-  realesrganPrecision?: HTMLSelectElement;
   statistics: HTMLInputElement;
   frameGeneration: HTMLInputElement;
 }
@@ -18,10 +17,6 @@ function parseRealEsrganCap(value: string): RealEsrganCapHeight | null {
   return parsed === 480 || parsed === 432 || parsed === 405 || parsed === 360 ? parsed : null;
 }
 
-function parseRealEsrganPrecision(value: string): RealEsrganPrecision | null {
-  return value === 'fp32' || value === 'fp16' || value === 'int8' ? value : null;
-}
-
 /** Built-in default per render/local key, used when a storage key is removed. */
 function defaultForKey(key: string): string | number | boolean | undefined {
   switch (key) {
@@ -29,7 +24,6 @@ function defaultForKey(key: string): string | number | boolean | undefined {
     case 'quality': return DEFAULT_SETTINGS.quality;
     case 'backend': return DEFAULT_SETTINGS.backend;
     case 'realesrganCapHeight': return DEFAULT_SETTINGS.realesrganCapHeight;
-    case 'realesrganPrecision': return DEFAULT_SETTINGS.realesrganPrecision;
     case 'statsEnabled': return DEFAULT_SETTINGS.statsEnabled;
     case 'frameGenerationEnabled': return DEFAULT_SETTINGS.frameGenerationEnabled;
     case 'extensionEnabled': return DEFAULT_SETTINGS.extensionEnabled;
@@ -50,8 +44,6 @@ export function collectRenderSettings(controls: RenderControlElements): Settings
   };
   const cap = controls.realesrganCap ? parseRealEsrganCap(controls.realesrganCap.value) : null;
   if (cap !== null) update.realesrganCapHeight = cap;
-  const precision = controls.realesrganPrecision ? parseRealEsrganPrecision(controls.realesrganPrecision.value) : null;
-  if (precision !== null) update.realesrganPrecision = precision;
   return update;
 }
 
@@ -68,7 +60,6 @@ export function syncRenderSettings(
     backend: controls.backend,
   };
   if (controls.realesrganCap) selectBindings.realesrganCapHeight = controls.realesrganCap;
-  if (controls.realesrganPrecision) selectBindings.realesrganPrecision = controls.realesrganPrecision;
   const booleanBindings: Record<string, HTMLInputElement> = {
     statsEnabled: controls.statistics,
     frameGenerationEnabled: controls.frameGeneration,
@@ -180,7 +171,6 @@ export function createSettingsController(options: SettingsControllerOptions): Se
     options.controls.statistics,
     options.controls.frameGeneration,
     ...(options.controls.realesrganCap ? [options.controls.realesrganCap] : []),
-    ...(options.controls.realesrganPrecision ? [options.controls.realesrganPrecision] : []),
     ...(options.additionalControls ?? []),
   ];
   for (const control of controls) {

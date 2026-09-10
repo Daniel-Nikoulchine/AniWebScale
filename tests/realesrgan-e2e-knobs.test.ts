@@ -57,7 +57,7 @@ describe('knob roundtrips (legacy rules pinned)', () => {
       query: 'webgpu', bridge: 'webgpu', storage: { backend: 'webgpu' },
     });
     // A typo must not silently run the webgpu leg: unknown values drop
-    // out like every other knob's invalid input (capHeight/precision).
+    // out like every other knob's invalid input (capHeight).
     expect(roundtrip('nativ', 'backend').bridge).toBeUndefined();
     expect(roundtrip(undefined, 'backend').query).toBeUndefined();
   });
@@ -106,13 +106,8 @@ describe('knob roundtrips (legacy rules pinned)', () => {
     expect(roundtrip(undefined, 'modelFile').query).toBeUndefined();
   });
 
-  it('precision: only fp32|fp16|int8 survive to storage', () => {
-    expect(roundtrip('int8', 'precision')).toEqual({
-      query: 'int8', bridge: 'int8', storage: { realesrganPrecision: 'int8' },
-    });
-    expect(roundtrip('fp16', 'precision').storage).toEqual({ realesrganPrecision: 'fp16' });
-    expect(roundtrip('fp32', 'precision').storage).toEqual({ realesrganPrecision: 'fp32' });
-    expect(roundtrip('half', 'precision').bridge).toBeUndefined();
-    expect(roundtrip(undefined, 'precision').query).toBeUndefined();
+  it('has no precision knob: it is device/EP-auto now', () => {
+    expect(byQuery['precision']).toBeUndefined();
+    expect(E2E_KNOBS.some(knob => knob.env === 'E2E_PRECISION')).toBe(false);
   });
 });

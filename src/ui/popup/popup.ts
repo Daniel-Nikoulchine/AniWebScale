@@ -23,7 +23,7 @@ async function initPopup(): Promise<void> {
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
   );
-  const { mode, quality, backend, realesrganCap, realesrganPrecision } = controls;
+  const { mode, quality, backend, realesrganCap } = controls;
   const extensionEnabled = renderToggle(
     document.getElementById('extension-toggle') as HTMLDivElement,
     {
@@ -147,7 +147,6 @@ async function initPopup(): Promise<void> {
   quality.value = settings.quality;
   backend.value = settings.backend;
   if (realesrganCap) realesrganCap.value = String(settings.realesrganCapHeight);
-  if (realesrganPrecision) realesrganPrecision.value = settings.realesrganPrecision;
   statistics.checked = settings.statsEnabled;
   frameGeneration.checked = settings.frameGenerationEnabled;
 
@@ -178,7 +177,6 @@ async function initPopup(): Promise<void> {
     quality,
     backend,
     realesrganCap,
-    realesrganPrecision,
     frameGeneration,
     description: modeDescription,
     nativeWarning,
@@ -194,7 +192,7 @@ async function initPopup(): Promise<void> {
   // a change made elsewhere leaves this popup showing stale controls.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, realesrganPrecision, statistics, frameGeneration })) updateModeUi();
+    if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, statistics, frameGeneration })) updateModeUi();
     if (typeof changes.extensionEnabled?.newValue === 'boolean'
       && extensionEnabled.checked !== changes.extensionEnabled.newValue) {
       extensionEnabled.checked = changes.extensionEnabled.newValue;
@@ -210,7 +208,7 @@ async function initPopup(): Promise<void> {
     statusTimer = setTimeout(() => { status.textContent = ''; }, 3000);
   };
   createSettingsController({
-    controls: { mode, quality, backend, realesrganCap, realesrganPrecision, statistics, frameGeneration },
+    controls: { mode, quality, backend, realesrganCap, statistics, frameGeneration },
     showStatus,
     messages: {
       saving: message('saving', 'Saving...'),

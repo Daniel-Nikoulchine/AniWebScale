@@ -372,7 +372,7 @@ export class VideoEnhancer {
     const canvas = this.overlay.getCanvas();
     canvas.width = rendererTargetDimensions.width;
     canvas.height = rendererTargetDimensions.height;
-    const effects = getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight, settings.realesrganPrecision);
+    const effects = getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight);
     this.currentModeId = MODE_TO_ID[settings.mode];
 
     let createdRenderer: Renderer | null = null;
@@ -676,7 +676,7 @@ export class VideoEnhancer {
     }
     try {
       await renderer.updateConfiguration({
-        effects: getEffectsForPreset(settings.mode, settings.quality, cap, settings.realesrganPrecision),
+        effects: getEffectsForPreset(settings.mode, settings.quality, cap),
         targetDimensions,
         frameGenerationEnabled: settings.frameGenerationEnabled,
       });
@@ -701,7 +701,7 @@ export class VideoEnhancer {
     if (canvas.width === targetDimensions.width && canvas.height === targetDimensions.height) return;
     try {
       await renderer.updateConfiguration({
-        effects: getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight, settings.realesrganPrecision),
+        effects: getEffectsForPreset(settings.mode, settings.quality, settings.realesrganCapHeight),
         targetDimensions,
         frameGenerationEnabled: settings.frameGenerationEnabled,
       });
@@ -846,7 +846,7 @@ export class VideoEnhancer {
     const renderer = this.renderer;
     try {
       await renderer.updateConfiguration({
-        effects: getEffectsForPreset(newSettings.mode, newSettings.quality, newSettings.realesrganCapHeight, newSettings.realesrganPrecision),
+        effects: getEffectsForPreset(newSettings.mode, newSettings.quality, newSettings.realesrganCapHeight),
         targetDimensions,
         frameGenerationEnabled: newSettings.frameGenerationEnabled,
       });

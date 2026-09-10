@@ -21,7 +21,6 @@ describe('settings migration', () => {
       autoFullscreenEnabled: false,
       frameGenerationEnabled: false,
       realesrganCapHeight: 480,
-      realesrganPrecision: 'int8',
       hasCompletedOnboarding: true,
       siteAccessModelAcknowledged: false,
     });
@@ -43,7 +42,6 @@ describe('settings migration', () => {
       autoFullscreenEnabled: true,
       frameGenerationEnabled: false,
       realesrganCapHeight: 480,
-      realesrganPrecision: 'int8',
       hasCompletedOnboarding: false,
       siteAccessModelAcknowledged: false,
     });
@@ -55,18 +53,6 @@ describe('settings migration', () => {
     });
     expect(normalizeLegacySettings({}, { realesrganCapHeight: 999 })).toMatchObject({
       realesrganCapHeight: 480,
-    });
-  });
-
-  it('preserves a previously selected RealESRGAN precision', () => {
-    expect(normalizeLegacySettings({}, { realesrganPrecision: 'fp16' })).toMatchObject({
-      realesrganPrecision: 'fp16',
-    });
-    expect(normalizeLegacySettings({}, { realesrganPrecision: 'half' })).toMatchObject({
-      realesrganPrecision: 'int8',
-    });
-    expect(normalizeLegacySettings({ realesrganPrecision: 'fp32' }, {})).toMatchObject({
-      realesrganPrecision: 'fp32',
     });
   });
 
@@ -162,11 +148,17 @@ describe('settings migration', () => {
       return { syncStore, localStore, removed };
     }
 
-    it('preserves a sync-only RealESRGAN precision across migration', async () => {
-      // Second-device profile: precision lived only in chrome.storage.sync.
-      const { localStore } = installStorage({ realesrganPrecision: 'fp16' }, {});
+    it('purges the legacy realesrganPrecision setting on both surfaces', async () => {
+      // v12: precision became device/EP-auto, so the stored preference is
+      // dead weight and must be removed from sync and local.
+      const { syncStore, localStore, removed } = installStorage(
+        {}, { realesrganPrecision: 'fp16' },
+      );
       await ensureLatestConfig();
-      expect(localStore.realesrganPrecision).toBe('fp16');
+      expect(localStore.realesrganPrecision).toBeUndefined();
+      expect(syncStore.realesrganPrecision).toBeUndefined();
+      expect(removed.some(entry => entry.area === 'local' && entry.keys.includes('realesrganPrecision'))).toBe(true);
+      expect(removed.some(entry => entry.area === 'sync' && entry.keys.includes('realesrganPrecision'))).toBe(true);
     });
 
     it('clears the legacy local selectedModeId after migration', async () => {

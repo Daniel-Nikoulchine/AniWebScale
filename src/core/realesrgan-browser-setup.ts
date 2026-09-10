@@ -61,14 +61,22 @@ export function setupRealEsrganBrowserRuntime(): Promise<RealEsrganSessionFactor
       ? navigator.hardwareConcurrency
       : 4;
     const threading = { numThreads: Math.min(16, cores) };
-    // INT8 is enabled by default: static quantized QDQ model (666K, 1.8x WASM speedup, PSNR 32.5dB on anime).
-    // FP16 is disabled by default: ORT-web 1.29's WebGPU EP fails the fp16
-    // model on RDNA2 with "Failed to create a WebGPU compute pipeline:
-    // ShaderModule with 'Clip' label is invalid" (its f16 WGSL uses the
-    // bitcast<vec2<f16>> pattern the worker hook cannot fully rewrite), and
-    // the FP32 model must remain the quality reference anyway. Flip to true
-    // only after the EP ships valid f16 kernels; session creation still
-    // requires the packaged FP16 asset and falls back to FP32 when missing.
+    // Auto-selected precision policy (no user setting):
+    // - WebGPU worker lane: FP32 reference (the model URL handed to the
+    //   worker; QDQ has no WebGPU kernels, so int8 never goes there).
+    // - Main-thread WASM fallback session: INT8 (666K static QDQ model,
+    //   ~1.8x faster than FP32, PSNR 32.5 dB on anime) — the only viable
+    //   realtime option when no GPU runner serves the frame.
+    // - Native Vulkan host: its own fp16-storage model (this config is not
+    //   consulted there).
+    // FP16 stays OFF: ORT-web 1.29's WebGPU EP fails the fp16 model with
+    // "ShaderModule with 'Clip' label is invalid" (the bitcast<vec2<f16>>
+    // pattern the worker hook cannot fully rewrite), and probing it would
+    // burn a session attempt plus a timed-out frame per shape. Flip
+    // preferFloat16 only after the EP ships valid f16 kernels; session
+    // creation still requires the packaged FP16 asset and falls back to
+    // FP32 when missing. The FP16 options were removed from the UI
+    // (REALESRGAN precision is device/EP-auto now).
     const execution = { preferFloat16: false, preferInt8: true };
 
     const config: RealEsrganSessionConfig = {

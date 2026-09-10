@@ -34,7 +34,7 @@ async function initOptions(): Promise<void> {
   const controls = renderEnhancementSelects(
     document.getElementById('enhancement-controls') as HTMLDivElement,
   );
-  const { mode, quality, backend, realesrganCap, realesrganPrecision } = controls;
+  const { mode, quality, backend, realesrganCap } = controls;
   const toggles = renderEnhancementToggles(
     document.getElementById('enhancement-toggles') as HTMLDivElement,
     { includeStatistics: true },
@@ -75,7 +75,6 @@ async function initOptions(): Promise<void> {
   quality.value = settings.quality;
   backend.value = settings.backend;
   if (realesrganCap) realesrganCap.value = String(settings.realesrganCapHeight);
-  if (realesrganPrecision) realesrganPrecision.value = settings.realesrganPrecision;
   statistics.checked = settings.statsEnabled;
   frameGeneration.checked = settings.frameGenerationEnabled;
   theme.value = initialTheme;
@@ -136,12 +135,11 @@ async function initOptions(): Promise<void> {
     quality,
     backend,
     realesrganCap,
-    realesrganPrecision,
     frameGeneration,
     compatibilityHint,
   });
   settingsController = createSettingsController({
-    controls: { mode, quality, backend, realesrganCap, realesrganPrecision, statistics, frameGeneration },
+    controls: { mode, quality, backend, realesrganCap, statistics, frameGeneration },
     additionalControls: [verboseLogging],
     getLocalSettings: () => ({ verboseLogging: verboseLogging.checked }),
     onChange: updateModeUi,
@@ -176,7 +174,7 @@ async function initOptions(): Promise<void> {
     // control moved: keys without a visible control (e.g. autoFullscreen)
     // still affect the UI state.
     const renderChanged = containsRenderSettingChange(changes as Record<string, unknown>);
-    if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, realesrganPrecision, statistics, frameGeneration }, { verboseLogging })) updateModeUi();
+    if (syncRenderSettings(changes, { mode, quality, backend, realesrganCap, statistics, frameGeneration }, { verboseLogging })) updateModeUi();
     else if (renderChanged) updateModeUi();
     if (typeof changes.theme?.newValue === 'string'
       && ['light', 'dark', 'auto'].includes(changes.theme.newValue)
@@ -212,7 +210,6 @@ async function initOptions(): Promise<void> {
       autoFullscreenEnabled: DEFAULT_SETTINGS.autoFullscreenEnabled,
       frameGenerationEnabled: DEFAULT_SETTINGS.frameGenerationEnabled,
       realesrganCapHeight: DEFAULT_SETTINGS.realesrganCapHeight,
-      realesrganPrecision: DEFAULT_SETTINGS.realesrganPrecision,
     };
     const result = await applySettings(update, { local: { verboseLogging: false } })
       .catch(() => 'failed' as const);
@@ -225,7 +222,6 @@ async function initOptions(): Promise<void> {
         quality.value = current.quality;
         backend.value = current.backend;
         if (realesrganCap) realesrganCap.value = String(current.realesrganCapHeight);
-        if (realesrganPrecision) realesrganPrecision.value = current.realesrganPrecision;
         statistics.checked = current.statsEnabled;
         frameGeneration.checked = current.frameGenerationEnabled;
       }
@@ -247,7 +243,6 @@ async function initOptions(): Promise<void> {
     quality.value = DEFAULT_SETTINGS.quality;
     backend.value = DEFAULT_SETTINGS.backend;
     if (realesrganCap) realesrganCap.value = String(DEFAULT_SETTINGS.realesrganCapHeight);
-    if (realesrganPrecision) realesrganPrecision.value = DEFAULT_SETTINGS.realesrganPrecision;
     statistics.checked = DEFAULT_SETTINGS.statsEnabled;
     frameGeneration.checked = DEFAULT_SETTINGS.frameGenerationEnabled;
     verboseLogging.checked = false;

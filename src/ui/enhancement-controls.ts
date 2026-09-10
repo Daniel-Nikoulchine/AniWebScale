@@ -8,8 +8,6 @@ export interface EnhancementSelects {
   backend: HTMLSelectElement;
   /** Only present when renderEnhancementSelects ran with the cap select. */
   realesrganCap?: HTMLSelectElement;
-  /** Only present when renderEnhancementSelects ran with the precision select. */
-  realesrganPrecision?: HTMLSelectElement;
 }
 
 export interface ToggleSpec {
@@ -44,16 +42,6 @@ const REALESRGAN_CAP_OPTIONS: readonly SelectOption[] = [
   { value: '432', key: 'realesrganCap432', fallback: '432p · Balanced (~21 fps)' },
   { value: '405', key: 'realesrganCap405', fallback: '405p · Max speed (~26 fps)' },
   { value: '360', key: 'realesrganCap360', fallback: '360p · Emergency (~30 fps)' },
-];
-
-// RealESRGAN-Precision: steuert nur die Browser-Pfade (Worker/Main-Thread),
-// der native Host ignoriert sie. int8 ist der Produktionsdefault (schnellster
-// CPU-Fallback); fp16 tastet WebGPU an und fällt auf RDNA2 einmalig auf FP32
-// zurück; fp32 ist die Referenz.
-const REALESRGAN_PRECISION_OPTIONS: readonly SelectOption[] = [
-  { value: 'int8', key: 'realesrganPrecisionInt8', fallback: 'INT8 · Fastest CPU fallback' },
-  { value: 'fp16', key: 'realesrganPrecisionFp16', fallback: 'FP16 · WebGPU, experimental' },
-  { value: 'fp32', key: 'realesrganPrecisionFp32', fallback: 'FP32 · Reference quality' },
 ];
 
 function createSelectField(
@@ -94,7 +82,6 @@ export function refreshEnhancementControlLabels(controls: EnhancementSelects): v
   updateSelectLabels(controls.quality);
   updateSelectLabels(controls.backend);
   if (controls.realesrganCap) updateSelectLabels(controls.realesrganCap);
-  if (controls.realesrganPrecision) updateSelectLabels(controls.realesrganPrecision);
   populateModeSelect(controls.mode, controls.mode.value);
 }
 
@@ -128,12 +115,7 @@ export function renderEnhancementSelects(
   );
   const realesrganCap = capLabel.querySelector('select') as HTMLSelectElement;
   root.append(capLabel);
-  const precisionLabel = createSelectField(
-    'realesrganPrecision', 'Real-ESRGAN precision', 'realesrgan-precision', REALESRGAN_PRECISION_OPTIONS,
-  );
-  const realesrganPrecision = precisionLabel.querySelector('select') as HTMLSelectElement;
-  root.append(precisionLabel);
-  return { mode, quality, backend, realesrganCap, realesrganPrecision };
+  return { mode, quality, backend, realesrganCap };
 }
 
 export function renderToggle(root: HTMLElement, spec: ToggleSpec): HTMLInputElement {

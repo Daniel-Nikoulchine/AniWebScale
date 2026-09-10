@@ -1,4 +1,4 @@
-import type { EnhancementMode, QualityTier, RealEsrganCapHeight, RealEsrganPrecision, RenderBackend } from '../types';
+import type { EnhancementMode, QualityTier, RealEsrganCapHeight, RenderBackend } from '../types';
 import {
   ID_TO_MODE,
   isEnhancementMode,
@@ -7,7 +7,8 @@ import {
 } from '../shared/presets';
 import { RENDER_SETTING_KEYS } from './settings-change';
 
-const CURRENT_CONFIG_VERSION = 11;
+// 12: dropped the stored RealESRGAN precision (auto-selected per device/EP).
+const CURRENT_CONFIG_VERSION = 12;
 
 /**
  * Every preference key the migration pass preserves. Derived from the render
@@ -28,10 +29,6 @@ function isCapHeight(value: unknown): value is RealEsrganCapHeight {
   return value === 480 || value === 432 || value === 405 || value === 360;
 }
 
-function isPrecision(value: unknown): value is RealEsrganPrecision {
-  return value === 'fp32' || value === 'fp16' || value === 'int8';
-}
-
 async function needsMigration(): Promise<boolean> {
   const data = await chrome.storage.local.get(['_configVersion']);
   return (data._configVersion ?? 0) < CURRENT_CONFIG_VERSION;
@@ -50,7 +47,6 @@ export function normalizeLegacySettings(
   autoFullscreenEnabled: boolean;
   frameGenerationEnabled: boolean;
   realesrganCapHeight: RealEsrganCapHeight;
-  realesrganPrecision: RealEsrganPrecision;
   hasCompletedOnboarding: boolean;
   siteAccessModelAcknowledged: boolean;
 } {
@@ -82,11 +78,6 @@ export function normalizeLegacySettings(
       : isCapHeight(syncData.realesrganCapHeight)
         ? syncData.realesrganCapHeight
         : 480,
-    realesrganPrecision: isPrecision(localData.realesrganPrecision)
-      ? localData.realesrganPrecision
-      : isPrecision(syncData.realesrganPrecision)
-        ? syncData.realesrganPrecision
-        : 'int8',
     hasCompletedOnboarding: typeof localData.hasCompletedOnboarding === 'boolean'
       ? localData.hasCompletedOnboarding
       : false,
@@ -115,7 +106,6 @@ async function migrateV1ToV2(): Promise<void> {
       'autoFullscreenEnabled',
       'frameGenerationEnabled',
       'realesrganCapHeight',
-      'realesrganPrecision',
       'selectedModeId',
       'theme',
       '_configVersion',
@@ -151,7 +141,6 @@ async function migrateV1ToV2(): Promise<void> {
     autoFullscreenEnabled: normalized.autoFullscreenEnabled,
     frameGenerationEnabled: normalized.frameGenerationEnabled,
     realesrganCapHeight: normalized.realesrganCapHeight,
-    realesrganPrecision: normalized.realesrganPrecision,
     theme,
     hasCompletedOnboarding: normalized.hasCompletedOnboarding,
     siteAccessModelAcknowledged: normalized.siteAccessModelAcknowledged,
@@ -172,8 +161,17 @@ async function migrateV1ToV2(): Promise<void> {
       'customModes',
       'enableCrossOriginFix',
       'enhancementModes',
+      // v12: the precision became device/EP-auto, not a stored preference.
+      'realesrganPrecision',
     ]),
-    chrome.storage.local.remove(['performanceTier', 'gpuBenchmarkResult', '_benchmarkInProgress', 'selectedModeId']),
+    chrome.storage.local.remove([
+      'performanceTier',
+      'gpuBenchmarkResult',
+      '_benchmarkInProgress',
+      'selectedModeId',
+      // v12: purge the legacy stored precision on both surfaces.
+      'realesrganPrecision',
+    ]),
   ]);
 }
 

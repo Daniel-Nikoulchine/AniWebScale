@@ -36,6 +36,11 @@ set(ANIME4K_NATIVE_PAYLOAD_SOURCES)
 set(ANIME4K_NATIVE_PAYLOAD_DESTINATIONS)
 math(EXPR ANIME4K_NATIVE_PAYLOAD_LAST "${ANIME4K_NATIVE_PAYLOAD_COUNT} - 1")
 foreach(payload_index RANGE 0 ${ANIME4K_NATIVE_PAYLOAD_LAST})
+  # An empty payload must skip the loop entirely: CMake still enters
+  # RANGE 0 -1 once (index 0), which has no JSON element to read.
+  if(NOT ANIME4K_NATIVE_PAYLOAD_COUNT GREATER 0)
+    break()
+  endif()
   string(JSON payload_source_relative
     GET "${ANIME4K_NATIVE_PAYLOAD_JSON}" files ${payload_index} source)
   string(JSON payload_destination_relative

@@ -18,7 +18,12 @@ string(JSON payload_count LENGTH "${payload_manifest_json}" files)
 
 set(payload_contains_models FALSE)
 math(EXPR payload_last "${payload_count} - 1")
+# An empty payload must skip the loop entirely: CMake still enters
+# RANGE 0 -1 once (index 0), which has no JSON element to read.
 foreach(payload_index RANGE 0 ${payload_last})
+  if(NOT payload_count GREATER 0)
+    break()
+  endif()
   string(JSON payload_source_relative
     GET "${payload_manifest_json}" files ${payload_index} source)
   string(JSON payload_destination_relative

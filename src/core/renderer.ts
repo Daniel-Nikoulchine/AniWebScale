@@ -1215,7 +1215,13 @@ export class Renderer {
     effects: EnhancementEffect[];
     targetDimensions: Dimensions;
     frameGenerationEnabled: boolean;
-  }): Promise<void> {
+  }  ): Promise<void> {
+    if (this.destroyed) return;
+    // A frame-path source-resize rebuild runs outside the state-update
+    // chain: wait it out instead of building concurrently on the same
+    // textures (waitForIdle is time-bounded, so a wedged rebuild cannot
+    // stall reconfiguration forever).
+    await this.waitForIdle();
     if (this.destroyed) return;
     const diff = diffRendererConfig(
       {
@@ -1327,6 +1333,9 @@ export class Renderer {
 
   private async applyVideoSource(newVideo: HTMLVideoElement): Promise<void> {
     if (this.destroyed) return;
+    // Same chain/frame-path exclusion as applyConfiguration (see above).
+    await this.waitForIdle();
+    if (this.destroyed) return;
     // Invalidate the current handler before yielding. A callback that was
     // already queued can otherwise re-arm the old video while we wait for an
     // in-flight frame to finish and occupy frameCallbackId indefinitely.
@@ -1385,6 +1394,13 @@ export class Renderer {
     // createDevice) and still triggers a new recovery; a failed recovery
     // leaves the generation untouched so a later loss can retry.
     if (generation <= this.lastRecoveredGeneration) return;
+    // Same chain/frame-path exclusion as applyConfiguration (see above):
+    // a source-resize rebuild on the lost device must finish (or time out)
+    // before recovery recreates everything underneath it.
+    await this.waitForIdle();
+    // Torn down while waiting: the entry check already reported the loss,
+    // stay silent instead of firing a second recovery error mid-teardown.
+    if (this.destroyed) return;
     // Mirror rebuildForSourceResize: while the device and its pipelines are
     // being recreated, frame callbacks must coalesce instead of encoding on
     // torn-down resources.

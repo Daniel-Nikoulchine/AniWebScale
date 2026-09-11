@@ -38,4 +38,37 @@ describe('renderer idle waits', () => {
 
     await expect(waiting).resolves.toBeUndefined();
   });
+
+  it('applyConfiguration waits out a frame-path rebuild instead of building concurrently', async () => {
+    const renderer = idleRenderer();
+    Object.assign(renderer, {
+      destroyed: false,
+      effects: [],
+      targetDimensions: { width: 1, height: 1 },
+      frameGenerationEnabled: false,
+      pipelineEffectKey: 'stale',
+      video: { videoWidth: 8, videoHeight: 8 },
+      canvas: { width: 0, height: 0 },
+      device: { queue: { onSubmittedWorkDone: async () => undefined } },
+      frameGeneration: { flush: vi.fn(), createResources: vi.fn() },
+      // A source-resize rebuild is in flight outside the state-update chain.
+      rebuilding: true,
+    });
+    renderer.buildPipelines = vi.fn(async () => undefined);
+    renderer.refreshFrameGenerationResources = vi.fn();
+    renderer.processFrame = vi.fn(async () => true);
+    renderer.stopFrameCallbacks = vi.fn();
+    renderer.startFrameCallbacks = vi.fn();
+
+    const updating = renderer.applyConfiguration({
+      effects: [{ className: 'X' }],
+      targetDimensions: { width: 2, height: 2 },
+      frameGenerationEnabled: false,
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(renderer.buildPipelines).not.toHaveBeenCalled();
+    renderer.rebuilding = false;
+    await updating;
+    expect(renderer.buildPipelines).toHaveBeenCalledOnce();
+  });
 });

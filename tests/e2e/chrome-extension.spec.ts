@@ -226,10 +226,6 @@ test('presents enhancement modes with readable names and relevant controls', asy
       'Anime4K A+A · Strong',
       'Anime4K B+B · Strong soft',
       'Anime4K C+A · Denoise+Restore',
-      'Anime4K CNN · Sharp 2x',
-      'ArtCNN · Line detail',
-      'ACNet · Fast',
-      'ARNet · Strong detail',
       'Real-ESRGAN · Max detail',
     ]);
     expect(await mode.locator('option').evaluateAll((options) =>
@@ -250,16 +246,13 @@ test('presents enhancement modes with readable names and relevant controls', asy
 
     await expect(mode.locator('option[value="GANX3"]')).toHaveCount(0);
     await expect(mode.locator('option[value="GANX4"]')).toHaveCount(0);
-    await mode.selectOption('ARTCNN');
-    await expect(mode.locator('option:checked')).toHaveText('ArtCNN · Line detail');
-    await expect(popup.locator('#quality')).toBeDisabled();
-
     await expect(mode.locator('option[value="REALESRGANX4"]')).toHaveCount(0);
 
     // RealESRGAN is a valid browser-only mode and must appear in the selector.
     await expect(mode.locator('option[value="REALESRGAN"]')).toHaveCount(1);
     await mode.selectOption('REALESRGAN');
     await expect(mode.locator('option:checked')).toHaveText('Real-ESRGAN · Max detail');
+    await expect(popup.locator('#quality')).toBeDisabled();
     await mode.selectOption('OFF');
     await expect(mode.locator('option:checked')).toHaveText('Off');
     await expect(popup.locator('#backend')).toBeDisabled();
@@ -462,45 +455,7 @@ test('starts only in player fullscreen, remains stable, and stops after exit', a
   )).toBe(true);
 });
 
-for (const mode of ['ARTCNN', 'ACNET', 'ARNET'] as const) {
-test(`runs ${mode} with frame generation through WebGPU`, async ({ extensionContext, extensionPage: page }) => {
-  test.setTimeout(180_000);
-  const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));
-  requireOrSkipCapability(hasWebGPU, 'WebGPU is unavailable in this browser/GPU configuration.');
-  // First-frame presentation needs real GPU queue completions: headless
-  // SwiftShader submits work but never resolves onSubmittedWorkDone, so no
-  // canvas appears, opacity never drops and the watchdog churns the session.
-  requireOrSkipCapability(process.env.E2E_HEADED === '1', 'The canvas path needs headed Chromium with a real GPU (SwiftShader never settles completions).');
-  await setExtensionSettings(extensionContext, true, {
-    mode,
-    frameGenerationEnabled: true,
-  });
-  await page.goto('/layers.html');
-  const enabled = await page.evaluate(() => document.fullscreenEnabled);
-  requireOrSkipCapability(enabled, 'This Chromium build does not expose the Fullscreen API in the current mode.');
-
-  await page.locator('#enter-fullscreen').click();
-  const startup = await page.waitForFunction(() => {
-    if (document.querySelector('#layer-video')?.getAttribute('data-anime4k-applied') === 'true') return 'ready';
-    return Array.from(document.body.children)
-      .map(element => element.textContent?.trim() || '')
-      .find(text => text.startsWith('Anime4K:')) || null;
-  }, null, { timeout: 150_000 });
-  expect(await startup.jsonValue()).toBe('ready');
-  await expect(page.locator('#player > canvas')).toHaveCSS('visibility', 'visible');
-  await expect(page.locator('#layer-video').evaluate((video: HTMLVideoElement) => video.style.opacity)).resolves.toBe('0');
-  await page.waitForTimeout(750);
-  await expect(page.locator('#layer-video')).toHaveAttribute('data-anime4k-applied', 'true');
-
-  await page.evaluate(() => document.exitFullscreen());
-  await expect(page.locator('#layer-video')).not.toHaveAttribute('data-anime4k-applied', 'true');
-  await page.waitForTimeout(500);
-  await expect(page.locator('body')).not.toContainText('inference failed');
-  await expect(page.locator('body')).not.toContainText('unmapped before mapping was resolved');
-});
-}
-
-for (const mode of ['A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2'] as const) {
+for (const mode of ['A', 'B', 'C', 'AA', 'BB', 'CA'] as const) {
   test(`runs ${mode} with frame generation through WebGPU`, async ({ extensionContext, extensionPage: page }) => {
     test.setTimeout(90_000);
     const hasWebGPU = await page.evaluate(() => Boolean(navigator.gpu));

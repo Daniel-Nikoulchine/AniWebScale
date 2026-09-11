@@ -21,10 +21,10 @@ export function refreshModeUi(elements: ModeUiElements): void {
   );
 
   elements.quality.disabled = !modeUsesQuality(selectedMode);
-  // Quality ist bei festen Netzen (Real-ESRGAN, ArtCNN, ACNet, ARNet) ein
-  // No-Op: dort ganz versteckt statt nur disabled, damit niemand "Medium"
-  // liest als würde es etwas bewirken. Das Grid schließt die Lücke von
-  // selbst, der Cap-Schalter rutscht neben Backend.
+  // Quality ist beim festen Real-ESRGAN-Netz ein No-Op: dort ganz versteckt
+  // statt nur disabled, damit niemand "Medium" liest als würde es etwas
+  // bewirken. Das Grid schließt die Lücke von selbst, der Cap-Schalter
+  // rutscht neben Backend.
   const qualityLabel = elements.quality.closest('label');
   if (qualityLabel instanceof HTMLElement) {
     qualityLabel.style.display = modeUsesQuality(selectedMode) ? '' : 'none';

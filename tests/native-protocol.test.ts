@@ -16,7 +16,7 @@ import {
 
 describe('native messaging protocol', () => {
   it('validates all modes, qualities, configurations, and 128-bit nonces', () => {
-    for (const mode of ['OFF', 'A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2', 'ARTCNN', 'ACNET', 'ARNET']) {
+    for (const mode of ['OFF', 'A', 'B', 'C', 'AA', 'BB', 'CA']) {
       expect(isNativeEnhancementMode(mode)).toBe(true);
     }
     expect(isNativeEnhancementMode('GANX3')).toBe(false);

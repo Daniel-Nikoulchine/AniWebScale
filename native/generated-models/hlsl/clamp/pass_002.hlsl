@@ -1,5 +1,5 @@
 // Generated file. Do not edit.
-// Generator: native/tools/generate_anime4k_models.py v1
+// Generator: native/tools/generate_anime4k_models.py v2
 // Upstream source: glsl/Restore/Anime4K_Clamp_Highlights.glsl:73
 // Pass: 002 - Anime4K-v4.0-De-Ring-Clamp
 // Anime4K is Copyright (c) 2019-2021 bloc97, MIT licensed.

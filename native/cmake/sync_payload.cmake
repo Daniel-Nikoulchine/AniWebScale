@@ -13,9 +13,8 @@ if(NOT payload_manifest_version EQUAL 1)
 endif()
 
 string(JSON payload_count LENGTH "${payload_manifest_json}" files)
-if(payload_count LESS 1)
-  message(FATAL_ERROR "The native payload manifest is empty.")
-endif()
+# An empty payload is valid (no loose files to ship); the loop below and the
+# install rules degrade to no-ops.
 
 set(payload_contains_models FALSE)
 math(EXPR payload_last "${payload_count} - 1")

@@ -133,7 +133,6 @@ module.exports = (env, argv) => {
         patterns: [
           { from: '*.png', context: 'public/icons', to: 'icons' },
           { from: 'public/_locales', to: '_locales' },
-          { from: 'public/licenses', to: 'licenses' },
           // onnxruntime-web runtime for the RealESRGAN/RealCUGAN ONNX inference
           // paths. The session factory points env.wasm.wasmPaths and the worker
           // bundle import at these extension-relative URLs.

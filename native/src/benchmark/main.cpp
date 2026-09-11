@@ -467,13 +467,12 @@ int wmain(int argument_count, wchar_t** argument_values) {
   bool release_performance_passed = true;
   bool all_presets_performance_passed = true;
   anime4k::json::Array preset_results;
-  constexpr std::array<std::string_view, 9> modes{
-      "A", "B", "C", "AA", "BB", "CA", "ARTCNN", "ACNET", "ARNET"};
+  constexpr std::array<std::string_view, 6> modes{
+      "A", "B", "C", "AA", "BB", "CA"};
   constexpr std::array<std::string_view, 3> qualities{"M", "VL", "UL"};
 
   for (const auto mode : modes) {
     for (const auto quality : qualities) {
-      if ((mode == "ARTCNN" || mode == "ACNET" || mode == "ARNET") && quality != "M") continue;
       anime4k::json::Object result{
           {"mode", std::string(mode)},
           {"quality", std::string(quality)},

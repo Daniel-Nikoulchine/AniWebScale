@@ -16,7 +16,4 @@ export const REQUIRED_LAZY_CHUNKS = [
   'model-cnn-soft-ul.js',
   'model-denoise-cnn-x2-m.js',
   'model-denoise-cnn-x2-ul.js',
-  'model-artcnn-x2.js',
-  'model-acnet-x2.js',
-  'model-arnet-x2.js',
 ];

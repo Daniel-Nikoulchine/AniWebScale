@@ -17,9 +17,6 @@ const EXPECTED = {
   'anime4k-model/cnn-soft-ul': 'anime4k-models/cnn-soft-ul.js',
   'anime4k-model/denoise-cnn-x2-m': 'anime4k-models/denoise-cnn-x2-m.js',
   'anime4k-model/denoise-cnn-x2-ul': 'anime4k-models/denoise-cnn-x2-ul.js',
-  'anime4k-model/artcnn-x2': 'anime4k-models/artcnn-x2.js',
-  'anime4k-model/acnet-x2': 'anime4k-models/acnet-x2.js',
-  'anime4k-model/arnet-x2': 'anime4k-models/arnet-x2.js',
 };
 
 const problems = [];

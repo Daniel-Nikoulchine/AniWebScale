@@ -99,22 +99,10 @@ describe('official Anime4K presets', () => {
     expect(belowThreshold).not.toBe(first);
   });
 
-  it('exposes CNN and GLSL anime upscalers at fixed scales', () => {
+  it('exposes the Real-ESRGAN anime upscaler at a fixed scale', () => {
     expect(AI_UPSCALE_MODES).toEqual([
-      'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'REALESRGAN',
+      'REALESRGAN',
     ]);
-    expect(resolveEnhancementGraph('CNNX2', 'VL')[0]).toMatchObject({
-      className: 'CNNx2VL', upscaleFactor: 2, alwaysApply: true,
-    });
-    expect(resolveEnhancementGraph('ARTCNN', 'M')[0]).toMatchObject({
-      className: 'ArtCNNX2', upscaleFactor: 2, alwaysApply: true,
-    });
-    expect(resolveEnhancementGraph('ACNET', 'M')[0]).toMatchObject({
-      className: 'ACNetX2', upscaleFactor: 2, alwaysApply: true,
-    });
-    expect(resolveEnhancementGraph('ARNET', 'M')[0]).toMatchObject({
-      className: 'ARNetX2', upscaleFactor: 2, alwaysApply: true,
-    });
     expect(resolveEnhancementGraph('REALESRGAN', 'M')[0]).toMatchObject({
       className: 'RealEsrganX4', upscaleFactor: 4, alwaysApply: true,
     });
@@ -130,8 +118,6 @@ describe('official Anime4K presets', () => {
     expect(resolveEnhancementGraph('REALESRGAN', 'M', 405)[0].params).toMatchObject({
       maxInferenceHeight: 405,
     });
-    // Other AI modes ignore the cap.
-    expect(resolveEnhancementGraph('CNNX2', 'VL', 405)[0].params).toBeUndefined();
   });
 
   it('exposes an off mode that can still run frame generation', () => {

@@ -1,6 +1,4 @@
-import type { ExternalGlslModelDefinition } from '../shared/generated-external-glsl-models';
 import { createGeneratedPipelineClass } from '../shared/generated-pipelines';
-import { createExternalGlslPipelineClass } from './external-glsl-pipeline';
 import { REALESRGAN_CLASS_TO_MODEL_FILE } from '../shared/realesrgan-models';
 import { createRealEsrganPipelineClass } from './realesrgan-pipeline';
 import { setupRealEsrganBrowserRuntime } from './realesrgan-browser-setup';
@@ -37,14 +35,6 @@ function generatedLoader(
   return async () => createGeneratedPipelineClass(className, (await loadModel()).default);
 }
 
-function externalLoader(
-  loadModel: () => Promise<{ default: unknown }>,
-): ConstructorLoader {
-  return async () => createExternalGlslPipelineClass(
-    (await loadModel()).default as ExternalGlslModelDefinition,
-  );
-}
-
 const localLoaders: Record<string, ConstructorLoader> = {
   CNNSoftUL: generatedLoader('CNNSoftUL', () => import(
     /* webpackChunkName: "model-cnn-soft-ul" */ 'anime4k-model/cnn-soft-ul'
@@ -54,15 +44,6 @@ const localLoaders: Record<string, ConstructorLoader> = {
   )),
   DenoiseCNNx2UL: generatedLoader('DenoiseCNNx2UL', () => import(
     /* webpackChunkName: "model-denoise-cnn-x2-ul" */ 'anime4k-model/denoise-cnn-x2-ul'
-  )),
-  ArtCNNX2: externalLoader(() => import(
-    /* webpackChunkName: "model-artcnn-x2" */ 'anime4k-model/artcnn-x2'
-  )),
-  ACNetX2: externalLoader(() => import(
-    /* webpackChunkName: "model-acnet-x2" */ 'anime4k-model/acnet-x2'
-  )),
-  ARNetX2: externalLoader(() => import(
-    /* webpackChunkName: "model-arnet-x2" */ 'anime4k-model/arnet-x2'
   )),
 };
 

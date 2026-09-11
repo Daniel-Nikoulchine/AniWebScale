@@ -14,15 +14,6 @@ const sources = [
       DenoiseCNNx2UL: 'denoise-cnn-x2-ul',
     },
   },
-  {
-    path: path.resolve('src/shared/generated-external-glsl-models.ts'),
-    marker: 'export const GENERATED_EXTERNAL_GLSL_MODELS = ',
-    names: {
-      ArtCNNX2: 'artcnn-x2',
-      ACNetX2: 'acnet-x2',
-      ARNetX2: 'arnet-x2',
-    },
-  },
 ];
 
 /**
@@ -84,4 +75,4 @@ for (const definition of sources) {
   }
 }
 
-console.log(`anime4k models: ${changed ? 'updated' : 'verified'} 6 lazy-load shards`);
+console.log(`anime4k models: ${changed ? 'updated' : 'verified'} 3 lazy-load shards`);

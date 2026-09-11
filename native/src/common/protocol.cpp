@@ -220,9 +220,8 @@ ValidationResult validate_common(const json::Object& object, bool session_requir
 }
 
 bool is_mode(std::string_view value) {
-  static constexpr std::array<std::string_view, 11> modes{
-      "OFF", "A", "B", "C", "AA", "BB", "CA", "CNNX2",
-      "ARTCNN", "ACNET", "ARNET"};
+  static constexpr std::array<std::string_view, 7> modes{
+      "OFF", "A", "B", "C", "AA", "BB", "CA"};
   return std::find(modes.begin(), modes.end(), value) != modes.end();
 }
 

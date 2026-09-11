@@ -24,44 +24,25 @@ class GeneratorTests(unittest.TestCase):
 
     def test_all_official_effect_variants_are_present(self) -> None:
         variants = self.manifest["effect_variants"]
-        self.assertEqual(15, len(variants))
+        self.assertEqual(12, len(variants))
         self.assertEqual(
             {
                 (family, quality)
                 for family in ("restore", "restore_soft", "upscale", "denoise_upscale")
                 for quality in ("M", "VL", "UL")
-            }
-            | {
-                ("artcnn", "realtime"),
-                ("acnet", "realtime"),
-                ("arnet", "realtime"),
             },
             {(variant["family"], variant["quality"]) for variant in variants},
         )
-        self.assertEqual(286, self.manifest["counts"]["compute_passes"])
+        self.assertEqual(207, self.manifest["counts"]["compute_passes"])
 
-    def test_all_30_presets_reference_real_effects(self) -> None:
+    def test_all_18_presets_reference_real_effects(self) -> None:
         available = {effect["id"] for effect in self.manifest["effect_variants"]}
         available.update(effect["id"] for effect in self.manifest["shared_effects"])
         presets = self.manifest["presets"]
-        self.assertEqual(30, len(presets))
-        self.assertEqual(30, len({preset["id"] for preset in presets}))
+        self.assertEqual(18, len(presets))
+        self.assertEqual(18, len({preset["id"] for preset in presets}))
         for preset in presets:
             self.assertTrue(set(preset["effects"]).issubset(available))
-
-    def test_ai_upscale_presets_use_the_exact_native_models(self) -> None:
-        presets = {
-            (preset["mode"], preset["quality"]): preset
-            for preset in self.manifest["presets"]
-        }
-        for quality in ("M", "VL", "UL"):
-            self.assertEqual(
-                [f"upscale_{quality.lower()}"],
-                presets[("CNNX2", quality)]["effects"],
-            )
-            self.assertEqual(["artcnn_c4f16"], presets[("ARTCNN", quality)]["effects"])
-            self.assertEqual(["acnet_f8b4"], presets[("ACNET", quality)]["effects"])
-            self.assertEqual(["arnet_f8b8"], presets[("ARNET", quality)]["effects"])
 
     def test_presets_are_generated_from_the_canonical_cross_backend_graph(self) -> None:
         encoded = generator.PRESET_GRAPH_PATH.read_bytes()
@@ -107,7 +88,7 @@ class GeneratorTests(unittest.TestCase):
             for path, content in self.files.items()
             if path.suffix == ".hlsl"
         }
-        self.assertEqual(286, len(hlsl_files))
+        self.assertEqual(207, len(hlsl_files))
         for effect in self.manifest["shared_effects"] + self.manifest["effect_variants"]:
             for shader_pass in effect["passes"]:
                 source = hlsl_files[shader_pass["shader"]]

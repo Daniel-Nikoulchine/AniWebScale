@@ -26,18 +26,13 @@ import sys
 from typing import Iterable, Mapping, Sequence
 
 
-GENERATOR_VERSION = 1
+GENERATOR_VERSION = 2
 THREAD_GROUP = (8, 8, 1)
 MAX_D3D11_CS_SRVS = 128
 
 NATIVE_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = NATIVE_ROOT.parent
 VENDORED_ROOT = NATIVE_ROOT / "third_party" / "anime4k"
-VENDORED_ROOTS = {
-    "anime4k": VENDORED_ROOT,
-    "artcnn": NATIVE_ROOT / "third_party" / "artcnn",
-    "acnetglsl": NATIVE_ROOT / "third_party" / "acnetglsl",
-}
 DEFAULT_OUTPUT_ROOT = NATIVE_ROOT / "generated-models"
 DEFAULT_VALIDATION_ROOT = REPOSITORY_ROOT / ".tmp" / "anime4k-fxc"
 PRESET_GRAPH_PATH = REPOSITORY_ROOT / "preset-graph.json"
@@ -51,7 +46,6 @@ class ModelSpec:
     source: str
     scale: int
     vendor: str = "anime4k"
-    luma_model: bool = False
 
 
 MODEL_SPECS: tuple[ModelSpec, ...] = (
@@ -102,36 +96,6 @@ MODEL_SPECS: tuple[ModelSpec, ...] = (
         "UL",
         "glsl/Upscale+Denoise/Anime4K_Upscale_Denoise_CNN_x2_UL.glsl",
         2,
-    ),
-)
-
-EXTERNAL_MODEL_SPECS: tuple[ModelSpec, ...] = (
-    ModelSpec(
-        "artcnn_c4f16",
-        "artcnn",
-        "realtime",
-        "glsl/ArtCNN_C4F16.glsl",
-        2,
-        vendor="artcnn",
-        luma_model=True,
-    ),
-    ModelSpec(
-        "acnet_f8b4",
-        "acnet",
-        "realtime",
-        "glsl/acnet/acnet_f8b4.glsl",
-        2,
-        vendor="acnetglsl",
-        luma_model=True,
-    ),
-    ModelSpec(
-        "arnet_f8b8",
-        "arnet",
-        "realtime",
-        "glsl/arnet/arnet_f8b8.glsl",
-        2,
-        vendor="acnetglsl",
-        luma_model=True,
     ),
 )
 
@@ -540,11 +504,7 @@ def generate_hlsl(
     translated_body = translate_glsl_body(specialized_body, shader_pass.description)
     sample_type = "float4"
 
-    license_notice = {
-        "anime4k": "Anime4K is Copyright (c) 2019-2021 bloc97, MIT licensed.",
-        "artcnn": "ArtCNN is Copyright (c) 2024 Joao Chrisostomo, MIT licensed.",
-        "acnetglsl": "ACNetGLSL is Copyright (c) 2020 TianZer, MIT licensed.",
-    }[model.vendor]
+    license_notice = "Anime4K is Copyright (c) 2019-2021 bloc97, MIT licensed."
     lines: list[str] = [
         "// Generated file. Do not edit.",
         f"// Generator: native/tools/generate_anime4k_models.py v{GENERATOR_VERSION}",
@@ -704,70 +664,14 @@ def build_presets() -> list[dict[str, object]]:
                     "maximum_scale_if_all_when_conditions_pass": scale,
                 }
             )
-    for quality in PRESET_QUALITIES:
-        presets.extend(
-            [
-                {
-                    "id": f"CNNX2_{quality}",
-                    "mode": "CNNX2",
-                    "quality": quality,
-                    "effects": [f"upscale_{quality.lower()}"],
-                    "maximum_scale_if_all_when_conditions_pass": 2,
-                },
-                {
-                    "id": f"ARTCNN_{quality}",
-                    "mode": "ARTCNN",
-                    "quality": quality,
-                    "effects": ["artcnn_c4f16"],
-                    "maximum_scale_if_all_when_conditions_pass": 2,
-                },
-                {
-                    "id": f"ACNET_{quality}",
-                    "mode": "ACNET",
-                    "quality": quality,
-                    "effects": ["acnet_f8b4"],
-                    "maximum_scale_if_all_when_conditions_pass": 2,
-                },
-                {
-                    "id": f"ARNET_{quality}",
-                    "mode": "ARNET",
-                    "quality": quality,
-                    "effects": ["arnet_f8b8"],
-                    "maximum_scale_if_all_when_conditions_pass": 2,
-                },
-            ]
-        )
     return presets
-
-
-def luma_color_merge_pass() -> ShaderPass:
-    return ShaderPass(
-        description="Luma model color reconstruction",
-        hook="MAIN",
-        bindings=("MAIN", "HOOKED"),
-        save="MAIN",
-        components=4,
-        width_rpn=("HOOKED.w",),
-        height_rpn=("HOOKED.h",),
-        when_rpn=(),
-        body="""vec4 hook() {
-    vec4 source = MAIN_tex(MAIN_pos);
-    float source_luma = dot(source.rgb, vec3(0.2126, 0.7152, 0.0722));
-    float enhanced_luma = HOOKED_tex(HOOKED_pos).x;
-    float delta = enhanced_luma - source_luma;
-    vec3 color = clamp(source.rgb + vec3(delta, delta, delta), vec3(0.0), vec3(1.0));
-    return vec4(color, source.a);
-}
-""",
-        source_line=0,
-    )
 
 
 def generate_model(
     spec: ModelSpec,
     generated_files: dict[Path, str],
 ) -> dict[str, object]:
-    source_path = VENDORED_ROOTS[spec.vendor] / spec.source
+    source_path = VENDORED_ROOT / spec.source
     try:
         source_bytes = source_path.read_bytes()
     except FileNotFoundError as error:
@@ -778,8 +682,6 @@ def generate_model(
         raise GenerationError(f"vendored shader is not UTF-8: {source_path}") from error
 
     passes = parse_shader_passes(source, spec.source)
-    if spec.luma_model:
-        passes.append(luma_color_merge_pass())
     sampling_plans = build_sampling_plans(spec, passes)
     pass_entries: list[dict[str, object]] = []
     for pass_index, shader_pass in enumerate(passes):
@@ -852,24 +754,11 @@ def build_outputs() -> tuple[dict[Path, str], dict[str, object]]:
     if not anime4k_license.endswith("\n"):
         anime4k_license += "\n"
 
-    external_sources: dict[str, object] = {}
-    external_licenses: dict[str, str] = {}
-    for vendor in ("artcnn", "acnetglsl"):
-        root = VENDORED_ROOTS[vendor]
-        try:
-            external_sources[vendor] = json.loads(
-                (root / "SOURCE_REVISION.json").read_text(encoding="utf-8")
-            )
-            license_text = (root / "LICENSE").read_text(encoding="utf-8")
-        except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise GenerationError(f"invalid vendored {vendor} metadata") from error
-        external_licenses[vendor] = license_text if license_text.endswith("\n") else license_text + "\n"
-
     generated_files: dict[Path, str] = {}
     clamp = generate_model(CLAMP_SPEC, generated_files)
     models = [
         generate_model(spec, generated_files)
-        for spec in (*MODEL_SPECS, *EXTERNAL_MODEL_SPECS)
+        for spec in MODEL_SPECS
     ]
     manifest: dict[str, object] = {
         "schema_version": 1,
@@ -880,11 +769,6 @@ def build_outputs() -> tuple[dict[Path, str], dict[str, object]]:
         },
         "anime4k_source": revision,
         "anime4k_license_file": "ANIME4K_LICENSE.txt",
-        "external_glsl_sources": external_sources,
-        "external_license_files": {
-            "artcnn": "ARTCNN_LICENSE.txt",
-            "acnetglsl": "ACNETGLSL_LICENSE.txt",
-        },
         "preset_graph": {
             "path": "preset-graph.json",
             "sha256": PRESET_GRAPH_SHA256,
@@ -915,8 +799,6 @@ def build_outputs() -> tuple[dict[Path, str], dict[str, object]]:
     manifest_text = json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     generated_files[Path("manifest.json")] = manifest_text
     generated_files[Path("ANIME4K_LICENSE.txt")] = anime4k_license
-    generated_files[Path("ARTCNN_LICENSE.txt")] = external_licenses["artcnn"]
-    generated_files[Path("ACNETGLSL_LICENSE.txt")] = external_licenses["acnetglsl"]
     return generated_files, manifest
 
 

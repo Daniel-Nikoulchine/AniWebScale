@@ -21,10 +21,6 @@ export const MODE_PRESENTATIONS: Record<EnhancementMode, ModePresentation> = {
   AA: { optionKey: 'modeAaOption', optionLabel: 'Anime4K A+A · Strong', descriptionKey: 'modeAaDescription', description: 'Runs the Anime4K A restoration chain twice for stronger detail and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline.' },
   BB: { optionKey: 'modeBbOption', optionLabel: 'Anime4K B+B · Strong soft', descriptionKey: 'modeBbDescription', description: 'Runs the softer Anime4K B chain twice for blurry sources and up to 4x scaling. UL is a high-end GPU profile outside the 24 FPS baseline.' },
   CA: { optionKey: 'modeCaOption', optionLabel: 'Anime4K C+A · Denoise+Restore', descriptionKey: 'modeCaDescription', description: 'Denoises and upscales first, then restores and can upscale again, up to 4x. UL is a high-end GPU profile outside the 24 FPS baseline.' },
-  CNNX2: { optionKey: 'modeCnnOption', optionLabel: 'Anime4K CNN · Sharp 2x', descriptionKey: 'modeCnnDescription', description: 'Official Anime4K CNN at a fixed 2x scale with medium GPU load. Produces a sharp result; Quality changes model size and GPU load.' },
-  ARTCNN: { optionKey: 'modeArtCnnOption', optionLabel: 'ArtCNN · Line detail', descriptionKey: 'modeArtCnnDescription', description: 'Fixed 2x GLSL network for reconstructing anime line art and natural detail at real-time speed.' },
-  ACNET: { optionKey: 'modeAcNetOption', optionLabel: 'ACNet · Fast', descriptionKey: 'modeAcNetDescription', description: 'Small fixed 2x GLSL network with very light GPU load. Prioritizes speed over maximum detail recovery.' },
-  ARNET: { optionKey: 'modeArNetOption', optionLabel: 'ARNet · Strong detail', descriptionKey: 'modeArNetDescription', description: 'Deeper fixed 2x GLSL network with stronger detail recovery than ACNet at a balanced GPU load.' },
   REALESRGAN: { optionKey: 'modeRealEsrganOption', optionLabel: 'Real-ESRGAN · Max detail', descriptionKey: 'modeRealEsrganDescription', description: 'Fixed 4x ESRGAN-style network trained on anime video; best detail at the cost of very high GPU load. Intended for SD sources.' },
 };
 

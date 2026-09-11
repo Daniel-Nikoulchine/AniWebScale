@@ -254,8 +254,7 @@ class RendererApplication {
           {"windowsCapture", winrt::Windows::Graphics::Capture::GraphicsCaptureSession::IsSupported()},
           {"d3d11", true},
           {"modes", anime4k::json::Array{
-              "OFF", "A", "B", "C", "AA", "BB", "CA", "CNNX2",
-              "ARTCNN", "ACNET", "ARNET"}},
+              "OFF", "A", "B", "C", "AA", "BB", "CA"}},
           {"qualities", anime4k::json::Array{"M", "VL", "UL"}},
           {"frameGeneration", true},
       });

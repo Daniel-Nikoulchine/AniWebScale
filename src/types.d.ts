@@ -14,10 +14,6 @@ declare global {
 /** Canonical identifiers shared by storage, UI, WebGPU, and native messaging. */
 type Anime4KMode = GeneratedAnime4KMode;
 type AiUpscaleMode =
-  | 'CNNX2'
-  | 'ARTCNN'
-  | 'ACNET'
-  | 'ARNET'
   | 'REALESRGAN';
 type EnhancementMode = 'OFF' | Anime4KMode | AiUpscaleMode;
 type QualityTier = GeneratedQualityTier;

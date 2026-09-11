@@ -59,39 +59,6 @@ export function resolveAiUpscaleEffect(
   quality: QualityTier,
   capHeight: RealEsrganCapHeight = DEFAULT_REALESRGAN_CAP_HEIGHT,
 ): EnhancementEffect {
-  if (mode === 'CNNX2') {
-    return { ...findEffect(`CNNx2${quality}`), alwaysApply: true };
-  }
-  if (mode === 'ARTCNN') {
-    return {
-      id: 'artcnn/C4F16/x2',
-      name: 'ArtCNN C4F16 x2',
-      className: 'ArtCNNX2',
-      upscaleFactor: 2,
-      alwaysApply: true,
-      webgpuAvailable: true,
-    };
-  }
-  if (mode === 'ACNET') {
-    return {
-      id: 'acnet/F8B4/x2',
-      name: 'ACNet F8B4 x2',
-      className: 'ACNetX2',
-      upscaleFactor: 2,
-      alwaysApply: true,
-      webgpuAvailable: true,
-    };
-  }
-  if (mode === 'ARNET') {
-    return {
-      id: 'arnet/F8B8/x2',
-      name: 'ARNet F8B8 x2',
-      className: 'ARNetX2',
-      upscaleFactor: 2,
-      alwaysApply: true,
-      webgpuAvailable: true,
-    };
-  }
   if (mode === 'REALESRGAN') {
     return {
       id: 'realesrgan/animevideo-v3/x4',

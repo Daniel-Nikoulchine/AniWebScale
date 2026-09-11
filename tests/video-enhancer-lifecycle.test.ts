@@ -495,7 +495,7 @@ describe('VideoEnhancer lifecycle transitions', () => {
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(updateConfiguration).toHaveBeenCalledOnce();
 
-    enhancer.currentSettings = { ...DEFAULT_SETTINGS, mode: 'CNNX2' };
+    enhancer.currentSettings = { ...DEFAULT_SETTINGS, mode: 'A' };
     enhancer.handleStats(overloadStats());
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(updateConfiguration).toHaveBeenCalledOnce();

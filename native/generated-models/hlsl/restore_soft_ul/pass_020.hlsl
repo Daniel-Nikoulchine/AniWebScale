@@ -1,5 +1,5 @@
 // Generated file. Do not edit.
-// Generator: native/tools/generate_anime4k_models.py v1
+// Generator: native/tools/generate_anime4k_models.py v2
 // Upstream source: glsl/Restore/Anime4K_Restore_CNN_Soft_UL.glsl:1328
 // Pass: 020 - Anime4K-v4.0-Restore-CNN-Soft-(UL)-Conv-4x3x3x24
 // Anime4K is Copyright (c) 2019-2021 bloc97, MIT licensed.

@@ -143,24 +143,6 @@
   "modeAaOption": {
     "message": "Anime4K A+A · Strong"
   },
-  "modeAcNetDescription": {
-    "message": "Small fixed 2x GLSL network that prioritizes speed and very low GPU load over maximum detail recovery."
-  },
-  "modeAcNetOption": {
-    "message": "ACNet · Fast"
-  },
-  "modeArNetDescription": {
-    "message": "Deeper fixed 2x GLSL network with stronger detail recovery than ACNet at a higher, balanced GPU load."
-  },
-  "modeArNetOption": {
-    "message": "ARNet · Strong detail"
-  },
-  "modeArtCnnDescription": {
-    "message": "Fixed 2x GLSL network for reconstructing anime line art and natural detail at real-time speed."
-  },
-  "modeArtCnnOption": {
-    "message": "ArtCNN · Line detail"
-  },
   "modeBDescription": {
     "message": "Uses softer restoration before Anime4K CNN upscaling to reduce ringing on blurry or compressed video."
   },
@@ -184,12 +166,6 @@
   },
   "modeCaOption": {
     "message": "Anime4K C+A · Denoise+Restore"
-  },
-  "modeCnnDescription": {
-    "message": "Official Anime4K CNN at a fixed 2x scale. Produces a sharp result; Quality changes model size and GPU load."
-  },
-  "modeCnnOption": {
-    "message": "Anime4K CNN · Sharp 2x"
   },
   "modeOffDescription": {
     "message": "Disables image enhancement. Frame generation can still be enabled separately."

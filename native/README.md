@@ -46,7 +46,7 @@ ctest --test-dir native/build --output-on-failure
 ## RX 6750 XT acceptance benchmark
 
 `Anime4K.Benchmark.exe` runs the exact embedded D3D11 preset graph for all 18
-canonical mode/quality pairs plus the fixed ArtCNN, ACNet, and ARNet profiles
+canonical mode/quality pairs
 against a synthetic 1920x1080 BGRA frame, followed by the normal 2560x1440
 presentation resample. GPU timestamp queries synchronize every warmup and
 measured frame. The bounded runner requires an RX 6750 XT by default and writes
@@ -76,11 +76,6 @@ average, 62.204 ms p95), `BB/UL` (58.563 ms average, 59.708 ms p95), and `CA/UL`
 (49.391 ms average, 50.542 ms p95). The schema-2 report therefore records
 `acceptancePassed: true` and `allPresetsWithinFrameBudget: false`. No quality
 level was reduced automatically.
-
-The same 30-sample run measured the 1080p inputs at 6.306 ms average / 7.274 ms
-p95 for ArtCNN C4F16, 1.918 / 2.983 ms for ACNet F8B4, and 5.361 / 6.255 ms for
-ARNet F8B8. Each recorded zero misses against the 41.67 ms (24 fps) frame
-budget; results remain hardware-dependent.
 
 ## Local installation
 
@@ -123,8 +118,7 @@ All browser requests contain `type`, `protocolVersion: 3`, and `requestId`.
 Session commands additionally contain `sessionId`. Supported requests are
 `hello`, `capabilities`, `start`, `updateConfiguration`, `status`, and `stop`. Start
 accepts only a 32-character lowercase hexadecimal
-`windowNonce`, a mode (`OFF`, `A`, `B`, `C`, `AA`, `BB`, `CA`, `CNNX2`,
-`ARTCNN`, `ACNET`, or `ARNET`), a quality (`M`, `VL`, `UL`), an explicit
+`windowNonce`, a mode (`OFF`, `A`, `B`, `C`, `AA`, `BB`, or `CA`), a quality (`M`, `VL`, `UL`), an explicit
 `frameGenerationEnabled` boolean, and optional paired target/capture dimensions.
 `updateConfiguration` carries the same three processing fields. It intentionally
 accepts no HWND, path, command line, URL, or executable field.
@@ -148,10 +142,10 @@ classifying ordinary fades, static cuts, or paused frames as DRM failures.
 
 ## Shader fidelity
 
-The native backend embeds 286 compute kernels generated from pinned official
-Anime4K 4.x, ArtCNN, and ACNetGLSL sources. It executes the manifest's exact
-Clamp, Restore, RestoreSoft, DenoiseUpscale, Upscale CNN,
-ArtCNN C4F16, ACNet F8B4, and ARNet F8B8 graphs. All 30 native mode/quality
+The native backend embeds the compute kernels generated from pinned official
+Anime4K 4.x sources. It executes the manifest's exact
+Clamp, Restore, RestoreSoft, DenoiseUpscale, and Upscale CNN
+graphs. All 18 native mode/quality
 combinations run in the automated D3D11 WARP test. Minor pixel differences
 between GLSL and HLSL/D3D sampler arithmetic remain possible; hardware golden
 comparisons therefore use documented numeric tolerances. The three-way suite

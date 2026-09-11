@@ -113,9 +113,9 @@ describe('EnhancerStatsConsumer', () => {
     consumer.handleStats(OVERLOAD_STATS);
     expect(consumer.effectiveAutoCap).toBe(432);
 
-    const cnnx2: Anime4KWebExtSettings = { ...DEFAULT_SETTINGS, mode: 'CNNX2' };
-    setSettings(cnnx2);
-    consumer.applySettings(cnnx2);
+    const plain: Anime4KWebExtSettings = { ...DEFAULT_SETTINGS, mode: 'A' };
+    setSettings(plain);
+    consumer.applySettings(plain);
     expect(consumer.effectiveAutoCap).toBeNull();
 
     consumer.handleStats(OVERLOAD_STATS);

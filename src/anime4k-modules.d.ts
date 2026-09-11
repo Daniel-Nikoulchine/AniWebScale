@@ -74,18 +74,3 @@ declare module 'anime4k-model/denoise-cnn-x2-ul' {
   const model: Readonly<Record<string, string>>;
   export default model;
 }
-
-declare module 'anime4k-model/artcnn-x2' {
-  const model: unknown;
-  export default model;
-}
-
-declare module 'anime4k-model/acnet-x2' {
-  const model: unknown;
-  export default model;
-}
-
-declare module 'anime4k-model/arnet-x2' {
-  const model: unknown;
-  export default model;
-}

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generate tiled WebGPU kernels for the six official Anime4K presets.
 
-The 3x3 convolution passes are translated to shared-memory tiled WGSL using the
-same bit-exact tiling as scripts/generate-external-glsl-models.py. The 1x1
+The 3x3 convolution passes are translated to shared-memory tiled WGSL
+(bit-exact tiling; the helper below is the surviving tiled-translation core
+of the removed external-GLSL generator). The 1x1
 output projection is emitted as a non-tiled per-pixel kernel. Depth-to-space is
 left to the existing vendor helper (the pipeline builder appends it), because
 it is a pure pixel shuffle. ClampHighlights stays on the vendor path.
@@ -24,7 +25,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / ".tmp" / "anime4k-bench" / "generated-anime4k-webgpu-models.ts"
 NATIVE_GENERATOR = ROOT / "native" / "tools" / "generate_anime4k_models.py"
-EXTERNAL_GENERATOR = ROOT / "scripts" / "generate-external-glsl-models.py"
 VENDOR = ROOT / "native" / "third_party" / "anime4k"
 
 # className -> (model_id, relative GLSL path)
@@ -61,6 +61,145 @@ def load_module(path: Path, name: str):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def choose_workgroup_size(input_count: int) -> int:
+    """Pick the largest workgroup whose 3x3 tiling halo fits the WebGPU
+    maxComputeWorkgroupStorageSize budget (16384 bytes): (WG+2)^2 tiles of
+    16 bytes (vec4f f32) per input texture."""
+    if input_count <= 3:
+        return 16  # 18x18 = 324 entries -> 5184 B/input
+    if input_count <= 5:
+        return 12  # 14x14 = 196 entries -> 3136 B/input
+    if input_count <= 10:
+        return 8  # 10x10 = 100 entries -> 1600 B/input
+    raise RuntimeError(f"no workgroup size fits {input_count} tiled inputs")
+
+
+def translate_hook(body: str, bindings: tuple[str, ...], description: str) -> tuple[str, int]:
+    """Translate one GLSL pass into a tiled WGSL compute pass.
+
+    Returns (wgsl, workgroup_size). Every 3x3 convolution is turned into a
+    shared-memory tiled pass: each workgroup stages its WG+2 halo block once
+    into `var<workgroup>` tiles, so the 9 taps per output pixel read from
+    shared memory instead of issuing 9 (x N inputs) global texture loads.
+    The output matches the non-tiled kernel bit-for-bit: same clamped
+    textureLoad values, same accumulation order in model().
+    """
+    translated = body
+    translated, hook_count = re.subn(
+        r"\bvec4\s+hook\s*\(\s*\)",
+        "fn model(pixel: vec2i) -> vec4f",
+        translated,
+    )
+    if hook_count != 1:
+        raise RuntimeError(f"{description}: expected one vec4 hook()")
+
+    for slot, resource in enumerate(bindings):
+        translated = re.sub(
+            rf"\b{re.escape(resource)}_texOff\s*\(",
+            f"load_{slot}(pixel, ",
+            translated,
+        )
+
+    unresolved = sorted(set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*_(?:tex|texOff|pos|pt|size)\b", translated)))
+    if unresolved:
+        raise RuntimeError(f"{description}: unsupported resource helpers: {', '.join(unresolved)}")
+
+    type_names = {
+        "vec2": "vec2f",
+        "vec3": "vec3f",
+        "vec4": "vec4f",
+        "ivec2": "vec2i",
+        "float": "f32",
+        "int": "i32",
+    }
+    declaration_pattern = re.compile(
+        r"\b(vec2|vec3|vec4|ivec2|float|int)\s+([A-Za-z_][A-Za-z0-9_]*)\s*="
+    )
+    translated = declaration_pattern.sub(
+        lambda match: f"var {match.group(2)}: {type_names[match.group(1)]} =",
+        translated,
+    )
+    translated = re.sub(r"\bmat4\b", "mat4x4f", translated)
+    for glsl_type, wgsl_type in type_names.items():
+        translated = re.sub(rf"\b{glsl_type}\b", wgsl_type, translated)
+
+    input_count = len(bindings)
+    workgroup_size = choose_workgroup_size(input_count)
+    tile = workgroup_size + 2
+    tile_count = tile * tile
+    threads = workgroup_size * workgroup_size
+
+    declarations = [f"@group(0) @binding({slot}) var input_{slot}: texture_2d<f32>;" for slot in range(input_count)]
+    shared_tiles = [f"var<workgroup> tile_{slot}: array<vec4f, {tile_count}>;" for slot in range(input_count)]
+    tile_loader = f"""fn loadTile(tex: texture_2d<f32>, origin: vec2i, maximum: vec2i, linear: i32) -> vec4f {{
+  let coord = vec2i(linear % {tile}, linear / {tile});
+  return textureLoad(tex, clamp(origin + coord, vec2i(0), maximum), 0);
+}}"""
+    tap_readers = [
+        f"""fn load_{slot}(pixel: vec2i, offset: vec2f) -> vec4f {{
+  let local = pixel - origin + vec2i(offset);
+  return tile_{slot}[local.y * {tile} + local.x];
+}}"""
+        for slot in range(input_count)
+    ]
+
+    compute_lines = [
+        "var<private> origin: vec2i;",
+        "@compute",
+        f"@workgroup_size({workgroup_size}, {workgroup_size})",
+        "fn computeMain(",
+        "  @builtin(global_invocation_id) invocation: vec3u,",
+        "  @builtin(local_invocation_id) local: vec3u,",
+        ") {",
+        "  let dimensions = textureDimensions(output_texture);",
+        # The halo origin is one texel before the workgroup block; the
+        # clamp in loadTile makes the negative edge a clamped border read,
+        # identical to the per-tap clamped textureLoad it replaces.
+        f"  origin = vec2i(invocation.xy / {workgroup_size}u) * {workgroup_size} - 1;",
+        f"  let tid = i32(local.x) + i32(local.y) * {workgroup_size};",
+    ]
+    for slot in range(input_count):
+        # Each textureDimensions is hoisted once per workgroup instead of
+        # once per tap per pixel (9 x input-count reads per pixel before).
+        compute_lines.append(f"  let maximum_{slot} = vec2i(textureDimensions(input_{slot})) - vec2i(1);")
+        compute_lines.append(
+            f"  if (tid < {tile_count}) {{ tile_{slot}[tid] = loadTile(input_{slot}, origin, maximum_{slot}, tid); }}"
+        )
+        compute_lines.append(
+            f"  if (tid + {threads} < {tile_count}) {{ tile_{slot}[tid + {threads}] = loadTile(input_{slot}, origin, maximum_{slot}, tid + {threads}); }}"
+        )
+    compute_lines.extend([
+        "  workgroupBarrier();",
+        # The bounds check runs after the barrier so every invocation of a
+        # partially out-of-bounds workgroup still reaches the barrier.
+        "  if (invocation.x >= dimensions.x || invocation.y >= dimensions.y) { return; }",
+        "  let pixel = vec2i(invocation.xy);",
+        "  textureStore(output_texture, invocation.xy, model(pixel));",
+        "}",
+    ])
+
+    output_binding = input_count
+    wgsl = "\n".join(
+        [
+            f"// {description}",
+            *declarations,
+            f"@group(0) @binding({output_binding}) var output_texture: texture_storage_2d<rgba16float, write>;",
+            "",
+            *shared_tiles,
+            "",
+            tile_loader,
+            "",
+            *tap_readers,
+            "",
+            translated.strip(),
+            "",
+            *compute_lines,
+            "",
+        ]
+    )
+    return wgsl, workgroup_size
 
 
 def expand_macros(body: str) -> str:
@@ -226,7 +365,7 @@ def is_depth_to_space(shader_pass) -> bool:
     return tuple(shader_pass.width_rpn)[-2:] == ("2", "*") and tuple(shader_pass.height_rpn)[-2:] == ("2", "*")
 
 
-def build_models(ext, translation: str, args_wg: int = 8) -> dict[str, object]:
+def build_models(translation: str, args_wg: int = 8) -> dict[str, object]:
     gen = load_module(NATIVE_GENERATOR, "anime4k_native_generator")
     models: dict[str, object] = {}
     for class_name, model_id, relative in MODEL_SPECS:
@@ -255,7 +394,7 @@ def build_models(ext, translation: str, args_wg: int = 8) -> dict[str, object]:
             if not is_conv:
                 expanded = expand_macros(shader_pass.body)
                 try:
-                    wgsl, workgroup_size = ext.translate_hook(expanded, shader_pass.bindings, shader_pass.description)
+                    wgsl, workgroup_size = translate_hook(expanded, shader_pass.bindings, shader_pass.description)
                     wgsl = f"// anime4k-tiled:v1\n{wgsl_compat(wgsl)}"
                     kind = "tiled"
                 except Exception:
@@ -317,8 +456,7 @@ def main() -> int:
     parser.add_argument("--translation", choices=("tiled", "direct"), default="direct")
     parser.add_argument("--wg", type=int, default=8)
     args = parser.parse_args()
-    ext = load_module(EXTERNAL_GENERATOR, "anime4k_external_generator")
-    content = render_typescript(build_models(ext, args.translation, args.wg))
+    content = render_typescript(build_models(args.translation, args.wg))
     if args.check:
         if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != content:
             print(f"generated Anime4K WebGPU models are stale: {OUTPUT}", file=sys.stderr)

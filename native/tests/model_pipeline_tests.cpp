@@ -86,8 +86,8 @@ std::optional<std::uint64_t> output_fingerprint(
 }  // namespace
 
 int main() {
-  expect(anime4k::models::effects().size() == 16, "model package exposes Anime4K plus three external GLSL effects");
-  expect(anime4k::models::presets().size() == 30, "model package exposes all 30 native upscale presets");
+  expect(anime4k::models::effects().size() == 13, "model package exposes the Anime4K effects");
+  expect(anime4k::models::presets().size() == 18, "model package exposes all 18 native upscale presets");
 
   D3D_FEATURE_LEVEL feature_level{};
   ComPtr<ID3D11Device> device;
@@ -129,9 +129,8 @@ int main() {
   expect(SUCCEEDED(device->CreateShaderResourceView(source_texture.Get(), nullptr, &source_view)), "source SRV is created");
 
   anime4k::renderer::Anime4KPipeline pipeline(device.Get(), context.Get());
-  constexpr std::array<const char*, 10> modes{
-      "A", "B", "C", "AA", "BB", "CA", "CNNX2",
-      "ARTCNN", "ACNET", "ARNET"};
+  constexpr std::array<const char*, 6> modes{
+      "A", "B", "C", "AA", "BB", "CA"};
   constexpr std::array<const char*, 3> qualities{"M", "VL", "UL"};
   for (const char* mode : modes) {
     for (const char* quality : qualities) {
@@ -159,7 +158,7 @@ int main() {
   std::string cached_error;
   const bool cached_executed = pipeline.execute(
       source_texture.Get(), source_view.Get(), source_width, source_height, 16, 16,
-      "ARNET", "UL", cached_output, cached_error);
+      "CA", "UL", cached_output, cached_error);
   expect(cached_executed, "an unchanged key executes through the cached plan");
   expect(pipeline.execution_plan_build_count_for_testing() == builds_after_all_presets,
       "an unchanged key does not rebuild the execution plan");
@@ -184,7 +183,7 @@ int main() {
   std::string rebound_error;
   const bool rebound_executed = pipeline.execute(
       replacement_texture.Get(), replacement_view.Get(), source_width, source_height, 16, 16,
-      "ARNET", "UL", rebound_output, rebound_error);
+      "CA", "UL", rebound_output, rebound_error);
   expect(rebound_executed, "a cached plan accepts a replacement source texture and SRV");
   expect(pipeline.execution_plan_build_count_for_testing() == builds_after_all_presets,
       "source identity changes do not rebuild a dimension-compatible plan");
@@ -226,6 +225,6 @@ int main() {
     std::cerr << failures << " model pipeline test(s) failed\n";
     return EXIT_FAILURE;
   }
-  std::cout << "All 30 native Anime4K/ArtCNN/ACNet/ARNet model graphs executed successfully\n";
+  std::cout << "All 18 native Anime4K model graphs executed successfully\n";
   return EXIT_SUCCESS;
 }

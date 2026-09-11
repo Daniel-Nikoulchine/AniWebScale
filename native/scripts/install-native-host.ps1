@@ -80,9 +80,7 @@ function Read-NativePayloadManifest {
         throw "Unsupported native payload manifest version: $($manifest.version)"
     }
     $entries = @($manifest.files)
-    if ($entries.Count -eq 0) {
-        throw 'The native payload manifest is empty.'
-    }
+    # An empty payload is valid (no loose files to verify or copy).
     foreach ($entry in $entries) {
         if ([string]::IsNullOrWhiteSpace([string] $entry.destination)) {
             throw 'A native payload manifest entry is missing its destination.'

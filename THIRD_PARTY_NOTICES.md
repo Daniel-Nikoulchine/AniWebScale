@@ -5,8 +5,6 @@ This project includes and modifies software and generated shader data from:
 - [Anime4K](https://github.com/bloc97/Anime4K), Copyright (c) 2019 bloc97.
 - [Anime4K-WebGPU](https://github.com/Anime4KWebBoost/Anime4K-WebGPU), Copyright (c) 2012-2023 Scott Chacon and others.
 - [Anime4K-WebExtension](https://github.com/chenmozhijin/Anime4K-WebExtension), Copyright (c) 2025 沉默の金.
-- [ArtCNN](https://github.com/Artoriuz/ArtCNN), Copyright (c) 2021 Artoriuz.
-- [ACNetGLSL](https://github.com/TianZerL/ACNetGLSL), Copyright (c) 2021 TianZerL.
 
 Each project is distributed under the MIT License:
 
@@ -30,10 +28,7 @@ Each project is distributed under the MIT License:
 
 The generated WGSL kernels in `src/shared/generated-kernels.ts` retain the
 Anime4K model descriptions and weights and are covered by the Anime4K notice
-above. `src/shared/generated-external-glsl-models.ts` retains the pinned ArtCNN
-C4F16, ACNet F8B4, and ARNet F8B8 weights and is covered by the corresponding
-ArtCNN and ACNetGLSL notices above. Complete license copies ship as
-`licenses/ArtCNN.LICENSE.txt` and `licenses/ACNetGLSL.LICENSE.txt`. Magpie code and
+above. Magpie code and
 binaries are not included.
 
 ## Lucide theme icons

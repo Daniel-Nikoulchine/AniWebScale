@@ -1,7 +1,7 @@
 # Anime4K native shader generation
 
-`generate_anime4k_models.py` converts the pinned official Anime4K, ArtCNN, and
-ACNetGLSL mpv GLSL subsets under `native/third_party` into one Direct3D 11
+`generate_anime4k_models.py` converts the pinned official Anime4K
+mpv GLSL subset under `native/third_party` into one Direct3D 11
 Shader Model 5 compute kernel per upstream pass. It also writes `manifest.json`,
 which is the runtime resource graph for the native renderer.
 
@@ -85,10 +85,9 @@ current video texture. A pass that saves `MAIN` becomes the effect output. A
 clamp pass without `SAVE` has logical output `HOOKED`, which likewise becomes
 the current effect texture.
 
-Preset entries expand all six canonical modes plus CNN x2,
-ArtCNN, ACNet, and ARNet across the three wire-protocol qualities into concrete
-effect IDs. The three external GLSL models deliberately resolve
-to their fixed upstream profiles for every quality value. Repeated effects in
+Preset entries expand all six canonical modes across the three wire-protocol
+qualities into concrete
+effect IDs. Repeated effects in
 AA, BB, and CA must receive a fresh invocation scope so identically named CNN
 intermediates cannot collide.
 
@@ -96,11 +95,6 @@ intermediates cannot collide.
 
 - Every upstream float literal and CNN weight is retained as source text. No
   model is substituted across M, VL, or UL.
-- ArtCNN C4F16 is pinned to the last official fragment-shader release, v1.1.0;
-  newer ArtCNN releases use compute-shader primitives outside this translator's
-  deterministic fragment-pass contract. ACNet F8B4 and ARNet F8B8 are pinned
-  to ACNetGLSL v3.2.0. Their luma models receive BT.709 luma and finish with a
-  generated 2x pixel-shuffle/chroma reconstruction pass.
 - GLSL `mat4(...) * vector` is emitted as `mul(vector, float4x4(...))`. This is
   intentional: GLSL constructor values fill columns, while this HLSL form with
   the same values produces the corresponding result.

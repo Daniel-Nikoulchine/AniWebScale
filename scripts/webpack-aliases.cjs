@@ -26,9 +26,6 @@ const ANIME4K_MODEL_ALIASES = {
   'anime4k-model/cnn-soft-ul': generated('anime4k-models', 'cnn-soft-ul.js'),
   'anime4k-model/denoise-cnn-x2-m': generated('anime4k-models', 'denoise-cnn-x2-m.js'),
   'anime4k-model/denoise-cnn-x2-ul': generated('anime4k-models', 'denoise-cnn-x2-ul.js'),
-  'anime4k-model/artcnn-x2': generated('anime4k-models', 'artcnn-x2.js'),
-  'anime4k-model/acnet-x2': generated('anime4k-models', 'acnet-x2.js'),
-  'anime4k-model/arnet-x2': generated('anime4k-models', 'arnet-x2.js'),
 };
 
 const GENERATED_ALIASES = { ...ANIME4K_ALIASES, ...ANIME4K_MODEL_ALIASES };

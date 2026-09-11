@@ -1,5 +1,5 @@
 // Generated file. Do not edit.
-// Generator: native/tools/generate_anime4k_models.py v1
+// Generator: native/tools/generate_anime4k_models.py v2
 // Upstream source: glsl/Upscale+Denoise/Anime4K_Upscale_Denoise_CNN_x2_UL.glsl:1508
 // Pass: 022 - Anime4K-v3.2-Upscale-Denoise-CNN-x2-(UL)-Conv-4x1x1x120
 // Anime4K is Copyright (c) 2019-2021 bloc97, MIT licensed.

@@ -16,9 +16,6 @@ find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/../preset-graph.json"
   "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_anime4k_models.py"
-  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/artcnn/glsl/ArtCNN_C4F16.glsl"
-  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/acnetglsl/glsl/acnet/acnet_f8b4.glsl"
-  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/acnetglsl/glsl/arnet/arnet_f8b8.glsl"
   "${CMAKE_CURRENT_SOURCE_DIR}/payload-manifest.json"
 )
 
@@ -32,9 +29,8 @@ if(NOT ANIME4K_NATIVE_PAYLOAD_VERSION EQUAL 1)
   )
 endif()
 string(JSON ANIME4K_NATIVE_PAYLOAD_COUNT LENGTH "${ANIME4K_NATIVE_PAYLOAD_JSON}" files)
-if(ANIME4K_NATIVE_PAYLOAD_COUNT LESS 1)
-  message(FATAL_ERROR "The native payload manifest is empty.")
-endif()
+# An empty payload is valid (no loose files to ship alongside the binaries);
+# the surrounding loop and install rules degrade to no-ops.
 
 set(ANIME4K_NATIVE_PAYLOAD_SOURCES)
 set(ANIME4K_NATIVE_PAYLOAD_DESTINATIONS)

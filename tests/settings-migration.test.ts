@@ -56,12 +56,21 @@ describe('settings migration', () => {
 
   it('preserves AI modes and frame generation settings', () => {
     expect(normalizeLegacySettings({
-      mode: 'ARTCNN',
+      mode: 'REALESRGAN',
       quality: 'M',
       frameGenerationEnabled: true,
     }, {})).toMatchObject({
-      mode: 'ARTCNN',
+      mode: 'REALESRGAN',
       frameGenerationEnabled: true,
+    });
+  });
+
+  it('falls back to the default mode for removed AI upscalers', () => {
+    expect(normalizeLegacySettings({ mode: 'ARTCNN' }, {})).toMatchObject({
+      mode: 'A',
+    });
+    expect(normalizeLegacySettings({ mode: 'CNNX2' }, {})).toMatchObject({
+      mode: 'A',
     });
   });
 

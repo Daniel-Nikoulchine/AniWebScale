@@ -10,7 +10,7 @@ interface PipelineDescriptor {
   device: GPUDevice;
   inputTexture: GPUTexture;
   /**
-   * Optional per-effect runtime parameters. Anime4K/ArtCNN/ACNet/ARNet ignore
+   * Optional per-effect runtime parameters. Anime4K ignores
    * this; RealESRGAN reads `maxInferenceHeight` from it. Optional so existing
    * call sites that only need device+inputTexture keep working unchanged.
    */

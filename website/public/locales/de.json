@@ -174,7 +174,7 @@
     "message": "Funktioniert es mit Crunchyroll, Netflix und geschütztem Video?"
   },
   "faq5A": {
-    "message": "Alles. Anime4K-Echtzeit-Presets, die KI-Upscaling-Modi (ArtCNN, ACNet, ARNet), der optionale native Windows-Renderer und bewegungsbasierte Frame-Generierung sind alle kostenlos verfügbar. Es gibt keine bezahlte Stufe."
+    "message": "Alles. Anime4K-Echtzeit-Presets, Real-ESRGAN-Upscaling, der optionale native Windows-Renderer und bewegungsbasierte Frame-Generierung sind alle kostenlos verfügbar. Es gibt keine bezahlte Stufe."
   },
   "faq5Q": {
     "message": "Was ist kostenlos enthalten?"
@@ -371,24 +371,6 @@
   "modeAaOption": {
     "message": "Anime4K A+A · Stark"
   },
-  "modeAcNetDescription": {
-    "message": "Kleines festes 2x-GLSL-Netz, das Geschwindigkeit und sehr geringe GPU-Last priorisiert."
-  },
-  "modeAcNetOption": {
-    "message": "ACNet · Schnell"
-  },
-  "modeArNetDescription": {
-    "message": "Tieferes festes 2x-GLSL-Netz mit stärkerer Detailwiederherstellung als ACNet bei ausgewogener GPU-Last."
-  },
-  "modeArNetOption": {
-    "message": "ARNet · Starke Details"
-  },
-  "modeArtCnnDescription": {
-    "message": "Festes 2x-GLSL-Netz zur Rekonstruktion von Anime-Linien und natürlichen Details in Echtzeit."
-  },
-  "modeArtCnnOption": {
-    "message": "ArtCNN · Liniendetails"
-  },
   "modeBDescription": {
     "message": "Verwendet eine sanftere Wiederherstellung vor der Anime4K-CNN-Skalierung, um Artefakte bei unscharfen oder komprimierten Videos zu reduzieren."
   },
@@ -412,12 +394,6 @@
   },
   "modeCaOption": {
     "message": "Anime4K C+A · Entrauschen+Wiederherstellen"
-  },
-  "modeCnnDescription": {
-    "message": "Offizielles Anime4K CNN mit fester 2x-Skalierung. Liefert ein scharfes Ergebnis; Qualität ändert Modellgröße und GPU-Last."
-  },
-  "modeCnnOption": {
-    "message": "Anime4K CNN · Scharf 2x"
   },
   "modeOffDescription": {
     "message": "Deaktiviert die Bildverbesserung. Die Frame-Generierung kann separat aktiv bleiben."
@@ -849,7 +825,7 @@
     "message": "4. Zulässige Nutzung"
   },
   "termsS4Text": {
-    "message": "Die Erweiterung und enthaltene Open-Source-Komponenten (Anime4K, ArtCNN, ACNet, ARNet, Magpie-nahe Shader) bleiben unter ihren jeweiligen Lizenzen. Die Nutzung erfolgt im Einklang mit den jeweiligen Store-Richtlinien und geltendem Recht. Es ist untersagt, technische Schutzmaßnahmen von Inhalteanbietern zu umgehen."
+    "message": "Die Erweiterung und enthaltene Open-Source-Komponenten (Anime4K, Magpie-nahe Shader) bleiben unter ihren jeweiligen Lizenzen. Die Nutzung erfolgt im Einklang mit den jeweiligen Store-Richtlinien und geltendem Recht. Es ist untersagt, technische Schutzmaßnahmen von Inhalteanbietern zu umgehen."
   },
   "termsS5Heading": {
     "message": "5. Verfügbarkeit und Updates"

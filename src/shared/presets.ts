@@ -13,7 +13,7 @@ import { REALESRGAN_CAP_LADDER, type RealEsrganCapHeight } from './realesrgan-au
 export const ANIME4K_MODES: readonly Anime4KMode[] = GENERATED_ANIME4K_MODES;
 export const QUALITY_TIERS: readonly QualityTier[] = GENERATED_QUALITY_TIERS;
 export const AI_UPSCALE_MODES = [
-  'CNNX2', 'ARTCNN', 'ACNET', 'ARNET', 'REALESRGAN',
+  'REALESRGAN',
 ] as const;
 export const ENHANCEMENT_MODES: readonly EnhancementMode[] = [
   'OFF',
@@ -35,10 +35,6 @@ export const MODE_TO_ID: Record<EnhancementMode, string> = {
   AA: 'builtin-mode-aa',
   BB: 'builtin-mode-bb',
   CA: 'builtin-mode-ca',
-  CNNX2: 'ai-cnn-x2',
-  ARTCNN: 'ai-artcnn-c4f16-glsl-x2',
-  ACNET: 'ai-acnet-f8b4-glsl-x2',
-  ARNET: 'ai-arnet-f8b8-glsl-x2',
   REALESRGAN: 'ai-realesrgan-animevideo-v3-x4',
 };
 
@@ -59,7 +55,7 @@ export function isProcessingEnabled(mode: EnhancementMode, frameGenerationEnable
 }
 
 export function modeUsesQuality(mode: EnhancementMode): boolean {
-  return ANIME4K_MODES.includes(mode as Anime4KMode) || mode === 'CNNX2';
+  return ANIME4K_MODES.includes(mode as Anime4KMode);
 }
 
 export function isQualityTier(value: unknown): value is QualityTier {

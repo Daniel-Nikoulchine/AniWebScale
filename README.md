@@ -32,10 +32,6 @@ The Mode selector also exposes dedicated neural upscalers:
 | Mode | Model and output |
 | --- | --- |
 | Real-ESRGAN AnimeVideo-v3 x4 | AnimeVideo-v3 SRVGGNetCompact, 4x output, input height capped by the Real-ESRGAN detail setting |
-| CNN Upscale x2 | Anime4K convolutional neural network, selectable M/VL/UL weights, fixed 2x internal output |
-| ArtCNN C4F16 x2 | Official ArtCNN C4F16 fragment model, fixed 2x output |
-| ACNet F8B4 x2 | Official neutral ACNet F8B4 fragment model, fixed 2x output |
-| ARNet F8B8 x2 | Official neutral ARNet F8B8 fragment model, fixed 2x output |
 
 Real-ESRGAN precision is selected automatically per device and execution
 provider — there is no precision dropdown: the native Vulkan host uses its
@@ -61,9 +57,7 @@ backends.
   that fullscreen mode ends. There is no per-video AniWebScale button.
 - On readable video, a WebGPU canvas follows `requestVideoFrameCallback`. DOM
   controls and subtitles remain owned by the website.
-- The dedicated CNN mode uses the trained Anime4K weights on either backend.
-  ArtCNN, ACNet, and ARNet use the pinned official GLSL weights translated at
-  build time to WGSL and D3D11 compute shaders.
+- The dedicated Real-ESRGAN mode runs the AnimeVideo-v3 network on either backend.
 - All inference is local; no video frame is sent to a server.
 - Anime4K quality tiers and each generated neural model are separate lazy chunks;
   choosing one mode does not parse or load every other model into the tab.
@@ -214,6 +208,6 @@ The reproducible checklist is in [`docs/TESTING.md`](docs/TESTING.md).
 ## License
 
 This project is MIT licensed. It derives from the MIT-licensed Anime4K,
-Anime4K-WebGPU, Anime4K-WebExtension, ArtCNN, and ACNetGLSL projects. See
+Anime4K-WebGPU, and Anime4K-WebExtension projects. See
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for attribution. Magpie is
 not used or bundled.

@@ -121,7 +121,7 @@ int main() {
   const std::vector<std::string> corpus{
       R"({"type":"hello","protocolVersion":3,"requestId":"r"})",
       R"({"type":"start","protocolVersion":3,"requestId":"r","sessionId":"s","windowNonce":"0123456789abcdef0123456789abcdef","mode":"A","quality":"M","frameGenerationEnabled":false})",
-      R"({"type":"updateConfiguration","protocolVersion":3,"requestId":"r","sessionId":"s","mode":"ARTCNN","quality":"UL","frameGenerationEnabled":true})",
+      R"({"type":"updateConfiguration","protocolVersion":3,"requestId":"r","sessionId":"s","mode":"B","quality":"UL","frameGenerationEnabled":true})",
       R"({"type":"pointer","protocolVersion":3,"requestId":"r","sessionId":"s","event":"move","x":0.5,"y":0.25,"button":0,"buttons":0,"shiftKey":false,"ctrlKey":false,"altKey":false})",
       R"({"type":"metrics","protocolVersion":3,"sessionId":"s","fps":24,"frameTimeMs":3,"droppedFrames":0})",
       R"({"emoji":"\uD83D\uDE80","nested":[true,false,null,{"n":1.25}]})",

@@ -136,7 +136,14 @@ export interface NativeCapabilitiesEvent {
   requestId: string;
   windowsCapture: boolean;
   d3d11: boolean;
-  modes: NativeEnhancementMode[];
+  /**
+   * Advertised host modes. Deliberately NOT narrowed to NativeEnhancementMode:
+   * an older or newer host may advertise modes this extension no longer (or
+   * not yet) knows — e.g. the removed CNN/ArtCNN/ACNet/ARNet upscalers. The
+   * handshake must survive that; per-request support is enforced separately
+   * by assertSupportsConfiguration() before anything is started.
+   */
+  modes: string[];
   qualities: NativeQuality[];
   frameGeneration: boolean;
 }
@@ -234,7 +241,7 @@ export function isNativeEvent(value: unknown): value is NativeEvent {
         && typeof event.windowsCapture === 'boolean'
         && typeof event.d3d11 === 'boolean'
         && Array.isArray(event.modes)
-        && event.modes.every(isNativeEnhancementMode)
+        && event.modes.every(mode => typeof mode === 'string')
         && Array.isArray(event.qualities)
         && event.qualities.every(isNativeQuality)
         && typeof event.frameGeneration === 'boolean';

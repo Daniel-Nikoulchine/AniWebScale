@@ -39,10 +39,37 @@ describe('native messaging protocol', () => {
       requestId: 'request-1',
       windowsCapture: true,
       d3d11: true,
+      modes: ['OFF', 'A', 'B', 'C', 'AA', 'BB', 'CA'],
+      qualities: ['M', 'VL', 'UL'],
+      frameGeneration: true,
+    })).toBe(true);
+  });
+
+  it('tolerates capability modes from other host generations', () => {
+    // An older host still advertises the removed CNN/ArtCNN/ACNet/ARNet
+    // upscalers. The handshake must accept that: per-request support is
+    // enforced by assertSupportsConfiguration, not by capabilities parsing —
+    // otherwise every extension update would strand installed native hosts.
+    expect(isNativeEvent({
+      type: 'capabilities',
+      protocolVersion: NATIVE_PROTOCOL_VERSION,
+      requestId: 'request-1',
+      windowsCapture: true,
+      d3d11: true,
       modes: ['OFF', 'A', 'B', 'C', 'AA', 'BB', 'CA', 'CNNX2', 'ARTCNN', 'ACNET', 'ARNET'],
       qualities: ['M', 'VL', 'UL'],
       frameGeneration: true,
     })).toBe(true);
+    expect(isNativeEvent({
+      type: 'capabilities',
+      protocolVersion: NATIVE_PROTOCOL_VERSION,
+      requestId: 'request-1',
+      windowsCapture: true,
+      d3d11: true,
+      modes: ['A', 42],
+      qualities: ['M'],
+      frameGeneration: true,
+    })).toBe(false);
   });
 
   it('accepts the protocol-v3 exit-fullscreen command', () => {

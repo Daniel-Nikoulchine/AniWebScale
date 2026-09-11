@@ -854,6 +854,13 @@ export class VideoEnhancer {
       if (!this.renderer) return;
       if (this.video.getAttribute(ANIME4K_APPLIED_ATTR) !== 'true') return;
       if (this.overlay.isCanvasVisible) return;
+      // A paused/ended video (or a hidden tab) produces no frame callbacks,
+      // so no first frame can have presented yet: re-arm instead of burning
+      // the single restart on a healthy-but-idle session.
+      if (this.video.paused || this.video.ended || document.hidden) {
+        this.armFirstFrameWatchdog();
+        return;
+      }
       this.firstFrameWatchdogFired = true;
       console.warn('[Anime4K] First frame never presented; restarting enhancement once.');
       void this.stopEnhancement()

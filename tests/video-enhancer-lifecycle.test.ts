@@ -515,4 +515,55 @@ describe('VideoEnhancer lifecycle transitions', () => {
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(updateConfiguration).not.toHaveBeenCalled();
   });
+
+  it('first-frame watchdog spares paused videos and re-arms instead of restarting', async () => {
+    const { enhancer, video, overlay } = createBareEnhancer();
+    enhancer.backend.markWebGPUActive();
+    enhancer.renderer = {};
+    Object.assign(video, { getAttribute: vi.fn(() => 'true') });
+    Object.assign(overlay, { isCanvasVisible: false });
+    video.paused = true;
+    const stop = vi.spyOn(enhancer, 'stopEnhancement').mockResolvedValue(undefined);
+    vi.spyOn(enhancer, 'startEnhancement').mockResolvedValue(undefined);
+    const callbacks: Array<() => void> = [];
+    (window.setTimeout as any).mockImplementation((cb: () => void) => {
+      callbacks.push(cb);
+      return callbacks.length;
+    });
+
+    enhancer.armFirstFrameWatchdog();
+    expect(callbacks).toHaveLength(1);
+    callbacks[0]!();
+    await Promise.resolve();
+    // Paused: no restart, but the single retry is not consumed either.
+    expect(stop).not.toHaveBeenCalled();
+    expect(callbacks).toHaveLength(2);
+    video.paused = false;
+    callbacks[1]!();
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+  });
+
+  it('first-frame watchdog spares hidden tabs', async () => {
+    const { enhancer, video, overlay } = createBareEnhancer();
+    enhancer.backend.markWebGPUActive();
+    enhancer.renderer = {};
+    Object.assign(video, { getAttribute: vi.fn(() => 'true') });
+    Object.assign(overlay, { isCanvasVisible: false });
+    const stop = vi.spyOn(enhancer, 'stopEnhancement').mockResolvedValue(undefined);
+    vi.spyOn(enhancer, 'startEnhancement').mockResolvedValue(undefined);
+    const callbacks: Array<() => void> = [];
+    (window.setTimeout as any).mockImplementation((cb: () => void) => {
+      callbacks.push(cb);
+      return callbacks.length;
+    });
+    (document as any).hidden = true;
+    try {
+      enhancer.armFirstFrameWatchdog();
+      callbacks[0]!();
+      await Promise.resolve();
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      delete (document as any).hidden;
+    }
+  });
 });

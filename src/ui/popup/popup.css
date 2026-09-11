@@ -11,11 +11,10 @@ body {
   max-height: 600px;
   margin: 0;
   padding: 0;
-  /* Column layout so the footer can center itself in the space left below
-     the panel when the popup is taller than its content. */
+  /* Column layout for panel + footer; no min-height so the popup window
+     shrinks to its content instead of leaving empty space below the footer. */
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
   overflow-x: hidden;
   overflow-y: auto;
   background: transparent;

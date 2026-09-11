@@ -26,9 +26,9 @@ export interface RealEsrganComposeTile {
 
 export interface ComposeBuffers {
   /** 8 u32 per tile: baseX, baseY, upW, upH, dataOffset, featherWindow, pad, pad. */
-  descs: Uint32Array;
+  descs: Uint32Array<ArrayBuffer>;
   /** Concatenated planar tile floats, in tile order. */
-  data: Float32Array;
+  data: Float32Array<ArrayBuffer>;
 }
 
 const DESC_U32_PER_TILE = 8;

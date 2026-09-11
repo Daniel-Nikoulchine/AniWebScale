@@ -199,7 +199,7 @@ export class RealEsrganOutputWriter {
     }
   }
 
-  public writeRgbaResult(rgba: Uint8Array, width: number, height: number): void {
+  public writeRgbaResult(rgba: Uint8Array<ArrayBuffer>, width: number, height: number): void {
     // A full-frame write paints over the whole texture, including any
     // previously filled letterbox bars. Forget the bar geometry: returning
     // to the same crop later must re-fill its bars instead of trusting
@@ -216,7 +216,7 @@ export class RealEsrganOutputWriter {
    * the tight width is unaligned — cropped pastes usually are; the pooled
    * pad buffer is stable per geometry so it hits every frame.
    */
-  private writeRgbaSubview(rgba: Uint8Array, width: number, height: number, ox: number, oy: number): void {
+  private writeRgbaSubview(rgba: Uint8Array<ArrayBuffer>, width: number, height: number, ox: number, oy: number): void {
     const { bytesPerRow } = planUpload(width, height);
     const tightRowBytes = width * 4;
     const origin = { x: ox, y: oy };
@@ -269,7 +269,7 @@ export class RealEsrganOutputWriter {
    * this inference (0 = full 4x): the result bytes must match them exactly.
    */
   public presentCroppedResult(
-    rgba: Uint8Array,
+    rgba: Uint8Array<ArrayBuffer>,
     width: number,
     height: number,
     crop: ContentRect,

@@ -60,8 +60,8 @@ function packPlanarRgba(
   width: number,
   height: number,
   bytesPerRow: number,
-  result: Uint8Array,
-): Uint8Array {
+  result: Uint8Array<ArrayBuffer>,
+): Uint8Array<ArrayBuffer> {
   const pixels = width * height;
   const r = planar.subarray(0, pixels);
   const g = planar.subarray(pixels, 2 * pixels);
@@ -109,7 +109,7 @@ function packPlanarRgba(
   return result;
 }
 
-export function rgbPlanarToRgba(planar: Float32Array, width: number, height: number): Uint8Array {
+export function rgbPlanarToRgba(planar: Float32Array, width: number, height: number): Uint8Array<ArrayBuffer> {
   if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
     throw new Error(`rgbPlanarToRgba: invalid dimensions ${width}x${height}.`);
   }
@@ -136,8 +136,8 @@ export function rgbPlanarToPaddedRgba(
   width: number,
   height: number,
   bytesPerRow: number,
-  out?: Uint8Array,
-): Uint8Array {
+  out?: Uint8Array<ArrayBuffer>,
+): Uint8Array<ArrayBuffer> {
   const expected = bytesPerRow * height;
   const result = out ?? new Uint8Array(expected);
   if (result.length !== expected) {

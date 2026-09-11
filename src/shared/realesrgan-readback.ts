@@ -137,8 +137,8 @@ export function unpackReadback(
   width: number,
   height: number,
   format: ReadbackFormat,
-  out?: Uint8Array,
-): Uint8Array {
+  out?: Uint8Array<ArrayBuffer>,
+): Uint8Array<ArrayBuffer> {
   const { bytesPerRow } = planReadback(width, height, format);
   if (out !== undefined && out.length !== width * height * 4) {
     throw new Error(`unpackReadback: out buffer must hold ${width * height * 4} bytes, got ${out.length}.`);

@@ -58,7 +58,7 @@ export interface NativeSessionRecord {
   sourceWindowId?: number;
   originalWindowId?: number;
   originalIndex?: number;
-  originalWindowState?: chrome.windows.windowStateEnum;
+  originalWindowState?: chrome.windows.WindowState;
   originalWindowBounds?: { left?: number; top?: number; width?: number; height?: number };
   popupWindowId?: number;
   originalTitle?: string;

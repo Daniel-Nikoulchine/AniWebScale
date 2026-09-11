@@ -82,12 +82,16 @@ describe('settings application', () => {
   });
 
   it('reports failed when persistence itself rejects', async () => {
+    const runtimeStub: { lastError: { message: string } | null; sendMessage: ReturnType<typeof vi.fn> } = {
+      lastError: null,
+      sendMessage: vi.fn(async () => ({ ok: true })),
+    };
     const set = vi.fn((_values: Record<string, unknown>, callback: () => void) => {
-      chrome.runtime.lastError = { message: 'quota exceeded' };
+      runtimeStub.lastError = { message: 'quota exceeded' };
       callback();
     });
     vi.stubGlobal('chrome', {
-      runtime: { lastError: null, sendMessage: vi.fn(async () => ({ ok: true })) },
+      runtime: runtimeStub,
       storage: { local: { set, remove: vi.fn() } },
     });
 

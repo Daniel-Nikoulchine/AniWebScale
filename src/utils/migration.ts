@@ -64,7 +64,8 @@ export interface NormalizedLegacySettings extends Anime4KWebExtSettings {
 
 async function needsMigration(): Promise<boolean> {
   const data = await chrome.storage.local.get(['_configVersion']);
-  return (data._configVersion ?? 0) < CURRENT_CONFIG_VERSION;
+  const stored = data._configVersion;
+  return (typeof stored === 'number' ? stored : 0) < CURRENT_CONFIG_VERSION;
 }
 
 export function normalizeLegacySettings(

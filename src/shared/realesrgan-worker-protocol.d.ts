@@ -39,7 +39,8 @@ export interface WorkerInferReply {
   code?: 'worker-timeout' | 'worker-failed';
   width?: number;
   height?: number;
-  data?: Uint8Array;
+  /** Fresh ArrayBuffer clone per structured-clone delivery (never shared). */
+  data?: Uint8Array<ArrayBuffer>;
   path?: string;
   /** True when the fp16 model served this frame (ok:true only). */
   fp16?: boolean;

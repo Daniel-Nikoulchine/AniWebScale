@@ -49,7 +49,7 @@ interface HttpEndpointFailure {
   message: string;
 }
 
-function planarToRgba(planar: Float32Array, width: number, height: number): Uint8Array {
+function planarToRgba(planar: Float32Array, width: number, height: number): Uint8Array<ArrayBuffer> {
   const pixels = width * height;
   const out = new Uint8Array(pixels * 4);
   // planar layout: R plane, G plane, B plane, each cstep = width*height
@@ -278,7 +278,7 @@ export class RealEsrganNativeVulkanClient implements RealEsrganInferenceRunner {
    * in-flight POST never aliases the buffer the next frame writes. Sized
    * on demand; reallocated only when the frame geometry changes.
    */
-  private readonly uploadBuffers: Array<Uint8Array | null> = [null, null, null, null, null, null, null, null];
+  private readonly uploadBuffers: Array<Uint8Array<ArrayBuffer> | null> = [null, null, null, null, null, null, null, null];
   private uploadSlot = 0;
 
   private constructor(
@@ -350,7 +350,7 @@ export class RealEsrganNativeVulkanClient implements RealEsrganInferenceRunner {
    * until the next call reclaims the slot, which is safe because at most
    * maxInFlight requests are alive and they advance the slot in turn.
    */
-  private claimUploadBuffer(byteLength: number): Uint8Array {
+  private claimUploadBuffer(byteLength: number): Uint8Array<ArrayBuffer> {
     this.uploadSlot = (this.uploadSlot + 1) % this.uploadBuffers.length;
     let buffer = this.uploadBuffers[this.uploadSlot];
     if (!buffer || buffer.byteLength !== byteLength) {
@@ -425,7 +425,7 @@ export class RealEsrganNativeVulkanClient implements RealEsrganInferenceRunner {
   private async runFrameInner(
     width: number,
     height: number,
-    rgba: Uint8Array,
+    rgba: Uint8Array<ArrayBuffer>,
     targetWidth: number,
     targetHeight: number,
   ): Promise<RealEsrganFrameResult> {

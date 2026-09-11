@@ -690,7 +690,7 @@ export class NativeSession {
           focused: state !== 'minimized',
           ...(!state || state === 'normal' ? session.originalWindowBounds : {}),
         });
-        if (restored.id !== undefined && state && state !== 'normal') {
+        if (restored?.id !== undefined && state && state !== 'normal') {
           await chrome.windows.update(restored.id, { state });
         }
       }

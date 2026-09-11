@@ -36,7 +36,7 @@
 import type { RealEsrganPrecision } from '../types';
 
 export interface RealEsrganFrameResult {
-  data: Uint8Array;
+  data: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;
   /**

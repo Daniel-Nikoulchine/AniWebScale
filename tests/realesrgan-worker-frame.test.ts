@@ -1022,7 +1022,7 @@ describe('wasm-simd compose (Hebel E5)', () => {
     return {
       calls,
       memory,
-      setOutput: (bytes: Uint8Array) => { pending = bytes; },
+      setOutput: (bytes: Uint8Array<ArrayBuffer>) => { pending = bytes; },
       stage_ptr: (kind: number, len: number) => {
         calls.push(`stage:${kind}:${len}`);
         return 64;

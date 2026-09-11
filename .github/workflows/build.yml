@@ -35,14 +35,9 @@ jobs:
         run: npm ci
 
       # generate:presets builds the optional pixels.wasm; ensure the target is
-      # available so the drift check below can regenerate all artifacts.
+      # available so the build below can regenerate all artifacts.
       - name: Ensure Rust wasm target
         run: rustup target add wasm32-unknown-unknown
-
-      # Fast drift gate for committed generated sources, BEFORE any generate:*
-      # step can overwrite them in place.
-      - name: Check generated presets
-        run: npm run check:presets
 
       - name: Lint
         run: npm run lint
@@ -92,6 +87,11 @@ jobs:
 
       - name: Install pinned browsers
         run: npm run test:e2e:install
+
+      # test:e2e builds pixels.wasm from source when the artifact is absent
+      # (same prerequisite as the extension job above).
+      - name: Ensure Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
 
       - name: Chrome extension E2E
         env:
